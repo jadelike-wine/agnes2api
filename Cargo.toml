@@ -1,0 +1,148 @@
+[package]
+name = "agnes2api"
+# ⚠️ 版本的**单一真源是 ./VERSION**，这里只是它的副本，由 `scripts/set-version.sh` 同步。
+# 代码里一律 `env!("CARGO_PKG_VERSION")` 读它，**不另存第四处常量**
+# （规格 §7 矛盾 8：多一处就多一个会漂的地方）。
+version = "1.0.0"
+# edition 2024：对标 kiro2api，且要用 let-chains（稳定在 1.88）。
+edition = "2024"
+# 工具链下界：edition 2024 需要 1.85+。本机 rustc 1.97.1。
+rust-version = "1.85"
+license = "MIT"
+authors = ["xwteam <xwteam@xwteam.cn>"]
+# 自部署二进制，不发 crates.io。
+publish = false
+
+[lib]
+name = "agnes2api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agnes2api"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[dependencies]
+# ── HTTP 面 ────────────────────────────────────────────────────────────────
+# HTTP 框架。对标 kiro2api：**不引 tower-http**，CORS / 限流 / 日志一律手写
+# （手写的那几条中间件各自带判据，tower-http 的行为差异会让那些判据失去对象）。
+axum = "0.8"
+# 运行时。`full` 要的是四样：`#[tokio::main]`、`interval`（后台刷盘）、
+# `spawn_blocking`（同步 fsync 不许占住 async 线程）、`signal`
+# （🔴 SIGTERM 必须处理：容器里本进程常是 PID 1，不处理就会一直等到宽限期被 SIGKILL）。
+tokio = { version = "1", features = ["full"] }
+# 出站客户端。**本轮（P1 骨架）还没有调用点**，留在清单里是因为 P1-a 的
+# `adapters/fetcher_reqwest.rs` 紧接着就要它，且下面三个压缩 feature 的取舍必须
+# 与「出站响应头白名单」同一轮定死（规格 §7 矛盾 7）。
+reqwest = { version = "0.12", default-features = false, features = [
+    # 只 rustls：TLS 指纹对抗是 kiro 对 Kiro 上游风控的对抗，
+    # **在 agnes 侧没有证据**（规格裁定 K），不背 vendored OpenSSL 的 Dockerfile 成本。
+    "rustls-tls",
+    # 流式转发要按块读响应体（「网关不整体缓冲」是一条 🔴 判据）。
+    "stream",
+    "http2",
+    "charset",
+    # 🔴 这三个**必须开**：出站响应头白名单剥掉了 content-encoding / content-length，
+    #    那个白名单成立的前提是「响应体到手时已解压」（TS 的 fetch 就是这个行为）。
+    #    不开就会把压缩字节裸传给客户端。
+    #    ⚠️ 连带代价：开了之后 reqwest 会给**没带** accept-encoding 的请求自动补一个，
+    #       所以客户端工厂里要**显式决定**这件事（规格 §7 矛盾 3）。
+    "gzip",
+    "brotli",
+    "deflate",
+] }
+
+# ── 数据与序列化 ───────────────────────────────────────────────────────────
+# DTO。对外字段名是契约（`#[serde(rename_all = "camelCase")]`）。
+serde = { version = "1", features = ["derive"] }
+# 存储值与窄化的载体。**裁定 B**：`Storage::get` 只回 `serde_json::Value`，
+# 再由 `core/narrow.rs` 手写 `narrow_*` 逐处窄化 —— 直接 `Deserialize` 到 DTO 会让
+# 一条脏记录（`disabled: "true"`）整条反序列化失败、一把 key 从池子里消失。
+serde_json = "1"
+# UTC 日期算术：usage 的 `YYYY-MM-DD` 往返、日序号、事件窗口。
+# **本轮未使用**（它的消费者是 P1-c 的事件环与 P1.5 的用量统计）。
+chrono = "0.4"
+
+# ── 日志 ───────────────────────────────────────────────────────────────────
+# 进程日志。P1 只用它往 stderr 输出；全量捕获层（给面板实时日志用）是 P1.5。
+tracing = "0.1"
+# `env-filter` 给 `RUST_LOG`；`registry` 是为了 P1.5 能挂自定义捕获层 ——
+# 现在先按 kiro 的形状留好，届时不用改初始化的形状。
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+
+# ── 错误 ───────────────────────────────────────────────────────────────────
+# 🔴 **只用在启动路径与文件持久化**：那里的错误是终局的（起不来 / 存不下），
+# 调用方不按类型分支，只要一段人能读的说明。
+# 业务错误一律自定义枚举 + 手写 `Display`，**不引 thiserror**（对标 kiro）。
+anyhow = "1"
+
+# ── CLI ────────────────────────────────────────────────────────────────────
+# 对标 kiro 的 `cli.rs`，成本≈0。
+# 🔴 `--data-dir` **刻意不设 `default_value`**：有默认值就分不出「用户显式指定」
+#    与「没给」，会把优先级更高的环境变量一起压掉（kiro 踩过，见 03 §3）。
+clap = { version = "4.5", features = ["derive"] }
+
+# ── 并发原语 ───────────────────────────────────────────────────────────────
+# **不跨 await** 的锁（运行期配置快照、日志环、池快照）。跨 await 一律 `tokio::sync`。
+# 这条分界是 kiro 最硬的一条不成文规矩，照抄。
+parking_lot = "0.12"
+
+# ── 凭据与 id ──────────────────────────────────────────────────────────────
+# 常数时间比较：网关口令与管理口令。**本轮未使用**，消费者是 P1-b 的两道鉴权闸。
+# ⚠️ 未决项：`ConstantTimeEq` 对**不等长**切片的处理要显式写明（规格 §8.3 第 7 条）。
+subtle = "2.6"
+# key id（SHA-256 前 8 字节）与对外密钥摘要。**本轮未使用**（P1-a a3 / P1-b b3）。
+sha2 = "0.10"
+# 上面那两样的十六进制编解码。**本轮未使用**。
+hex = "0.4"
+# CSPRNG：对外密钥 128 bit、shardId、messageId。🔴 **绝不用非 CSPRNG**。
+# **本轮未使用**（shardId 的消费者是 P1-c 的事件 sink）。
+getrandom = "0.2"
+
+# ── 杂项 ───────────────────────────────────────────────────────────────────
+# 四处：MIME deny-list、`sk-` 脱敏、IPv6 形态校验、视频任务 id。**本轮未使用**。
+# ⚠️ 线性无回溯，但 `Regex::replace` 会把 `$&` 当引用展开 ⇒ 脱敏一律不许用它。
+regex = "1"
+# 流式体的块类型（端口 DTO 与 axum / reqwest 共用同一个 `Bytes`，避免来回拷）。
+bytes = "1"
+# `Stream` trait —— `ports::fetcher` 的返回类型签名要它。
+futures-core = "0.3"
+# `StreamExt`：流式脱敏与 SSE 解析。**本轮未使用**（P1-a a5/a6）。
+futures-util = "0.3"
+# `stream!` 宏写显式状态机（四条协议的流式事件序列）。**本轮未使用**（P1-a a6）。
+async-stream = "0.3"
+# 三条端口要 `dyn` 兼容，而 AFIT（async fn in trait）在 1.97 下不是 dyn 安全的。
+# ⚠️ 这是对 kiro「依赖极简」的一次**刻意偏离**。替代方案是手写
+#    `Pin<Box<dyn Future>>` 返回类型（零依赖，可读性差一档）——
+#    主线若要零依赖，换掉它不影响其它任何设计。
+async-trait = "0.1"
+# 配置校验里 `not_a_url` 那一格。**本轮未使用**（消费者是 P1-b 的 `config_validate`）。
+url = "2"
+
+# ── 管理面板的静态投递（P2b）──────────────────────────────────────────────
+# 把 `admin-ui/` 整个目录在**编译期**烧进二进制（对标 kiro2api 的 `src/webui/mod.rs`）。
+# 🔴 **换掉 TS 版 `scripts/build-ui.mjs` 的理由就是这一条**：那边要生成一份与源同构的
+#    巨大 `.ts` 并**入仓**，还要靠一格判据守着「改了面板忘跑生成器」；
+#    `rust-embed` 在编译期直接读原文件 ⇒ **「产物与源一字不差」在结构上不可能不成立**。
+# ⚠️ `debug-embed`：**刻意开着**。不开时 rust-embed 在 debug 构建下改成运行期读文件系统，
+#    于是 `cargo test` 验的是磁盘上的文件、而发布出去的是编译期快照 —— 两条不同的路径。
+#    判据必须验将来真的会跑的那一条。代价：改一个 CSS 字节要重编一次。
+rust-embed = { version = "8", features = ["debug-embed"] }
+# 按扩展名推 MIME。🔴 类型必须说真话：全局那条 `nosniff` 会禁止浏览器去猜，
+# 类型写错就是「一份 CSS 不生效」或「图标不显示」。
+mime_guess = "2"
+
+[dev-dependencies]
+# 取 `.oneshot()`：打 `Router` 不开端口（kiro 的测试全靠这个）。
+tower = { version = "0.5", features = ["util"] }
+# `test-util` 给 `#[tokio::test(start_paused = true)]`：**假时钟必须能往前走**。
+# 用真的 `sleep(8s)` 去测排空窗口，等于给测试套加 8 秒；而把窗口改小到「测得动」
+# 就不再是被测的那个值了 —— 两条都是已登记的假阳性形态。
+tokio = { version = "1", features = ["test-util"] }
+# **唯一用途**：给 `adapters/fetcher_reqwest.rs` 这个适配器自己写判据。
+# 端口层最大的风险是「替身全绿而真实现坏了」，这是唯一的对冲（规格 §3.5）。
+# **本轮未使用**（那个适配器还没建）。
+wiremock = "0.6"

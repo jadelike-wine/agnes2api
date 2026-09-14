@@ -30,122 +30,60 @@ jobs:
         # 「拿不到全部历史」上，而不是悄悄地一个历史对象都不扫。
         # 代价：全克隆要多拉整个 `.git`（本仓今天是几十 MB 量级），可接受。
         with: { fetch-depth: 0 }
-      # ⚠️ **这里不许再写 `with: { version: … }`。** `pnpm/action-setup@v4` 会自己读
-      # `package.json` 的 `packageManager`（今天是 `pnpm@9.15.4`）；两处都给的话它
-      # **不是二选一而是硬失败**：`Error: Multiple versions of pnpm specified` ——
-      # 装都没装上，后面每一道门禁都没跑。本仓在公开仓上一直红在这一步，而
-      # `scripts/prepush.sh` 是在本机直接跑那几道的、看不见这一层。
-      # 判据在 `tests/unit/scripts-guard.test.ts`（`packageManager` 与 `version:` 不许同时在场）。
-      - uses: pnpm/action-setup@v4
+      # ── 与语言无关的三道，先跑：它们只读文本、几百毫秒 ────────────────────
+      #
+      # 📜 这三道是 TypeScript 那一版留下来的，**被测对象与实现语言无关**
+      #    （跟踪文件是不是文本 / 那张图里藏没藏东西 / 仓里有没有凭据），
+      #    所以它们跟着仓走，没跟着语言走。
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      # **评审发现新增，排第一位**：跟踪文件不许被 git 判定为二进制。放在
-      # scan-secrets 之前是有意为之——scan-secrets 用 `git grep` 扫凭据，对二进制
-      # 文件天然会打折扣（即便去掉了 -I，也不该让"文件是不是文本"这件事本身要靠
-      # 扫凭据的副作用去兜底）；这一步先把"是不是文本"这个前提确认掉，后面的
-      # 评审包 diff、代码审计 grep、五语言 grep 核对、scan-secrets 才都建立在
-      # 同一个成立的前提上。起因见 scripts/check-no-binary.mjs 文件头。
-      - name: 1/11 跟踪文件不许是二进制
+        with: { node-version: 22 }
+      - name: 1/7 跟踪文件不许是二进制
         run: node scripts/check-no-binary.mjs
       # 紧挨着上一步，因为它俩是**同一个决定的两半**：上一步对 docs/logo.png 开了一个
-      # 具名放行（模板要求 README 头部块摆这张图），放行让出的那块——"这个文件里藏没藏
-      # 东西"——由这一步逐字节接回去：签名 / 逐块 CRC / 块类型黑白名单 / 每种块的长度界 /
-      # 每种块至多出现一次（IDAT 除外）/ 块序 / IEND 之后零尾随字节 / IDAT 的 zlib 流两侧对账
-      # （解压出来多少 + 解压用掉多少）/ sha256 与登记值一致 / 尺寸 / 体积 / 完全透明像素占比。
-      # ⚠️ 后四类是两轮回填补的：前一版少一类，载荷就换个窝原样进来（实测数字见那份脚本文件头）。
-      # 这一步还兼审**面板里那两串内联 base64**（站点图标与品牌标记）：它们是同一张图缩小
-      # 之后写进 admin-ui/index.html 与 admin-ui/css/shell.css 的，同样没人拿肉眼看过，
-      # 判法是"解出来的像素必须等于 docs/logo.png 的整数倍降采样"——换了图不重生成它们，
-      # README 与管理面板就会长成两副面孔，而在此之前没有任何东西会为这件事变红。
-      # 排在凭据扫描之前，理由与上一步相同：凭据扫描对"被压过一道的字节"和"不长成那六条
-      # 形态的东西"读不到（本机实测，逐档数据在 scripts/check-png.mjs 文件头），
-      # 所以进仓的那个二进制文件必须先被单独审一遍，而不是指望后面某一步顺带兜底。
-      - name: 2/11 具名放行的 PNG 结构审计 + 面板内联副本对账
-        run: node scripts/check-png.mjs
+      # 具名放行（模板要求 README 头部块摆这张图），放行让出的那块——「这个文件里藏没藏
+      # 东西」——由这一步逐字节接回去。
+      #
+      # ⚠️ **它的「面板内联副本对账」那一半在 Rust 版上不再适用，如实登记**：
+      #    那一半防的是「同一张图在 admin-ui 里另存了一份 base64 副本、两份会漂」，
+      #    而 Rust 版的面板**直接引用 `/admin/logo.png` 这个文件**（裁定 P-13，
+      #    admin-ui/index.html 里写着），仓里一处内联 base64 PNG 都没有 ⇒
+      #    **重复本身没了，不是对账被放宽了**。字节相同这条改由 Rust 判据
+      #    `webui::tests::the_panel_logo_is_the_same_file_as_the_docs_logo` 钉着。
+      - name: 2/7 具名放行的 PNG 结构审计
+        run: node scripts/check-png.mjs --skip-inline
       # 凭据扫描跑两条命令：第一条只扫工作树，第二条是它的**超集**（工作树，再加可达
       # 历史：blob / 提交信息 / 标签说明）。工作树因此被扫两遍，那是有意留着的：红出来
       # 的时候，一眼能分清是工作树回归，还是历史那笔欠账。
       # 历史那一档不是锦上添花——`git push` 发的是历史、不是工作树，一个凭据只要进过
       # 一个提交，哪怕下一个提交就把它删掉，工作树那一档一个字都看不见。
-      # 它已知的盲区与欠账逐条写在 `scripts/scan-secrets.sh` 文件头。
-      # 两条命令写在同一个 run 块里，`shell: bash` 是**显式**声明的：要的是 `-e`
-      # （第一条失败就中断），不去赌 runner 默认 shell 带不带它。
-      # ⚠️ **历史那一档今天是绿的**：历史里那笔泄漏已经在一次性历史重写里清干净了
-      #    （全历史 0 命中，本机实测这一档 exit 0）。⇒ **它再红就是新回归**，
-      #    多半是某个新提交的提交信息、或某个已删文件留在历史里的 blob；
-      #    处置是把那几个提交改掉，不是再做一次历史重写，也不是放宽这道门禁。
-      # ⚠️ **这句话写在注释里没用**：`#` 注释进不了 Actions 日志，第一个看到红 CI 的人
-      #    只会拿到 stderr 那几行 ❌。所以历史那一条的失败在下面补了一条 `::error::`
-      #    注解，把"这一档红意味着什么、该去动哪里"写进日志本身。
-      #    工作树那一条刻意**不**加注解：两档的处置不同，不该被同一句话盖住。
       # ⚠️ **这一档红的时候会把命中的原文逐字打进 Actions 日志，而公开仓的 Actions 日志
-      #    是世界可读的**（本机实测过一次：历史里那个私有部署地址被这一步的 stderr 反复
-      #    打了出来。条数会随每次提交漂，没人守得住，所以这里不写死一个数——要看就自己
-      #    跑一次）。推出去的历史本身同样是公开的，日志只是把它照抄一遍 ——
-      #    所以处置永远是**先把历史里那条命中弄干净再推**，而不是把这道门禁的输出藏起来。
-      - name: 3/11 凭据扫描
+      #    是世界可读的**。处置永远是**先把历史里那条命中弄干净再推**，
+      #    而不是把这道门禁的输出藏起来。
+      - name: 3/7 凭据扫描
         shell: bash
         run: |
           bash scripts/scan-secrets.sh
           bash scripts/scan-secrets.sh --history || {
             rc=$?
-            echo "::error::历史档失败。历史里那笔泄漏已经在一次性历史重写里清干净了（那之后全历史 0 命中），所以这一档红是新回归：多半是某个新提交的提交信息、或某个已删文件留在历史里的 blob。处置是把那几个提交改掉，不是再做一次历史重写，也不是放宽这道门禁。命中的原文见本步骤 stderr，边界与欠账见 scripts/scan-secrets.sh 文件头"
+            echo "::error::历史档失败。这一档红是新回归：多半是某个新提交的提交信息、或某个已删文件留在历史里的 blob。处置是把那几个提交改掉，不是放宽这道门禁。命中的原文见本步骤 stderr，边界与欠账见 scripts/scan-secrets.sh 文件头"
             exit $rc
           }
-      - name: 4/11 生成面板资源
-        run: node scripts/build-ui.mjs
-      - name: 5/11 生成物一致性（仓库里那份必须与 admin-ui/ 一致）
-        run: git diff --exit-code src/ui/assets.generated.ts
-      - name: 6/11 面板体积预算
-        run: node scripts/check-ui-budget.mjs
-      - name: 7/11 i18n 完整性
-        run: node scripts/check-i18n.mjs
-      # ⚠️ **这里原来还有一道「KV namespace id 仍是占位符」**（`node scripts/check-wrangler-placeholder.mjs`）。
-      # 它守的是「真实的 KV 命名空间 id 被提交进公开仓 = 泄漏部署细节」，而 v0.4.0 摘掉
-      # Cloudflare Worker 形态之后 `wrangler.toml` 与那个脚本一起没了 ⇒ **不是这条不变量
-      # 不重要了，是它的被测对象不存在了**。同一类风险（凭据 / 部署细节进公开仓）本仓另有
-      # 独立的一道：`bash scripts/scan-secrets.sh`，射程是整棵工作树与全历史。
-      # 后补的这一道：**注释里指向的位置必须真实存在。**
-      # 排在类型检查之前是有意为之——它只读文本、几百毫秒就跑完，而它抓的那类缺陷
-      # （「这条由 X 用例钉着」指向一条根本不存在的用例）恰恰是**读代码的人会当真、
-      # 而所有其它门禁都看不见**的那一类。本仓台账已为它记了二十余次。
-      - name: 8/11 注释里的指向必须解析得开
-        run: node scripts/check-comment-refs.mjs
-      - name: 9/11 类型检查
-        run: pnpm typecheck
-      # 下面那一步里的 `pnpm test` **不得**追加任何
-      # 文件路径过滤器（如 `pnpm test tests/foo.test.ts`）。tests/global-setup.ts 里
-      # 的收集门禁按「带没带过滤器」分档，一旦 CI 带了过滤器，门禁会在**不报错、不提示**
-      # 的情况下静默跳过——这个前提由 tests/unit/scripts-guard.test.ts 钉住，改这一行前
-      # 先去看那份测试。
-      # ⚠️ **这段话里刻意不写那条命令的完整字面**（带重定向的那一串）：
-      # `tests/unit/scripts-guard.test.ts` 的「跑测试那一步显式声明 shell: bash」在 v0.4.0
-      # 改成了**按内容定位**——它找的就是那个字面，先撞上注释里的一份副本就会锚到上一步去，
-      # 于是那一格测的是「类型检查那一步有没有 shell: bash」，实测当场红。
+
+      # ── Rust 四道 ──────────────────────────────────────────────────────────
       #
-      # 门禁本身是否真的跑过，光看 `pnpm test` 的退出码看不出来（静默跳过时退出码同样是
-      # 0）。所以下面用 tee 把输出落一份日志，再 grep 收集门禁自己打的成功横幅
-      # `[collection-guard] ✅`——横幅缺失就说明门禁没跑，即使测试全绿也要让这一步失败。
-      #
-      # 这里**不**在 CI 层重新做一遍「磁盘清单 vs 实际收集」的比对：那套比对已经在
-      # tests/global-setup.ts 里实现过一次，CI 只需要确认它被跑到——重新实现一遍等于多一处
-      # 可能出现同一类并集语义盲区的地方。
-      # ⚠️ 那套比对的判定**写法**仍然是「逐配置各自核对、不取并集」，只是 v0.4.0 之后
-      # 全仓只剩一份 vitest 配置 ⇒ 「逐配置」与「并集」今天没有可观测差异。
-      # 这句话不是说盲区被修好了：它是那份文件刻意留着的形状，理由写在那边的文件头。
-      - name: 10/11 全部测试（单元 / 契约 / 前端纯函数）
-        shell: bash
-        run: |
-          pnpm test 2>&1 | tee /tmp/test-node.log
-          grep -qF '[collection-guard] ✅' /tmp/test-node.log || {
-            echo "::error::收集门禁没有跑过（日志里没见到 [collection-guard] ✅），它可能被静默跳过了"
-            exit 1
-          }
-      # ⚠️ **这里原来还有一步「契约测试（workerd 运行时）」**（`pnpm test:workers`，日志落
-      # `/tmp/test-workers.log`，横幅同样 grep 一次）。v0.4.0 摘掉 Cloudflare Worker 形态之后
-      # 那个测试入口连同 `vitest.workers.config.ts` 一起没了 ⇒ 全仓只剩上面这一个入口。
-      # `scripts/prepush.sh` 的测试计数那一格与它同步收成一份日志；
-      # `tests/unit/scripts-guard.test.ts` 反过来钉着「package.json 里不许再长出第二个测试入口」。
-      - name: 11/11 构建
-        run: pnpm build
+      # ⚠️ 工具链由 `rust-toolchain.toml` 钉死，**这里不写版本号**：
+      #    两处都写就会漂，而漂了本地全绿、CI 红在一个没人看得懂的地方。
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2
+      - name: 4/7 格式
+        run: cargo fmt --all -- --check
+      # 🔴 `-D warnings`：警告当错误。放宽它等于让「下一个人加的那处」悄悄进来。
+      - name: 5/7 clippy（警告当错误）
+        run: cargo clippy --all-targets -- -D warnings
+      # ⚠️ **不许给它加任何路径过滤器**：过滤掉的那些在 CI 上不会红，
+      #    而本仓的判据密度恰恰是它唯一的护栏。
+      - name: 6/7 全部判据
+        run: cargo test
+      - name: 7/7 构建
+        run: cargo build --release

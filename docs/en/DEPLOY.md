@@ -59,10 +59,10 @@ cd agnes2api
 cp .env.example .env
 ```
 
-**Running it from source instead of the image**: `pnpm dev:node` starts with
-`node scripts/build-ui.mjs`, then builds and runs `dist/entry/node.js`. A bare
-`node dist/entry/node.js` starts too, but the panel stays on whatever was generated last — if
-you changed `admin-ui/` and see nothing, that is usually why.
+**Running it from source instead of the image**: `cargo run --release`. The panel needs no
+build step at all — the hand-written files under `admin-ui/` are read straight from disk by
+`rust-embed` at **compile time** and baked into the binary, so "the artifact disagrees with the
+source" cannot happen structurally. Change them and recompile.
 
 ### Configuration
 

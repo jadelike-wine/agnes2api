@@ -1,0 +1,8 @@
+# 工具链声明。
+#
+# 只钉 channel 不钉具体小版本：钉死小版本会让每一次 rustup 更新都变成一次 PR，
+# 而本仓真正的下界写在 `Cargo.toml` 的 `rust-version`（1.85，edition 2024 的下界）。
+# CI 的四道阻塞门（fmt / clippy -D warnings / test / 构建）才是兼容性的真判据。
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

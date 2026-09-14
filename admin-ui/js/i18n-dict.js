@@ -1,1420 +1,5270 @@
 /**
- * 五语言字典。**唯一真源。**
+ * 五语言词条表。**key-major**（一个 key 下挂五种语言），不是 lang-major。
+ * 理由：key-major 下「加了键只填一种语言」在 diff 里一眼可见；lang-major 下它散在
+ * 五个相距几百行的地方，评审基本看不出来。
  *
- * 组织成 key-major（一个键下挂五种语言）而不是 lang-major：
- * 「加了一个键但只填了一种语言」在 key-major 的 diff 里一眼就能看见，
- * 而 lang-major 下它散在五个相距几百行的地方。齐全性有 CI 门禁
- *（`scripts/check-i18n.mjs` 与 `tests/unit/i18n-dict.test.ts` 的
- * 「每个 key 都有全部 5 种语言且非空」两份独立实现），
- * 这个组织方式只是让人工评审也拦得住。
+ * 🔴🔴 **`export const I18N =` 与末尾那个 `;` 之间必须是一整块合法 JSON**
+ *（裁定 P-10）：键全带双引号、**无尾逗号、无注释、无单引号、无模板串**。
+ * 浏览器侧照旧 `import { I18N } from "./i18n-dict.js"`，**零变化**；
+ * 而 Rust 侧 `include_str!` 掐掉头尾之后能 `serde_json` **严格解析** ——
+ * 于是 agnes 那 10 条 node 门禁里的 8 条进了 `cargo test`
+ *（齐全性 / 占位符集合五语言一致 / 未引用 key 是硬错 / 面板里的 key 必须在字典里 /
+ *  带占位符的 key 不许当裸标签 / 未翻译泄漏 / 偏好词前缀表 + 反向控制 / 严格可解析）。
+ * ⇒ **别往下面那一块里加注释或尾逗号，那会让整组判据当场红。**
  *
- * 为什么是 .js 而不是 .json：`scripts/build-ui.mjs` 逐字节复制、**零例外**，
- * 那条性质是本项目守住「不引入需要构建步骤的前端框架」的全部依据。
- * 给它开一个「JSON 包裹成 JS」的例外，代价是逐字节断言要加豁免，
- * 而且生成物不在磁盘上 ⇒ 用浏览器直接打开 index.html 时 `import "./i18n-dict.js"`
- * 模块解析失败、**整个面板打不开**（ESM 的失败是整条链断）。
- * 已实测：`.js` 同样能被 vitest 直接 import，`pnpm typecheck` 退出 0。
+ * ⚠️ **「未被引用的 key 是硬错，不是警告」**：一个没人用的词条既不会被看见、也不会
+ * 被翻译审核，它只会在下一次改名时被漏掉，然后以「面板上出现一个裸 key」的形态浮上来。
  *
- * ⚠️ **偏好词门禁的作用域早就不只是 `reg.*` 了**（两条邮箱通道必须完全平级）：
- * 今天它是一张前缀表，`reg.` 与 `keys.addMenu.auto` 之外还包含设置页那几条
- *（`set.field.registrar.channel` / `set.field.channel.` / `set.card.registrar`）
- * 与概览页那**一条整 key**（`ov.config.channel`）。
- * **表在 `scripts/check-i18n.mjs` 的 `BANNED_PREFIXES`，别在这里手抄一份**——
- * 抄一份就会漂，而漂了没人会发现。
- * ⚠️ **处置也跟着变了，别再照抄上一版那句「换个命名空间」**：那条出路对前缀成立
- *（`reg.` 底下的一句话可以搬去 `nav.` 或 `common.`），但对上面那条**整 key** 不成立
- * ——`ov.config.channel` 就是概览页那一行的标签，它没有「别的命名空间」可去。
- * ⇒ 在作用域内要说「默认值」时，正确做法是**把那句话改写成不含偏好词的说法**
- *（「使用的通道」是槽位，不是「默认值」）；确实是作用域收错了，去改那张前缀表并在评审里说明，
- * **别给禁用词表开豁免**。
+ * ⚠️ 语言菜单里那五个**母语名**（简体中文 / English / 日本語 / 한국어 …）
+ * **刻意不在这里**，它们是 `js/i18n.js` 的 `LANG_LABELS`：一个看不懂当前界面语言的人
+ * 要靠那四个字找到自己那一项，把它翻译掉恰好毁掉它唯一的用处。
+ *
+ * ⚠️ **命名空间是三族，不是一族**（这一点曾经真的坑过人，见下一段）：
+ *   · 壳层 —— `nav.` / `header.` / `login.` / `common.` / `reveal.`；
+ *   · 仪表盘与账号管理 —— `dash.` / `keys.`（两个板块先落地，各自起了自己的前缀）；
+ *   · 其余七个板块 —— `section.<板块简称>.`（`ak` / `ev` / `md` / `pg` / `reg` /
+ *     `set` / `usg`）。
+ * 三族没有优劣之分，也**不必强行统一**：判据不看前缀长什么样，只看
+ * 「面板里出现的 key 是不是都在这里」与「这里的 key 是不是都有人用」。
+ *
+ * 🔴🔴 **已了结的一处事故，写在这里是为了别再犯第二次。**
+ * `dash.*`（43 条）与 `keys.*`（115 条）曾经**整整两族 158 条一条都不在这张表里**：
+ * 仪表盘整屏印的是 `dash.title` / `dash.refresh` 这样的裸 key，而 `cargo test` 全绿。
+ * 成因不在这个文件，在判据那一侧：`src/webui/mod.rs` 原来按一张**命名空间白名单**
+ * 决定「哪些字符串算 i18n key」，而这两个前缀没人记得往表里加 ⇒ 扫描根本看不见它们
+ * ⇒ 两条双向门禁对它们同时失效。**白名单这个形态本身就是缺陷之源：忘了加不会红。**
+ * 处置已落地：扫描改成按 key 形态认，「不是词条」的那几条反过来登记。
+ * ⇒ 今天在这里**新开一个前缀不需要去改任何一张表**；漏了词条会当场红。
  */
-export const I18N = {
-  // ── 登录闸 ───────────────────────────────────────────────
-  "gate.title":       { "zh-CN": "agnes2api 管理后台", "zh-TW": "agnes2api 管理後台", en: "agnes2api Admin", ja: "agnes2api 管理画面", ko: "agnes2api 관리 콘솔" },
-  "gate.sub":         { "zh-CN": "请输入管理口令（ADMIN_TOKEN）", "zh-TW": "請輸入管理口令（ADMIN_TOKEN）", en: "Enter the admin token (ADMIN_TOKEN)", ja: "管理トークン（ADMIN_TOKEN）を入力してください", ko: "관리 토큰(ADMIN_TOKEN)을 입력하세요" },
-  "gate.label":       { "zh-CN": "管理口令", "zh-TW": "管理口令", en: "Admin token", ja: "管理トークン", ko: "관리 토큰" },
-  "gate.placeholder": { "zh-CN": "ADMIN_TOKEN", "zh-TW": "ADMIN_TOKEN", en: "ADMIN_TOKEN", ja: "ADMIN_TOKEN", ko: "ADMIN_TOKEN" },
-  "gate.submit":      { "zh-CN": "进入", "zh-TW": "進入", en: "Enter", ja: "入る", ko: "들어가기" },
-  "gate.empty":       { "zh-CN": "请输入管理口令", "zh-TW": "請輸入管理口令", en: "Please enter the admin token", ja: "管理トークンを入力してください", ko: "관리 토큰을 입력하세요" },
-  "gate.invalid":     { "zh-CN": "口令无效", "zh-TW": "口令無效", en: "Invalid token", ja: "トークンが無効です", ko: "토큰이 올바르지 않습니다" },
-  "gate.badShape":    { "zh-CN": "这个口令里有不被接受的字符。只允许可打印 ASCII（0x20–0x7E）：汉字 / emoji / 零宽空格这类字符浏览器根本发不出去；é / £ 这类字符其实发得出去，但本网关出于跨运行时编码的稳健性考虑同样不接受。请检查环境变量里的 ADMIN_TOKEN。", "zh-TW": "這個口令裡有不被接受的字元。只允許可列印 ASCII（0x20–0x7E）：漢字 / emoji / 零寬空格這類字元瀏覽器根本送不出去；é / £ 這類字元其實送得出去，但本網關基於跨執行時編碼的穩健性考量同樣不接受。請檢查環境變數裡的 ADMIN_TOKEN。", en: "This token contains characters that are not accepted. Only printable ASCII (0x20–0x7E) is allowed: CJK characters, emoji and zero-width spaces simply cannot be sent by the browser, while characters like é or £ can be sent but are still rejected here as a cross-runtime encoding robustness choice. Check ADMIN_TOKEN in your environment.", ja: "このトークンには受け付けられない文字が含まれています。使用できるのは印字可能な ASCII（0x20–0x7E）のみです: 漢字・emoji・ゼロ幅スペースはブラウザーがそもそも送信できません。é や £ のような文字は送信自体は可能ですが、ランタイム間のエンコーディングに関する堅牢性の判断としてここでは受け付けていません。環境変数の ADMIN_TOKEN を確認してください。", ko: "이 토큰에는 허용되지 않는 문자가 있습니다. 출력 가능한 ASCII(0x20–0x7E)만 사용할 수 있습니다: 한자 / 이모지 / 폭 없는 공백은 브라우저가 아예 보낼 수 없고, é 나 £ 같은 문자는 보낼 수는 있지만 런타임 간 인코딩 견고성을 위한 선택으로 여기서는 받지 않습니다. 환경 변수의 ADMIN_TOKEN을 확인하세요." },
-  "gate.network":     { "zh-CN": "网络错误，请稍后重试", "zh-TW": "網路錯誤，請稍後重試", en: "Network error, please retry", ja: "ネットワークエラーです。しばらくしてから再試行してください", ko: "네트워크 오류입니다. 잠시 후 다시 시도하세요" },
-  "gate.httpError":   { "zh-CN": "接口异常：{status}", "zh-TW": "介面異常：{status}", en: "Request failed: {status}", ja: "リクエスト失敗: {status}", ko: "요청 실패: {status}" },
-
-  // ── 外壳 ─────────────────────────────────────────────────
-  "nav.overview":     { "zh-CN": "概览", "zh-TW": "概覽", en: "Overview", ja: "概要", ko: "개요" },
-  "nav.keys":         { "zh-CN": "Key 池", "zh-TW": "Key 池", en: "Key pool", ja: "キープール", ko: "키 풀" },
-  // ⚠️ 导航项刻意放在 `nav.*` 而不是 `reg.*`：`reg.*` 是禁用词门禁的作用域，
-  // 而那道门禁管的是「两条邮箱通道有没有被暗示成有高下」，与一个板块名无关。
-  "nav.registrar":    { "zh-CN": "注册机", "zh-TW": "註冊機", en: "Registrar", ja: "レジストラー", ko: "등록기" },
-  "nav.events":       { "zh-CN": "事件", "zh-TW": "事件", en: "Events", ja: "イベント", ko: "이벤트" },
-  // ⚠️ 与 `nav.registrar` 同一条理由，放 `nav.*` 而不是 `usage.*`：命名空间在这里
-  // 表示的是「壳层导航」，与板块内部的文案分开。
-  "nav.usage":        { "zh-CN": "用量", "zh-TW": "用量", en: "Usage", ja: "使用量", ko: "사용량" },
-  // ⚠️ 与 `nav.registrar` 同一条理由，放 `nav.*` 而不是 `models.*`：命名空间在这里
-  // 表示的是「壳层导航」，与板块内部的文案分开。
-  "nav.models":       { "zh-CN": "模型", "zh-TW": "模型", en: "Models", ja: "モデル", ko: "모델" },
-  // ⚠️ 与 `nav.registrar` 同一条理由，放 `nav.*` 而不是 `pg.*`：命名空间在这里
-  // 表示的是「壳层导航」，与板块内部的文案分开。
-  "nav.playground":   { "zh-CN": "调试台", "zh-TW": "偵錯台", en: "Playground", ja: "プレイグラウンド", ko: "플레이그라운드" },
-  // ⚠️ 与 `nav.registrar` 同一条理由，放 `nav.*` 而不是 `set.*`：命名空间在这里
-  // 表示的是「壳层导航」，与板块内部的文案分开。
-  // ⚠️ 与 `nav.registrar` 同一条理由，放 `nav.*` 而不是 `ak.*`：命名空间在这里
-  // 表示的是「壳层导航」，与板块内部的文案分开。
-  "nav.apikeys":      { "zh-CN": "API 密钥", "zh-TW": "API 密鑰", en: "API keys", ja: "API キー", ko: "API 키" },
-  "nav.settings":     { "zh-CN": "设置", "zh-TW": "設定", en: "Settings", ja: "設定", ko: "설정" },
-  "shell.logout":     { "zh-CN": "退出登录", "zh-TW": "登出", en: "Sign out", ja: "ログアウト", ko: "로그아웃" },
-  "shell.theme":      { "zh-CN": "切换主题", "zh-TW": "切換主題", en: "Toggle theme", ja: "テーマ切り替え", ko: "테마 전환" },
-  "shell.lang":       { "zh-CN": "语言", "zh-TW": "語言", en: "Language", ja: "言語", ko: "언어" },
-  // 顶栏那条仓库链接的悬停提示。链接自己的文字是 `GitHub` 这个专名，五种语言里都不译，
-  // 所以它写死在 `index.html` 里；**要译的是「这链接会把你带去哪」**，那一句在这里。
-  "shell.repo":       { "zh-CN": "项目仓库（GitHub）", "zh-TW": "專案倉庫（GitHub）", en: "Project repository on GitHub", ja: "GitHub のリポジトリ", ko: "GitHub 저장소" },
-  // 顶栏那颗状态徽章的三档。取值决策在 `js/pure/health.mjs`，那边的文件头写着为什么
-  // 第三档叫「状态未知」而不是「离线」：判据能证明的只有「最近这一次没拿到可识别的应答」。
-  "shell.status.ok":       { "zh-CN": "运行中", "zh-TW": "運行中", en: "Running", ja: "稼働中", ko: "실행 중" },
-  "shell.status.degraded": { "zh-CN": "已降级", "zh-TW": "已降級", en: "Degraded", ja: "機能低下", ko: "성능 저하" },
-  "shell.status.unknown":  { "zh-CN": "状态未知", "zh-TW": "狀態未知", en: "Status unknown", ja: "状態不明", ko: "상태 알 수 없음" },
-  "shell.status.hint":     { "zh-CN": "最近一次 /health 探测的结果，点一下重新探测", "zh-TW": "最近一次 /health 探測的結果，點一下重新探測", en: "Result of the latest /health probe — click to probe again", ja: "直近の /health プローブの結果です。クリックすると再度確認します", ko: "가장 최근 /health 프로브 결과입니다. 누르면 다시 확인합니다" },
-  "common.refresh":   { "zh-CN": "刷新", "zh-TW": "重新整理", en: "Refresh", ja: "更新", ko: "새로고침" },
-  "common.loadFailed":{ "zh-CN": "读取失败，显示为 —", "zh-TW": "讀取失敗，顯示為 —", en: "Failed to load; shown as —", ja: "取得に失敗しました（— と表示）", ko: "불러오기 실패(—로 표시)" },
-  "common.copy":      { "zh-CN": "复制", "zh-TW": "複製", en: "Copy", ja: "コピー", ko: "복사" },
-  "common.copied":    { "zh-CN": "已复制", "zh-TW": "已複製", en: "Copied", ja: "コピーしました", ko: "복사했습니다" },
-  "common.copyFailed":{ "zh-CN": "复制失败", "zh-TW": "複製失敗", en: "Copy failed", ja: "コピーに失敗しました", ko: "복사에 실패했습니다" },
-  "common.cancel":    { "zh-CN": "取消", "zh-TW": "取消", en: "Cancel", ja: "キャンセル", ko: "취소" },
-  "common.confirm":   { "zh-CN": "确定", "zh-TW": "確定", en: "Confirm", ja: "確認", ko: "확인" },
-  // 需要手动关闭的 toast 上那颗「×」按钮的无障碍标签（批量操作部分
-  // 失败这类信息不自动消失，见 js/ui.js 的 toast() 说明）。
-  "common.dismiss":   { "zh-CN": "关闭提示", "zh-TW": "關閉提示", en: "Dismiss", ja: "閉じる", ko: "닫기" },
-  "common.sessionExpired": { "zh-CN": "会话已过期，请重新输入管理口令", "zh-TW": "工作階段已過期，請重新輸入管理口令", en: "Session expired, please sign in again", ja: "セッションが失効しました。再度サインインしてください", ko: "세션이 만료되었습니다. 다시 로그인하세요" },
-
-  // ── 管理接口错误码 → 五语言文案 ──────────────────────────────────────────
-  //
-  // ⚠️⚠️ **这一族存在的全部理由：在它之前，后端那句中文 `error.message` 被
-  // `js/sec-keys.js` 原样画到 ja / en / ko 的屏幕上。** 现在后端只回一个闭集里的
-  // `error.code`（`src/core/admin/admin-errors.ts`），文案在这里，五语言各一份。
-  // 码 → 键的对照表在 `js/pure/keys-write.mjs` 的 `ADMIN_ERROR_TEXT_KEY`，
-  // **写成字面量而不是 `err.` 前缀拼键**——拼键会把整族变成永久豁免，理由写在那张表上方。
-  //
-  // ⚠️ **`keys.mustDisableFirst` 刻意不在这个命名空间里另开一条**：那句话早就有了
-  // （下面 Key 池写操作那一段），再写一份就是同一批文案两份真源。对照表直接指过去。
-  // ── API 密钥板块（我们**签发给下游**的那一族，不是 Key 池那一族）──────────
-  // ⚠️ 措辞上一律写「API 密钥」，Key 池那边一律写「key」——两族在同一块屏幕上
-  // 出现，文案是把它们分开的主要手段（路径不能改，那是已经发布的契约）。
-  "ak.title":          { "zh-CN": "API 密钥", "zh-TW": "API 密鑰", en: "API keys", ja: "API キー", ko: "API 키" },
-  "ak.sub":            { "zh-CN": "签发给下游客户端的 API 密钥。它们与上游 Key 池方向相反：这里的每一把都是别人拿来向本网关证明身份的。", "zh-TW": "簽發給下游用戶端的 API 密鑰。它們與上游 Key 池方向相反：這裡的每一把都是別人拿來向本閘道證明身分的。", en: "API keys you issue to downstream clients. They point the opposite way from the upstream key pool: each one here is what somebody else presents to this gateway.", ja: "下流のクライアントに発行する API キーです。上流の key プールとは向きが逆で、ここにあるのは相手がこのゲートウェイに提示するものです。", ko: "다운스트림 클라이언트에 발급하는 API 키입니다. 업스트림 key 풀과 방향이 반대로, 여기 있는 것은 상대가 이 게이트웨이에 제시하는 자격 증명입니다." },
-  "ak.svc.title":      { "zh-CN": "服务连接", "zh-TW": "服務連線", en: "Service endpoint", ja: "サービス接続先", ko: "서비스 접속 정보" },
-  "ak.svc.baseUrl":    { "zh-CN": "Base URL", "zh-TW": "Base URL", en: "Base URL", ja: "Base URL", ko: "Base URL" },
-  "ak.svc.master":     { "zh-CN": "主口令（GATEWAY_TOKEN）永远有效，而且验证它一次存储读都不产生——密钥表读不出来时它照样能用。要轮换它请到「设置」页，这里刻意不再显示它一次。", "zh-TW": "主口令（GATEWAY_TOKEN）永遠有效，而且驗證它一次儲存讀取都不產生——密鑰表讀不出來時它照樣能用。要輪換它請到「設定」頁，這裡刻意不再顯示它一次。", en: "The master token (GATEWAY_TOKEN) is always valid, and checking it performs no storage read at all — it keeps working even when the key table cannot be read. Rotate it on the Settings page; it is deliberately not echoed a second time here.", ja: "マスタートークン（GATEWAY_TOKEN）は常に有効で、その判定はストレージ読み取りを一切発生させません——キー表が読めなくても使えます。ローテーションは「設定」ページで行ってください。ここでは意図的に再表示しません。", ko: "마스터 토큰(GATEWAY_TOKEN)은 언제나 유효하며 그 판정은 저장소 읽기를 전혀 일으키지 않습니다 — 키 표를 읽지 못해도 그대로 동작합니다. 교체는 「설정」 페이지에서 하세요. 여기서는 일부러 다시 표시하지 않습니다." },
-  "ak.card.all":       { "zh-CN": "全部", "zh-TW": "全部", en: "Total", ja: "合計", ko: "전체" },
-  "ak.card.active":    { "zh-CN": "启用中", "zh-TW": "啟用中", en: "Active", ja: "有効", ko: "사용 중" },
-  "ak.card.disabled":  { "zh-CN": "已停用", "zh-TW": "已停用", en: "Disabled", ja: "停止中", ko: "중지됨" },
-  "ak.card.expired":   { "zh-CN": "已过期", "zh-TW": "已過期", en: "Expired", ja: "期限切れ", ko: "만료됨" },
-  "ak.bucket.active":  { "zh-CN": "启用中", "zh-TW": "啟用中", en: "Active", ja: "有効", ko: "사용 중" },
-  "ak.bucket.disabled":{ "zh-CN": "已停用", "zh-TW": "已停用", en: "Disabled", ja: "停止中", ko: "중지됨" },
-  "ak.bucket.expired": { "zh-CN": "已过期", "zh-TW": "已過期", en: "Expired", ja: "期限切れ", ko: "만료됨" },
-  "ak.sort.new":       { "zh-CN": "新 → 旧", "zh-TW": "新 → 舊", en: "Newest first", ja: "新しい順", ko: "최신순" },
-  "ak.sort.old":       { "zh-CN": "旧 → 新", "zh-TW": "舊 → 新", en: "Oldest first", ja: "古い順", ko: "오래된 순" },
-  "ak.sort.name":      { "zh-CN": "按名称", "zh-TW": "按名稱", en: "By name", ja: "名前順", ko: "이름순" },
-  "ak.searchPh":       { "zh-CN": "搜索名称 / 掩码 / 短 id", "zh-TW": "搜尋名稱 / 遮罩 / 短 id", en: "Search name, mask or short id", ja: "名前・マスク・短い id で検索", ko: "이름 / 마스크 / 짧은 id 검색" },
-  "ak.purge":          { "zh-CN": "清理失效（{count}）", "zh-TW": "清理失效（{count}）", en: "Purge unusable ({count})", ja: "無効なものを整理（{count}）", ko: "실효 정리({count})" },
-  "ak.issue":          { "zh-CN": "签发密钥", "zh-TW": "簽發密鑰", en: "Issue a key", ja: "キーを発行", ko: "키 발급" },
-  "ak.issueTitle":     { "zh-CN": "签发一把 API 密钥", "zh-TW": "簽發一把 API 密鑰", en: "Issue an API key", ja: "API キーを発行", ko: "API 키 발급" },
-  "ak.issueSubmit":    { "zh-CN": "签发", "zh-TW": "簽發", en: "Issue", ja: "発行", ko: "발급" },
-  "ak.form.name":      { "zh-CN": "名称", "zh-TW": "名稱", en: "Name", ja: "名前", ko: "이름" },
-  "ak.form.namePh":    { "zh-CN": "这把发给谁用，例如 mobile-app", "zh-TW": "這把發給誰用，例如 mobile-app", en: "Who gets this one, e.g. mobile-app", ja: "誰に渡すか（例: mobile-app）", ko: "누구에게 줄 키인지(예: mobile-app)" },
-  "ak.form.expiry":    { "zh-CN": "到期", "zh-TW": "到期", en: "Expiry", ja: "有効期限", ko: "만료" },
-  // ⚠️ 快捷档的文案逐字写「自签发时刻起」：写成「有效期 N 天」会被读成
-  // 「发出去之后第一次用才开始计时」，而本网关在签发那一刻就把绝对到期时刻定死了。
-  "ak.expiry.never":   { "zh-CN": "不过期", "zh-TW": "不過期", en: "Never expires", ja: "無期限", ko: "만료 없음" },
-  "ak.expiry.d7":      { "zh-CN": "自签发时刻起 7 天", "zh-TW": "自簽發時刻起 7 天", en: "7 days from the moment it is issued", ja: "発行した時点から 7 日", ko: "발급한 시점부터 7일" },
-  "ak.expiry.d30":     { "zh-CN": "自签发时刻起 30 天", "zh-TW": "自簽發時刻起 30 天", en: "30 days from the moment it is issued", ja: "発行した時点から 30 日", ko: "발급한 시점부터 30일" },
-  "ak.expiry.d90":     { "zh-CN": "自签发时刻起 90 天", "zh-TW": "自簽發時刻起 90 天", en: "90 days from the moment it is issued", ja: "発行した時点から 90 日", ko: "발급한 시점부터 90일" },
-  "ak.expiry.custom":  { "zh-CN": "自定日期", "zh-TW": "自訂日期", en: "Pick a date", ja: "日付を指定", ko: "날짜 지정" },
-  "ak.err.pickDate":   { "zh-CN": "请选一个将来的日期", "zh-TW": "請選一個將來的日期", en: "Pick a date in the future", ja: "将来の日付を選んでください", ko: "미래 날짜를 선택하세요" },
-  "ak.form.onceOnly":  { "zh-CN": "签发之后明文只显示这一次。网关只存它的摘要，丢了找不回来，只能删掉重发。", "zh-TW": "簽發之後明文只顯示這一次。閘道只存它的摘要，丟了找不回來，只能刪掉重發。", en: "The plaintext is shown once, right after issuing. The gateway stores only its digest; if you lose it, delete the key and issue a new one.", ja: "平文は発行直後の一度だけ表示されます。ゲートウェイはダイジェストしか保存しないため、紛失したら削除して発行し直してください。", ko: "평문은 발급 직후 한 번만 보여집니다. 게이트웨이는 다이제스트만 저장하므로, 잃어버리면 삭제하고 다시 발급하세요." },
-  "ak.createdAt":      { "zh-CN": "签发于", "zh-TW": "簽發於", en: "Issued", ja: "発行", ko: "발급" },
-  "ak.expiresAt":      { "zh-CN": "到期", "zh-TW": "到期", en: "Expires", ja: "期限", ko: "만료" },
-  "ak.expiresNever":   { "zh-CN": "不过期", "zh-TW": "不過期", en: "Never expires", ja: "無期限", ko: "만료 없음" },
-  // ── 每张卡上的用量那一行（Tier-2）─────────────────────────────────────────
-  // ⚠️⚠️ **`off` 那一句里不许出现任何一个数字**：Tier-2 关着时这个部署根本没在记账，
-  //    画一个 `0` 就是把「没开」说成「没人用」（全局约束 9 的原话是「绝不伪造 `0`」）。
-  //    由 `tests/ui/dom/apikeys-section.test.ts` 的
-  //    「Tier-2 关着时那一格写」开头那一格（用例名后半截自己带嵌套引号，
-  //    这里只引得动前缀，别把这行读成完整标题）
-  //    **按正则扫这一格的文本**钉着。
-  "ak.usage.off":      { "zh-CN": "用量：未开启", "zh-TW": "用量：未開啟", en: "Usage: not enabled", ja: "使用量: 無効", ko: "사용량: 비활성" },
-  "ak.usage.unknown":  { "zh-CN": "用量：—", "zh-TW": "用量：—", en: "Usage: —", ja: "使用量: —", ko: "사용량: —" },
-  "ak.usage.value":    { "zh-CN": "今天（UTC）≈ {count} 次请求", "zh-TW": "今天（UTC）≈ {count} 次請求", en: "Today (UTC) ≈ {count} requests", ja: "今日（UTC）≈ {count} 件", ko: "오늘(UTC) ≈ {count}건" },
-  // ⚠️⚠️ **「一条分片都还没落盘」也不许写成 `≈ 0 次请求`**（评审第 2 轮）：
-  //    这一句与 `ak.usage.off` 是同一条纪律的另一半 —— 那边禁的是把「没开」说成
-  //    「没人用」，这边禁的是把「还没落盘」说成「没人用」。判据同样走
-  //    `apiKeyUsage()`（那个函数上方有它的全文），这里只负责有一句话可说。
-  //    ⚠️ 这一句里**刻意没有数字**，理由与 `off` 那一句相同。
-  "ak.usage.notLanded": { "zh-CN": "今天（UTC）：还没有落盘的记录", "zh-TW": "今天（UTC）：還沒有落盤的記錄", en: "Today (UTC): nothing flushed yet", ja: "今日（UTC）: まだ書き込まれた記録がありません", ko: "오늘(UTC): 아직 기록된 내역 없음" },
-  "ak.usage.notLandedTip": { "zh-CN": "这段区间里一个分片都还没落盘。Tier-2 是攒够一个落盘间隔才写一次的，这一行分不出「这把密钥没人用」和「还没写进去」。", "zh-TW": "這段區間裡一個分片都還沒落盤。Tier-2 是攢夠一個落盤間隔才寫一次的，這一行分不出「這把密鑰沒人用」和「還沒寫進去」。", en: "Not a single shard has been flushed for this range yet. Tier-2 writes only once per flush interval, so this line cannot tell “nobody used this key” from “not written yet”.", ja: "この期間のシャードはまだ 1 件も書き込まれていません。Tier-2 はフラッシュ間隔ごとにまとめて書き込むため、この行では「この鍵は誰も使っていない」と「まだ書き込まれていない」を区別できません。", ko: "이 구간에는 아직 샤드가 하나도 기록되지 않았습니다. Tier-2는 플러시 간격마다 한 번씩 기록하므로, 이 줄에서는 “이 키를 아무도 쓰지 않음”과 “아직 기록되지 않음”을 구분할 수 없습니다." },
-  // ⚠️ **「isolate 被回收时这一段会丢」这半句是补上去的，别再删**（评审第 2 轮）：
-  //    它与 `usage.approxTip` 说的是**同一个** Tier-2 未落盘窗口，而上一版这里只写
-  //    「最长一个落盘间隔」——读起来像「等一会儿就补上」，而它可能永远补不上。
-  //    同一件事在同一个面板上两种诚实度，低的那一种就是这个面板的实际诚实度。
-  //    由 `tests/ui/usage.test.ts` 的
-  //    「Tier-2 的 ≈ tooltip 与 Tier-1 一样明写「这一段会丢」」那一格的 key 名单钉着
-  //    （**名单是这条红线唯一的守卫**：漏掉一个入口就等于把那个入口放生）。
-  "ak.usage.tip":      { "zh-CN": "这个数来自时间序列统计（Tier-2），是近似值：未落盘的尾巴最长一个落盘间隔，isolate 在此之前被回收时这一段会丢。按天 / 按小时的完整分解在「用量」板块。", "zh-TW": "這個數來自時間序列統計（Tier-2），是近似值：未落盤的尾巴最長一個落盤間隔，isolate 在此之前被回收時這一段會遺失。按天 / 按小時的完整分解在「用量」板塊。", en: "This number comes from time-series stats (Tier-2) and is approximate: the unflushed tail can be up to one flush interval old, and whatever is in it is lost if the isolate is recycled first. The full per-day / per-hour breakdown is in the Usage section.", ja: "この数値は時系列統計（Tier-2）によるもので概算です。未書き込み分は最大で 1 回のフラッシュ間隔ぶん古くなり、その前に isolate が回収されるとその分は失われます。日別・時間別の完全な内訳は「使用量」セクションにあります。", ko: "이 수치는 시계열 통계(Tier-2)에서 온 근사값입니다. 아직 기록되지 않은 부분은 최대 한 번의 플러시 간격만큼 오래되었을 수 있으며, 그 전에 isolate가 회수되면 그 구간은 사라집니다. 일별·시간별 전체 분해는 「사용량」 섹션에 있습니다." },
-  // 用量这一次没读到时那条黄条的正文。**它必须把「坏的只是这一行」说出来**：
-  // 这条横幅出现时列表、签发、停用、删除全都照常可用，一句笼统的「读取失败」
-  // 会让运维以为整个板块出事了。旁边那颗按钮走 `common.refresh`（同一件东西，
-  // 不为它另开一条文案）。
-  "ak.usageFailed":    { "zh-CN": "用量这一次没读出来（列表本身没问题）", "zh-TW": "用量這一次沒讀出來（列表本身沒問題）", en: "Usage could not be read this time (the list itself is fine)", ja: "今回は使用量を読み取れませんでした（一覧そのものは正常です）", ko: "이번에는 사용량을 읽지 못했습니다 (목록 자체는 정상입니다)" },
-  "ak.action.rename":  { "zh-CN": "改名", "zh-TW": "改名", en: "Rename", ja: "名前変更", ko: "이름 변경" },
-  "ak.action.disable": { "zh-CN": "停用", "zh-TW": "停用", en: "Disable", ja: "停止", ko: "중지" },
-  "ak.action.enable":  { "zh-CN": "启用", "zh-TW": "啟用", en: "Enable", ja: "有効化", ko: "사용" },
-  "ak.action.delete":  { "zh-CN": "删除", "zh-TW": "刪除", en: "Delete", ja: "削除", ko: "삭제" },
-  "ak.renameTitle":    { "zh-CN": "改名", "zh-TW": "改名", en: "Rename this key", ja: "キーの名前を変更", ko: "키 이름 변경" },
-  "ak.deleteTitle":    { "zh-CN": "删除这把密钥", "zh-TW": "刪除這把密鑰", en: "Delete this key", ja: "このキーを削除", ko: "이 키 삭제" },
-  "ak.deleteConfirm":  { "zh-CN": "删掉之后拿着它的客户端会开始收到 401。这一步不可撤销，但随时可以再签发一把新的。", "zh-TW": "刪掉之後拿著它的用戶端會開始收到 401。這一步不可撤銷，但隨時可以再簽發一把新的。", en: "Clients holding this key will start getting 401. This cannot be undone, but you can issue a new key at any time.", ja: "このキーを持つクライアントは 401 を受け取るようになります。取り消せませんが、新しいキーはいつでも発行できます。", ko: "이 키를 가진 클라이언트는 401을 받기 시작합니다. 되돌릴 수 없지만 새 키는 언제든 발급할 수 있습니다." },
-  "ak.purgeTitle":     { "zh-CN": "清理失效的密钥", "zh-TW": "清理失效的密鑰", en: "Purge unusable keys", ja: "使えないキーを整理", ko: "쓸 수 없는 키 정리" },
-  "ak.purgeConfirm":   { "zh-CN": "会删掉此刻已停用或已过期的每一把，仍然可用的一把都不动。这一步不可撤销。", "zh-TW": "會刪掉此刻已停用或已過期的每一把，仍然可用的一把都不動。這一步不可撤銷。", en: "This deletes every key that is currently disabled or expired, and leaves every usable key untouched. It cannot be undone.", ja: "現在停止中または期限切れのキーをすべて削除し、まだ使えるキーには一切触れません。取り消せません。", ko: "지금 중지되었거나 만료된 키를 모두 지우고, 아직 쓸 수 있는 키는 전혀 건드리지 않습니다. 되돌릴 수 없습니다." },
-  "ak.empty":          { "zh-CN": "还没有签发过 API 密钥。下游客户端此刻用的是主口令。", "zh-TW": "還沒有簽發過 API 密鑰。下游用戶端此刻用的是主口令。", en: "No API keys issued yet. Downstream clients are currently using the master token.", ja: "API キーはまだ発行されていません。下流のクライアントは今のところマスタートークンを使っています。", ko: "아직 발급한 API 키가 없습니다. 다운스트림 클라이언트는 지금 마스터 토큰을 쓰고 있습니다." },
-  "ak.emptyFiltered":  { "zh-CN": "没有匹配的密钥", "zh-TW": "沒有符合的密鑰", en: "No keys match", ja: "一致するキーがありません", ko: "일치하는 키가 없습니다" },
-  "ak.notWired":       { "zh-CN": "这个部署没有接上 API 密钥的存储，本板块的写操作会被后端拒绝。它多半是直接装配的，没有走标准入口。", "zh-TW": "這個部署沒有接上 API 密鑰的儲存，本板塊的寫入操作會被後端拒絕。它多半是直接裝配的，沒有走標準入口。", en: "This deployment has no storage wired for API keys, so writes here are rejected by the backend. It was most likely assembled directly rather than through the standard entry point.", ja: "このデプロイには API キー用のストレージが接続されていないため、ここでの書き込みはバックエンドに拒否されます。標準の入口を通さずに直接組み立てられている可能性が高いです。", ko: "이 배포에는 API 키용 저장소가 연결되어 있지 않아 여기서의 쓰기는 백엔드가 거부합니다. 표준 진입점을 거치지 않고 직접 조립된 경우가 대부분입니다." },
-  "ak.loadFailed":     { "zh-CN": "这次没读到密钥列表", "zh-TW": "這次沒讀到密鑰清單", en: "Could not load the key list this time", ja: "今回はキー一覧を取得できませんでした", ko: "이번에는 키 목록을 불러오지 못했습니다" },
-  "ak.unreadable":     { "zh-CN": "存储里的密钥表读不懂：全部子密钥此刻都验不过，而主口令不受影响。", "zh-TW": "儲存裡的密鑰表讀不懂：全部子密鑰此刻都驗不過，而主口令不受影響。", en: "The key table in storage cannot be parsed: every sub-key currently fails verification, while the master token is unaffected.", ja: "ストレージ内のキー表を解釈できません: 現在すべてのサブキーが検証に失敗しますが、マスタートークンには影響しません。", ko: "저장소의 키 표를 해석할 수 없습니다: 지금 모든 서브키가 검증에 실패하지만 마스터 토큰은 영향을 받지 않습니다." },
-  "ak.unreadableHelp": { "zh-CN": "里面的原始内容没有被改动，面板的写操作会被拒绝以免覆盖它。处置步骤见 ADMIN.md 的排障一节。", "zh-TW": "裡面的原始內容沒有被改動，面板的寫入操作會被拒絕以免覆蓋它。處置步驟見 ADMIN.md 的排障一節。", en: "The original content is untouched and writes from the panel are refused so that nothing overwrites it. The recovery steps are in the troubleshooting section of ADMIN.md.", ja: "元の内容は変更されておらず、上書きを避けるためパネルからの書き込みは拒否されます。復旧手順は ADMIN.md のトラブルシューティングにあります。", ko: "원본 내용은 그대로이며, 덮어쓰지 않도록 패널의 쓰기는 거부됩니다. 복구 절차는 ADMIN.md의 문제 해결 절에 있습니다." },
-  "ak.secret.title":   { "zh-CN": "这把密钥的明文", "zh-TW": "這把密鑰的明文", en: "The plaintext of this key", ja: "このキーの平文", ko: "이 키의 평문" },
-  "ak.secret.intro":   { "zh-CN": "把它交给要用的那一方。它可以放进 Authorization、x-api-key、x-goog-api-key 或 key 查询参数，四种写法都认。", "zh-TW": "把它交給要用的那一方。它可以放進 Authorization、x-api-key、x-goog-api-key 或 key 查詢參數，四種寫法都認。", en: "Hand it to whoever will use it. It works in Authorization, x-api-key, x-goog-api-key or the key query parameter — all four are accepted.", ja: "使う相手に渡してください。Authorization、x-api-key、x-goog-api-key、key クエリパラメータのいずれでも受け付けます。", ko: "사용할 상대에게 전달하세요. Authorization, x-api-key, x-goog-api-key, key 쿼리 파라미터 네 가지 모두 받습니다." },
-  "ak.secret.onceOnly":{ "zh-CN": "关掉这个窗口就再也看不到它了。网关只存它的摘要，没有任何接口能把它取回来。", "zh-TW": "關掉這個視窗就再也看不到它了。閘道只存它的摘要，沒有任何介面能把它取回來。", en: "Close this dialog and it is gone for good. The gateway stores only its digest, and no endpoint can hand it back.", ja: "このダイアログを閉じると二度と表示できません。ゲートウェイはダイジェストしか保存せず、取り戻せるエンドポイントはありません。", ko: "이 창을 닫으면 다시는 볼 수 없습니다. 게이트웨이는 다이제스트만 저장하며 되돌려 주는 엔드포인트가 없습니다." },
-  "ak.secret.close":   { "zh-CN": "我已经复制好了", "zh-TW": "我已經複製好了", en: "I have copied it", ja: "コピーしました", ko: "복사했습니다" },
-  "ak.revokeDelay":    { "zh-CN": "本实例已经生效；别的实例最多还要 {delay} 才看得见这次改动。", "zh-TW": "本實例已經生效；別的實例最多還要 {delay} 才看得見這次改動。", en: "It has taken effect on this instance; other instances may take up to {delay} to see this change.", ja: "このインスタンスでは反映済みです。ほかのインスタンスがこの変更を認識するまで最大 {delay} かかります。", ko: "이 인스턴스에서는 적용되었습니다. 다른 인스턴스가 이 변경을 인식하기까지 최대 {delay} 걸립니다." },
-  "ak.staleView":      { "zh-CN": "还没读到这份列表的版本号，写操作暂时做不了，请先刷新一次", "zh-TW": "還沒讀到這份清單的版本號，寫入操作暫時做不了，請先重新整理一次", en: "The version of this list has not been read yet, so writes are unavailable — refresh first", ja: "この一覧のバージョン番号をまだ取得できていないため、書き込みはできません。まず再読み込みしてください", ko: "이 목록의 버전 번호를 아직 읽지 못해 쓰기를 할 수 없습니다. 먼저 새로 고치세요" },
-  "ak.writeFailed":    { "zh-CN": "这次操作没成功", "zh-TW": "這次操作沒成功", en: "That operation did not go through", ja: "今回の操作は成功しませんでした", ko: "이번 작업은 성공하지 못했습니다" },
-  "ak.issued":         { "zh-CN": "已签发", "zh-TW": "已簽發", en: "Issued", ja: "発行しました", ko: "발급했습니다" },
-  "ak.renamed":        { "zh-CN": "已改名", "zh-TW": "已改名", en: "Renamed", ja: "名前を変更しました", ko: "이름을 변경했습니다" },
-  "ak.disabled":       { "zh-CN": "已停用", "zh-TW": "已停用", en: "Disabled", ja: "停止しました", ko: "중지했습니다" },
-  "ak.enabled":        { "zh-CN": "已启用", "zh-TW": "已啟用", en: "Enabled", ja: "有効にしました", ko: "사용으로 바꿨습니다" },
-  "ak.deleted":        { "zh-CN": "已删除", "zh-TW": "已刪除", en: "Deleted", ja: "削除しました", ko: "삭제했습니다" },
-  "ak.purged":         { "zh-CN": "已清理", "zh-TW": "已清理", en: "Purged", ja: "整理しました", ko: "정리했습니다" },
-  "err.untranslated": { "zh-CN": "{message}（这句是后端原话，本面板还没有这条错误码的译文）", "zh-TW": "{message}（這句是後端原話，本面板還沒有這條錯誤碼的譯文）", en: "{message} (raw text from the backend; this panel has no translation for that error code yet)", ja: "{message}（これはバックエンドの原文です。このパネルにはそのエラーコードの訳文がまだありません）", ko: "{message} (백엔드가 보낸 원문입니다. 이 패널에는 해당 오류 코드의 번역문이 아직 없습니다)" },
-  "err.admin_unavailable": { "zh-CN": "管理接口已停用。原因只写进了服务端日志，请查一下管理口令的配置。", "zh-TW": "管理介面已停用。原因只寫進了伺服器日誌，請查一下管理口令的設定。", en: "The admin API is disabled. The reason is written only to the server log; check the admin token configuration.", ja: "管理 API は停止しています。理由はサーバーログにのみ記録されます。管理トークンの設定を確認してください。", ko: "관리 API가 중지되었습니다. 이유는 서버 로그에만 기록되므로 관리 토큰 설정을 확인하세요." },
-  "err.admin_unauthorized": { "zh-CN": "口令缺失或不正确", "zh-TW": "口令缺失或不正確", en: "Missing or invalid token", ja: "トークンがないか、正しくありません", ko: "토큰이 없거나 올바르지 않습니다" },
-  "err.bad_json": { "zh-CN": "请求体不是合法的 JSON", "zh-TW": "請求體不是合法的 JSON", en: "The request body is not valid JSON", ja: "リクエストボディが正しい JSON ではありません", ko: "요청 본문이 올바른 JSON이 아닙니다" },
-  "err.body_not_an_object": { "zh-CN": "请求体必须是一个 JSON 对象", "zh-TW": "請求體必須是一個 JSON 物件", en: "The request body must be a JSON object", ja: "リクエストボディは JSON オブジェクトである必要があります", ko: "요청 본문은 JSON 객체여야 합니다" },
-  "err.unknown_field": { "zh-CN": "后端不认识这些字段：{fields}。多半是面板与网关的版本对不上。", "zh-TW": "後端不認識這些欄位：{fields}。多半是面板與網關的版本對不上。", en: "The backend does not recognize these fields: {fields}. The panel and the gateway are most likely on different versions.", ja: "バックエンドが認識できない項目があります: {fields}。パネルとゲートウェイのバージョンが一致していない可能性が高いです。", ko: "백엔드가 인식하지 못하는 항목이 있습니다: {fields}. 패널과 게이트웨이의 버전이 다를 가능성이 큽니다." },
-  "err.key_not_found": { "zh-CN": "池子里没有这把 key，可能已经被别的副本删掉了", "zh-TW": "池子裡沒有這把 key，可能已經被別的副本刪掉了", en: "This key is not in the pool; another replica may have deleted it already", ja: "この key はプールにありません。別のレプリカが既に削除した可能性があります", ko: "이 key는 풀에 없습니다. 다른 복제본이 이미 삭제했을 수 있습니다" },
-  "err.not_a_boolean": { "zh-CN": "字段 {field} 必须是开或关", "zh-TW": "欄位 {field} 必須是開或關", en: "The field {field} must be on or off", ja: "項目 {field} はオンまたはオフである必要があります", ko: "항목 {field}은(는) 켜기 또는 끄기여야 합니다" },
-  "err.note_not_a_string": { "zh-CN": "备注必须是文本，或者留空表示清掉它", "zh-TW": "備註必須是文字，或者留空表示清掉它", en: "The note must be text, or empty to clear it", ja: "備考は文字列にするか、空にして削除してください", ko: "메모는 문자열이어야 하며, 비우면 삭제됩니다" },
-  "err.note_too_long": { "zh-CN": "备注最长 {max} 个字符", "zh-TW": "備註最長 {max} 個字元", en: "The note may be at most {max} characters", ja: "備考は最大 {max} 文字です", ko: "메모는 최대 {max}자입니다" },
-  "err.empty_patch": { "zh-CN": "这次没有要改的字段。一次什么都没做的保存不会被说成「已保存」。", "zh-TW": "這次沒有要改的欄位。一次什麼都沒做的儲存不會被說成「已儲存」。", en: "Nothing was changed this time. A save that does nothing will not be reported as saved.", ja: "今回は変更する項目がありません。何もしない保存を「保存しました」とは表示しません。", ko: "이번에는 변경할 항목이 없습니다. 아무것도 하지 않은 저장을 저장됨으로 표시하지 않습니다." },
-  "err.keys_not_a_string_array": { "zh-CN": "导入的内容必须是一组文本，面板与网关的版本可能对不上", "zh-TW": "匯入的內容必須是一組文字，面板與網關的版本可能對不上", en: "The imported keys must be an array of strings; the panel and the gateway may be on different versions", ja: "取り込む key は文字列の配列である必要があります。パネルとゲートウェイのバージョンが異なる可能性があります", ko: "가져올 key는 문자열 배열이어야 합니다. 패널과 게이트웨이의 버전이 다를 수 있습니다" },
-  "err.too_many_import_keys": { "zh-CN": "一次最多导入 {max} 把 key。超出的部分不会被静默截断，请分几次导入。", "zh-TW": "一次最多匯入 {max} 把 key。超出的部分不會被靜默截斷，請分幾次匯入。", en: "At most {max} keys per import. Anything beyond that is rejected rather than silently truncated, so split it into several imports.", ja: "1 回の取り込みは最大 {max} 件です。超過分は黙って切り捨てるのではなく拒否するため、数回に分けて取り込んでください。", ko: "한 번에 최대 {max}개까지 가져올 수 있습니다. 초과분은 조용히 잘라내지 않고 거부하므로 여러 번에 나눠 가져오세요." },
-  "err.not_a_bulk_op": { "zh-CN": "这个批量操作后端不认识，它只接受：{ops}", "zh-TW": "這個批次操作後端不認識，它只接受：{ops}", en: "The backend does not recognize this bulk operation; it only accepts: {ops}", ja: "このバッチ操作はバックエンドが認識しません。受け付けるのは次のみです: {ops}", ko: "백엔드가 이 일괄 작업을 인식하지 못합니다. 허용되는 값은 다음뿐입니다: {ops}" },
-  "err.ids_not_a_string_array": { "zh-CN": "批量操作的 id 列表必须是一组文本，面板与网关的版本可能对不上", "zh-TW": "批次操作的 id 清單必須是一組文字，面板與網關的版本可能對不上", en: "The id list for a bulk operation must be an array of strings; the panel and the gateway may be on different versions", ja: "バッチ操作の id 一覧は文字列の配列である必要があります。パネルとゲートウェイのバージョンが異なる可能性があります", ko: "일괄 작업의 id 목록은 문자열 배열이어야 합니다. 패널과 게이트웨이의 버전이 다를 수 있습니다" },
-  "err.too_many_bulk_ids": { "zh-CN": "一次最多操作 {max} 把 key，请分几次来", "zh-TW": "一次最多操作 {max} 把 key，請分幾次來", en: "At most {max} keys per bulk operation; split it into several rounds", ja: "1 回のバッチ操作は最大 {max} 件です。数回に分けてください", ko: "일괄 작업은 한 번에 최대 {max}개까지입니다. 여러 번에 나눠 주세요" },
-  // ── 对外 API 密钥那五条端点的错误码 ───────────────────────────────
-  // ⚠️ 这一族说的是「我们签发的」那种密钥，不是上游池那种 key。措辞里一律
-  // 写「API 密钥」而不写裸的「key」，好让两族在同一块屏幕上分得开。
-  "err.apikey_not_found": { "zh-CN": "没有这把 API 密钥，它可能刚被别人删掉了", "zh-TW": "沒有這把 API 密鑰，它可能剛被別人刪掉了", en: "No such API key; someone may have just deleted it", ja: "この API キーはありません。ほかの人が削除した直後かもしれません", ko: "해당 API 키가 없습니다. 방금 다른 사람이 삭제했을 수 있습니다" },
-  "err.name_not_a_string": { "zh-CN": "名称必须是文本，面板与网关的版本可能对不上", "zh-TW": "名稱必須是文字，面板與網關的版本可能對不上", en: "The name must be text; the panel and the gateway may be on different versions", ja: "名前は文字列である必要があります。パネルとゲートウェイのバージョンが異なる可能性があります", ko: "이름은 문자열이어야 합니다. 패널과 게이트웨이의 버전이 다를 수 있습니다" },
-  "err.name_empty": { "zh-CN": "请给这把密钥起个名字：列表里只靠名字认得出它是谁在用", "zh-TW": "請給這把密鑰取個名字：清單裡只靠名字認得出它是誰在用", en: "Give this key a name — the list identifies it by name only", ja: "このキーに名前を付けてください。一覧では名前だけが手掛かりです", ko: "이 키에 이름을 지어 주세요. 목록에서는 이름으로만 구분할 수 있습니다" },
-  "err.name_too_long": { "zh-CN": "名称最长 {max} 个字符", "zh-TW": "名稱最長 {max} 個字元", en: "The name may be at most {max} characters", ja: "名前は最大 {max} 文字です", ko: "이름은 최대 {max}자입니다" },
-  "err.expires_not_a_number": { "zh-CN": "到期时间填得不对，请重新选一次日期，或者选「不过期」", "zh-TW": "到期時間填得不對，請重新選一次日期，或者選「不過期」", en: "The expiry is not a valid timestamp — pick a date again, or choose “never expires”", ja: "有効期限が正しくありません。日付を選び直すか、「無期限」を選んでください", ko: "만료 시각이 올바르지 않습니다. 날짜를 다시 고르거나 “만료 없음”을 선택하세요" },
-  "err.expires_in_the_past": { "zh-CN": "这个到期时间已经过去了：签发一把生下来就过期的密钥没有意义，请选一个将来的日期", "zh-TW": "這個到期時間已經過去了：簽發一把生下來就過期的密鑰沒有意義，請選一個將來的日期", en: "That expiry is already in the past — issuing a key that is born expired does nothing; pick a future date", ja: "その有効期限はすでに過去です。最初から期限切れのキーを発行しても意味がないため、将来の日付を選んでください", ko: "만료 시각이 이미 지났습니다. 처음부터 만료된 키를 발급해도 의미가 없으니 미래 날짜를 선택하세요" },
-  "err.too_many_apikeys": { "zh-CN": "最多只能有 {max} 把 API 密钥。请先删掉一些不用的，再签发新的。", "zh-TW": "最多只能有 {max} 把 API 密鑰。請先刪掉一些不用的，再簽發新的。", en: "At most {max} API keys. Delete a few unused ones before issuing more.", ja: "API キーは最大 {max} 件までです。使っていないものを削除してから発行してください。", ko: "API 키는 최대 {max}개까지입니다. 사용하지 않는 키를 삭제한 뒤 발급하세요." },
-  "err.version_not_a_number": { "zh-CN": "这次操作没带上列表的版本号，面板与网关的版本可能对不上", "zh-TW": "這次操作沒帶上清單的版本號，面板與網關的版本可能對不上", en: "This request carried no list version; the panel and the gateway may be on different versions", ja: "この操作に一覧のバージョン番号が付いていません。パネルとゲートウェイのバージョンが異なる可能性があります", ko: "이 요청에 목록 버전 번호가 없습니다. 패널과 게이트웨이의 버전이 다를 수 있습니다" },
-  "err.stale_write": { "zh-CN": "这份列表在你看到它之后被改过了（你看到的是第 {expected} 版，现在是第 {actual} 版）。什么都没有改，请刷新后重来。", "zh-TW": "這份清單在你看到它之後被改過了（你看到的是第 {expected} 版，現在是第 {actual} 版）。什麼都沒有改，請重新整理後再試。", en: "This list changed after you loaded it (you saw version {expected}, it is now version {actual}). Nothing was changed — refresh and try again.", ja: "この一覧は表示後に変更されました（表示していたのは第 {expected} 版、現在は第 {actual} 版です）。何も変更していません。再読み込みしてやり直してください。", ko: "이 목록은 화면에 띄운 뒤 변경되었습니다(보고 있던 것은 {expected}판, 현재는 {actual}판). 아무것도 바뀌지 않았으니 새로 고친 뒤 다시 시도하세요." },
-  "err.apikeys_unreadable": { "zh-CN": "存储里的 API 密钥表读不懂，本次写入已经拒绝，以免覆盖掉里面还留着的内容。里面的原始内容没有被改动，请照 ADMIN.md 的排障一节处理。", "zh-TW": "儲存裡的 API 密鑰表讀不懂，本次寫入已經拒絕，以免覆蓋掉裡面還留著的內容。裡面的原始內容沒有被改動，請照 ADMIN.md 的排障一節處理。", en: "The API key table in storage cannot be parsed, so this write was refused to avoid overwriting what is still in there. The original content is untouched — see the troubleshooting section of ADMIN.md.", ja: "ストレージ内の API キー表を解釈できないため、残っている内容を上書きしないよう今回の書き込みを拒否しました。元の内容は変更していません。ADMIN.md のトラブルシューティングを参照してください。", ko: "저장소의 API 키 표를 해석할 수 없어 남아 있는 내용을 덮어쓰지 않도록 이번 쓰기를 거부했습니다. 원본 내용은 그대로입니다. ADMIN.md의 문제 해결 절을 참고하세요." },
-
-  // ── 补池失败归因（注册机板块才渲染；本期先把键写齐，好让门禁从第一天就是活的）────────
-  "reg.fail.domain_blocked_all": { "zh-CN": "所有域名都被上游拦下", "zh-TW": "所有網域都被上游擋下", en: "Every domain was blocked upstream", ja: "すべてのドメインが上流でブロックされました", ko: "모든 도메인이 업스트림에서 차단되었습니다" },
-  "reg.fail.upstream_error":     { "zh-CN": "上游返回错误", "zh-TW": "上游回傳錯誤", en: "Upstream returned an error", ja: "上流がエラーを返しました", ko: "업스트림이 오류를 반환했습니다" },
-  "reg.fail.code_timeout":       { "zh-CN": "等验证码超时", "zh-TW": "等驗證碼逾時", en: "Timed out waiting for the verification code", ja: "認証コードの待機がタイムアウトしました", ko: "인증 코드 대기 시간이 초과되었습니다" },
-  "reg.fail.register_failed":    { "zh-CN": "注册这一步失败", "zh-TW": "註冊這一步失敗", en: "Registration step failed", ja: "登録ステップが失敗しました", ko: "가입 단계가 실패했습니다" },
-  "reg.fail.login_failed":       { "zh-CN": "登录这一步失败", "zh-TW": "登入這一步失敗", en: "Login step failed", ja: "ログインステップが失敗しました", ko: "로그인 단계가 실패했습니다" },
-  "reg.fail.key_failed":         { "zh-CN": "取 key 这一步失败", "zh-TW": "取 key 這一步失敗", en: "Key issuance step failed", ja: "キー取得ステップが失敗しました", ko: "키 발급 단계가 실패했습니다" },
-  "reg.fail.provider_error":     { "zh-CN": "邮箱通道报错", "zh-TW": "郵箱通道報錯", en: "The mailbox channel returned an error", ja: "メールボックスチャネルがエラーを返しました", ko: "메일박스 채널이 오류를 반환했습니다" },
-  "reg.fail.network_error":      { "zh-CN": "网络错误", "zh-TW": "網路錯誤", en: "Network error", ja: "ネットワークエラー", ko: "네트워크 오류" },
-  "reg.fail.rate_limited":       { "zh-CN": "被上游限流", "zh-TW": "被上游限流", en: "Rate limited upstream", ja: "上流でレート制限されました", ko: "업스트림에서 속도 제한되었습니다" },
-  // 评审提出：整轮抛错。它不是一次铸 key 失败，是「这一轮根本没跑完」——
-  // 加它是为了让崩掉的那一轮在补池历史的时间线上**占一格**，而不是与
-  // 「注册机根本没跑」长得一模一样。
-  "reg.fail.round_crashed": { "zh-CN": "整轮补池抛错中断", "zh-TW": "整輪補池拋錯中斷", en: "The whole tend round threw and was aborted", ja: "補充ラウンド全体が例外で中断しました", ko: "보충 라운드 전체가 예외로 중단되었습니다" },
-  "reg.fail.provider_missing":   { "zh-CN": "这条通道没有配好凭据，未构造出提供方", "zh-TW": "這條通道沒有配好憑據，未建立提供方", en: "This channel has no credentials configured, so no provider was constructed", ja: "このチャネルは資格情報が未設定のため、プロバイダーが構築されませんでした", ko: "이 채널에 자격 증명이 없어 공급자가 생성되지 않았습니다" },
-  // ⚠️ 这一条**不是失败**——那一轮真的铸出来了（`minted` 照常 +1，
-  // 上游账号与临时邮箱都真的花掉了），只是发回来的 key 材料含不可打印字符或空白。
-  // 它照常存进池子（拒收 = 销毁凭据），但多半每次被选中都会让转发失败。
-  // 五种语言的措辞都必须说清「已存下来 + 请去处理它」，不许写成「铸失败了」。
-  // 「这一轮还在退避窗口里，一次都没开始」。**不是 `rate_limited` 的同义词**：
-  // 那一档说的是「真的去打了、被上游挡了」，这一档一次上游请求都没发出去，
-  // 两句话对运维的意思完全不同（去看上游 / 等窗口过去）。
-  "reg.fail.upstream_backoff": { "zh-CN": "还在退避窗口里，这一轮一次都没开始", "zh-TW": "還在退避視窗裡，這一輪一次都沒開始", en: "Still inside the backoff window; this round never started", ja: "バックオフ期間中のため、このラウンドは 1 回も開始していません", ko: "백오프 구간 안이라 이 라운드는 한 번도 시작하지 않았습니다" },
-  "reg.fail.key_suspicious": { "zh-CN": "铸出来的 key 材料可疑（已存入池子，请手动停用或删除）", "zh-TW": "鑄出來的 key 材料可疑（已存入池子，請手動停用或刪除）", en: "The minted key material looks malformed (stored in the pool anyway — disable or delete it)", ja: "発行されたキーの内容が不正に見えます（プールには保存済み — 無効化または削除してください）", ko: "발급된 키 내용이 손상된 것으로 보입니다(풀에는 저장되었으니 비활성화하거나 삭제하세요)" },
-
-  // ── 注册机板块 ────────────────────────────────────────────────────────────
-  //
-  // ⚠️⚠️ **整个 `reg.*` 命名空间受禁用词门禁管**（`scripts/check-i18n.mjs` 第 ⑥ 条 +
-  // `tests/unit/i18n-dict.test.ts` 那条同名断言，两份独立实现）：
-  // `推荐/推薦/建议/建議/默认/預设/預設/主流/首选/首選/优先/優先/recommended/
-  // preferred/default/おすすめ/推奨/권장/기본` 一个都不许出现，**繁体变体与
-  // 韩语的「기본」尤其容易误踩**（「기본 채널」= primary channel 的自然译法，
-  // 这里一律改成「주 채널」）。
-  //
-  // ⚠️⚠️ **设计 §10.3 第 5 条给的原句「本就不存在默认地址」自己就踩了第 4 条的
-  // 禁用词表**（「默认」在表里，繁体「預設」同样在表里）。两条设计规则互相打架，
-  // 本任务按第 4 条执行（它是 CI 门禁，第 5 条只能靠评审），语义原样保住、
-  // 换成「没有可以预填的地址」。判据与理由见
-  // `admin-ui/js/pure/registrar.mjs` 的 `channelAddressFactKey()`。
-  "reg.title":        { "zh-CN": "注册机", "zh-TW": "註冊機", en: "Registrar", ja: "レジストラー", ko: "등록기" },
-  // 板块顶部那条 TAB 的两页。**「设置」这一页装的是原来设置页上那张注册机卡**
-  // （见 `admin-ui/js/sec-settings.js` 的 `registrarConfigPanel`），设置页那边不再有第二份。
-  "reg.tab.status":   { "zh-CN": "运行状态", "zh-TW": "執行狀態", en: "Status", ja: "稼働状況", ko: "실행 상태" },
-  "reg.tab.settings": { "zh-CN": "设置", "zh-TW": "設定", en: "Settings", ja: "設定", ko: "설정" },
-  "reg.state":        { "zh-CN": "注册机", "zh-TW": "註冊機", en: "Registrar", ja: "レジストラー", ko: "등록기" },
-  "reg.state.on":     { "zh-CN": "已启用", "zh-TW": "已啟用", en: "Enabled", ja: "有効", ko: "사용 중" },
-  "reg.state.off":    { "zh-CN": "已关闭", "zh-TW": "已關閉", en: "Disabled", ja: "無効", ko: "꺼짐" },
-  "reg.state.blocked": { "zh-CN": "已启用 · 本次没跑起来", "zh-TW": "已啟用 · 本次沒跑起來", en: "Enabled \u00b7 not started this time", ja: "有効 \u00b7 今回は起動せず", ko: "사용 중 \u00b7 이번에는 시작 못 함" },
-  "reg.channel":      { "zh-CN": "使用的通道", "zh-TW": "使用的通道", en: "Channel in use", ja: "使用するチャネル", ko: "사용 중인 채널" },
-  "reg.none":         { "zh-CN": "未选择", "zh-TW": "未選擇", en: "Not selected", ja: "未選択", ko: "선택 안 됨" },
-  // 空状态说的是「二选一」，**不是**「未选择时使用 X」，也**不是**「请选择一条作为
-  // 主通道」——后者是主备降级时代的措辞，那套机制已经拆掉，别照旧改回去。
-  "reg.emptyChannel": { "zh-CN": "两条通道二选一：选中的那条负责收验证码，另一条填了也不会被用到，也不会自动切换。", "zh-TW": "兩條通道二選一：選中的那條負責收驗證碼，另一條填了也不會被用到，也不會自動切換。", en: "Pick one of the two channels: the selected one receives the verification codes, and the other is never used even if you fill it in — there is no automatic switching.", ja: "2 つのチャネルから 1 つを選びます。選んだほうが確認コードを受け取り、もう一方は入力しても使われません。自動で切り替わることもありません。", ko: "두 채널 중 하나를 고릅니다. 선택한 쪽이 인증 코드를 받고, 다른 쪽은 입력해도 사용되지 않으며 자동으로 전환되지도 않습니다." },
-
-  "reg.pool.target":  { "zh-CN": "目标 key 数", "zh-TW": "目標 key 數", en: "Target key count", ja: "目標 key 数", ko: "목표 key 수" },
-  // ⚠️ **这一格不叫「可用」，理由在 `src/core/registrar/tender.ts` 的 `available` 字段上**：
-  // 判据是 `countsTowardTarget`（`!evicted`），被停用的与正在冷却的 key **都算在里面**，
-  // 而这两种恰恰都不能打上游。旁边那格 `reg.pool.fresh` 才是真正的可用数。
-  "reg.pool.counted": { "zh-CN": "占名额", "zh-TW": "佔名額", en: "Counted toward target", ja: "枠を占有", ko: "정원 차지" },
-  "reg.pool.countedTip": { "zh-CN": "补池算缺口用的就是这个数：判据只有「没被剔除」，所以被停用的 key 与正在冷却的 key 都算在里面——它们都占着目标名额，但都不能打上游。", "zh-TW": "補池算缺口用的就是這個數：判據只有「沒被剔除」，所以被停用的 key 與正在冷卻的 key 都算在裡面——它們都佔著目標名額，但都不能打上游。", en: "This is the number the refill loop uses to compute the gap. The test is only \"not evicted\", so disabled keys and cooling keys are both counted here — they occupy a slot yet cannot serve traffic.", ja: "補充ラウンドが不足数を計算するのに使う値です。判定は「除外されていない」だけなので、無効化済みの key もクールダウン中の key もここに含まれます——どちらも枠を占有しますが、上流には使えません。", ko: "보충 라운드가 부족분을 계산할 때 쓰는 값입니다. 판정은 「제외되지 않음」뿐이라 정지된 key와 쿨다운 중인 key가 모두 포함됩니다 — 둘 다 정원을 차지하지만 업스트림에는 쓸 수 없습니다." },
-  "reg.pool.gap":     { "zh-CN": "缺口", "zh-TW": "缺口", en: "Gap", ja: "不足", ko: "부족분" },
-  "reg.pool.fresh":   { "zh-CN": "可用（能打上游）", "zh-TW": "可用（能打上游）", en: "Available (can serve traffic)", ja: "利用可能（上流に使える）", ko: "사용 가능(업스트림 가능)" },
-
-  "reg.channels.title": { "zh-CN": "邮箱通道", "zh-TW": "郵箱通道", en: "Mailbox channels", ja: "メールボックスチャネル", ko: "메일박스 채널" },
-  "reg.channel.moemail": { "zh-CN": "MoeMail", "zh-TW": "MoeMail", en: "MoeMail", ja: "MoeMail", ko: "MoeMail" },
-  "reg.channel.yyds":    { "zh-CN": "YYDS", "zh-TW": "YYDS", en: "YYDS", ja: "YYDS", ko: "YYDS" },
-  // 设计 §10.3 第 5 条：两条通道之间**唯一**的不对称，必须写成事实而不是偏好。
-  // 「YYDS 开箱即用」是偏好，不许写。
-  "reg.channel.addressFact.moemail": { "zh-CN": "自建服务：每个实例的地址都不一样，本就没有可以预填的地址，必须自己填。", "zh-TW": "自建服務：每個實例的位址都不一樣，本就沒有可以預先填入的位址，必須自己填。", en: "Self-hosted service: every instance lives at a different address, so there is no address to prefill — you provide it.", ja: "セルフホストのサービスです。インスタンスごとにアドレスが異なるため、あらかじめ入れておけるアドレスは存在しません。自分で指定してください。", ko: "직접 호스팅하는 서비스입니다. 인스턴스마다 주소가 달라 미리 채워 둘 주소가 존재하지 않으므로 직접 입력해야 합니다." },
-  "reg.channel.addressFact.yyds":    { "zh-CN": "地址固定的公共服务：内置了一个地址，也可以自己改。", "zh-TW": "位址固定的公共服務：內建了一個位址，也可以自己改。", en: "Public service at a fixed address: one address ships with the gateway, and you can still override it.", ja: "アドレスが固定された公開サービスです。アドレスが 1 つ同梱されており、上書きもできます。", ko: "주소가 고정된 공개 서비스입니다. 주소 하나가 내장되어 있으며 직접 바꿀 수도 있습니다." },
-  "reg.channel.inUseLabel": { "zh-CN": "本次使用", "zh-TW": "本次使用", en: "In use", ja: "使用状況", ko: "사용 여부" },
-  "reg.role.inUse":       { "zh-CN": "本次配置用的就是它", "zh-TW": "本次設定用的就是它", en: "This is the channel the current configuration uses", ja: "現在の設定で使われているのはこのチャネルです", ko: "현재 설정에서 사용하는 채널입니다" },
-  "reg.role.unused":      { "zh-CN": "本次配置没有使用它", "zh-TW": "本次設定沒有使用它", en: "The current configuration does not use it", ja: "現在の設定では使われていません", ko: "현재 설정에서는 사용되지 않습니다" },
-  "reg.channel.inUse":    { "zh-CN": "本次使用：注册机就用这一条收验证码。", "zh-TW": "本次使用：註冊機就用這一條收驗證碼。", en: "In use: this is the channel the registrar receives verification codes on.", ja: "使用中: レジストラーはこのチャネルで確認コードを受け取ります。", ko: "사용 중: 등록기가 이 채널로 인증 코드를 받습니다." },
-  "reg.channel.idle":     { "zh-CN": "未使用：填了也不会被用到，但可以先配好，随时切过来。", "zh-TW": "未使用：填了也不會被用到，但可以先配好，隨時切過來。", en: "Not in use: filling it in changes nothing right now, but you can set it up ahead of time and switch over whenever you want.", ja: "未使用: 入力しても今は使われませんが、先に設定しておけばいつでも切り替えられます。", ko: "사용 안 함: 입력해도 지금은 쓰이지 않지만, 미리 설정해 두면 언제든 전환할 수 있습니다." },
-  "reg.channel.creds":    { "zh-CN": "凭据", "zh-TW": "憑證", en: "Credentials", ja: "資格情報", ko: "자격 증명" },
-  "reg.channel.credsYes": { "zh-CN": "已配好", "zh-TW": "已配好", en: "Configured", ja: "設定済み", ko: "설정됨" },
-  "reg.channel.credsNo":  { "zh-CN": "未配置", "zh-TW": "未設定", en: "Not configured", ja: "未設定", ko: "설정 안 됨" },
-  // 设计 §10.3 第 6 条：用数据代替推荐——两个**等权**的按钮，返回可用域名数。
-  // 注册机设计定的口径：可用域名多寡是**选通道**时唯一值得看的指标，与是哪家服务无关。
-  // （从前这句写的是「选主通道」，主备已拆，用词跟着收。）
-  "reg.channel.test":     { "zh-CN": "测试连接", "zh-TW": "測試連線", en: "Test connection", ja: "接続テスト", ko: "연결 테스트" },
-  "reg.channel.testing":  { "zh-CN": "测试中…", "zh-TW": "測試中…", en: "Testing…", ja: "テスト中…", ko: "테스트 중…" },
-  // ⚠️⚠️ **这一族讲的都是「这一次，这两步发生了什么」，不是「这条通道永远行不行」。**
-  // 一句按通道写死的话都没有：结论强度做成静态表，上游改一次版它就腐烂成假话，
-  // 而没有任何门禁看得见它腐烂（全文在 `src/http/wire.ts` 的 `probeChannel` 上方）。
-  //
-  // 🔴🔴 **上一版这颗按钮压根不验凭据，靠 `testOk` 里一句「没有验证凭据」兜着。**
-  // 那条处置被推翻了：**绿灯配小字，人读的还是颜色**——运维看到绿灯就排除了凭据方向，
-  // 回头在补池建邮箱那一步被 403。今天这颗按钮**真的验一次凭据**
-  //（`src/ports/mailbox.ts` 的 `MailProvider.verifyCredentials`，怎么验由通道自己决定），
-  // 于是这一族按「验没验 / 验的结果」分档：
-  // · `testOk`            —— 验过了，上游接受了，没有残留；
-  // · `testOkDirty`       —— 验过了，但验凭据时建出来的东西没删掉（必须说出去）；
-  // · `testOkUnverified`  —— 后端没给凭据结论 ⇒ **一律按「没验」说**，不许猜（见下）；
-  // · `testOkNoDomains`   —— 一个域名都没读到 ⇒ 验凭据那一步无从下手，同样没验。
-  //
-  // 🔴 **后两条里「没有验证凭据」那半句是承重的，别顺手删掉、也别顺手「优化」措辞。**
-  // 少了它，一句「不知道」就会被读成「没问题」。五语言各一根毒刺钉在
-  // `tests/unit/i18n-dict.test.ts`「没验凭据那两档，五语言都自己说清它没验」，
-  // 两条 key 同时进了 `scripts/lib/unverified-claims.mjs` 的 `UNVERIFIED_KEYS`
-  //（软化词当场双红）。**`testOk` 本轮从那张白名单里换了下来**：它今天描述的
-  // 是一件**真的量过**的事，不再是「未核实的事」——记账注释写在那张表上。
-  "reg.channel.testOk":     { "zh-CN": "读到可用域名 {domains} 个 · {latencyMs} ms。凭据也验过了：这一次真的拿它向上游要了一次东西，上游接受了；没有留下残留。", "zh-TW": "讀到可用網域 {domains} 個 · {latencyMs} ms。憑證也驗過了：這一次真的拿它向上游要了一次東西，上游接受了；沒有留下殘留。", en: "Read {domains} usable domain(s) · {latencyMs} ms. The credentials were verified too: this run really used them to ask the upstream for something and the upstream accepted; nothing was left behind.", ja: "利用可能なドメインを {domains} 件読み取りました · {latencyMs} ms。認証情報も検証済みです: 今回は実際にそれを使って上流に要求を出し、上流が受け入れました。残留物はありません。", ko: "사용 가능한 도메인 {domains}개를 읽었습니다 · {latencyMs} ms. 자격 증명도 검증했습니다: 이번에 실제로 그것으로 업스트림에 요청을 보냈고 업스트림이 받아들였습니다. 남은 것은 없습니다." },
-  // 🔴 **「建出来了但删不掉」必须自己说出去，不许静默。** 那个临时邮箱会占着这条通道的
-  // 活跃邮箱名额，而名额是补池能不能继续工作的前提；静默的残留只会在几天后以
-  // 「补池突然全失败」的形态炸出来，而那时没人会想到是这颗按钮留下的。
-  // 判据：`tests/ui/registrar.test.ts`「验凭据建出来的东西删不掉时如实说，不静默」
-  // ——它从假上游一路走到运维眼里那句话（缺陷只存在于后端与面板两层之间）。
-  "reg.channel.testOkDirty": { "zh-CN": "读到可用域名 {domains} 个 · {latencyMs} ms。凭据验过了，上游接受了它。但验凭据时建出来的那个临时邮箱没能删掉：它会占着这条通道的活跃邮箱名额，直到上游自己回收。详情在事件板块里，事件名 registrar.delete_mailbox_failed。", "zh-TW": "讀到可用網域 {domains} 個 · {latencyMs} ms。憑證驗過了，上游接受了它。但驗憑證時建出來的那個臨時信箱沒能刪掉：它會佔著這條通道的活躍信箱名額，直到上游自己回收。詳情在事件板塊裡，事件名 registrar.delete_mailbox_failed。", en: "Read {domains} usable domain(s) · {latencyMs} ms. The credentials were verified and the upstream accepted them. But the temporary mailbox created while verifying could not be deleted: it will hold one of this channel's active-mailbox slots until the upstream reclaims it. The details are in the Events section under registrar.delete_mailbox_failed.", ja: "利用可能なドメインを {domains} 件読み取りました · {latencyMs} ms。認証情報は検証され、上流に受け入れられました。ただし検証のために作成した一時メールボックスを削除できませんでした: 上流が自動回収するまで、このチャネルのアクティブメールボックス枠を 1 つ占有し続けます。詳細はイベントセクションの registrar.delete_mailbox_failed を参照してください。", ko: "사용 가능한 도메인 {domains}개를 읽었습니다 · {latencyMs} ms. 자격 증명은 검증되었고 업스트림이 받아들였습니다. 다만 검증하려고 만든 임시 메일박스를 삭제하지 못했습니다: 업스트림이 스스로 회수할 때까지 이 채널의 활성 메일박스 정원 하나를 계속 차지합니다. 자세한 내용은 이벤트 섹션의 registrar.delete_mailbox_failed에 있습니다." },
-  // ⚠️⚠️ **后端没给凭据结论时走这一条，措辞按「没验」说 —— 不许按「验过了」说。**
-  // 这一档今天在真装配上走不到（后端两个字段都是无条件带的），它守的是
-  // **面板与后端版本对不上**那一刻：少一个字段时，默认渲染必然是好的那一档，
-  // 而那正好把「不知道」静默地报成「验过了」。口径与 `channelTestResult` 里
-  // 「表外的 reason 一律退回通用那条、不猜」逐字同源。
-  "reg.channel.testOkUnverified": { "zh-CN": "读到可用域名 {domains} 个 · {latencyMs} ms。但这一次没有验证凭据 —— 后端没有给出凭据结论，所以这条绿灯只说明域名列得出来。", "zh-TW": "讀到可用網域 {domains} 個 · {latencyMs} ms。但這一次沒有驗證憑證 —— 後端沒有給出憑證結論，所以這條綠燈只說明網域列得出來。", en: "Read {domains} usable domain(s) · {latencyMs} ms. But this run did not verify the credentials — the backend returned no verdict on them, so this green light only says the domain list could be read.", ja: "利用可能なドメインを {domains} 件読み取りました · {latencyMs} ms。ただし今回は認証情報は検証していません —— バックエンドが認証情報についての結論を返さなかったため、この緑はドメイン一覧が読めたことしか意味しません。", ko: "사용 가능한 도메인 {domains}개를 읽었습니다 · {latencyMs} ms. 다만 이번에는 자격 증명은 검증하지 않았습니다 — 백엔드가 자격 증명에 대한 결론을 주지 않았으므로, 이 초록불은 도메인 목록을 읽을 수 있었다는 것만 말합니다." },
-  // 「一个都没读到」与「读不到几个」是两回事，只有前者走这条：补池那一步没有域名可用
-  // 会直接失败 ⇒ 它是一句确定的结论，不是「不知道」。判据是 `tests/ui/registrar.test.ts`
-  // 「domains 恰好是 0 与 domains 读不到，选的是两句不同的话」那一格。
-  "reg.channel.testOkNoDomains": { "zh-CN": "一个可用域名都没读到（{latencyMs} ms）。这条通道现在补不了池 —— 补池那一步没有域名可用就会直接失败。这一次也没有验证凭据 —— 这是我们的取法：读不到域名就不往下走了。有的通道验凭据本来就用不到域名（重打一次它自己会校验的读端点即可），所以这一档不是「验不了」，是「没去验」。", "zh-TW": "一個可用網域都沒讀到（{latencyMs} ms）。這條通道現在補不了池 —— 補池那一步沒有網域可用就會直接失敗。這一次也沒有驗證憑證 —— 這是我們的取法：讀不到網域就不往下走了。有的通道驗憑證本來就用不到網域（重打一次它自己會校驗的讀端點即可），所以這一檔不是「驗不了」，是「沒去驗」。", en: "Read zero usable domains ({latencyMs} ms). This channel cannot refill the pool right now — the refill step fails outright when no domain is available. The credentials were not verified either, and that is our choice: we stop once no domain came back. Some channels do not need a domain to verify at all, so this tier means \"did not check\", not \"could not check\". This run also did not verify the credentials: that step needs one usable domain to work with.", ja: "利用可能なドメインを 1 件も読み取れませんでした（{latencyMs} ms）。このチャネルは今プールを補充できません —— 補充の手順は使えるドメインが無いとそのまま失敗します。今回も認証情報は検証していません —— これは当方の取り決めで、ドメインが読めなければ先へ進みません。チャネルによっては検証にドメインを使いません（自分で認証を確認する読み取りエンドポイントをもう一度叩くだけ）。つまり「検証できない」のではなく「検証していない」です。", ko: "사용 가능한 도메인을 하나도 읽지 못했습니다({latencyMs} ms). 이 채널은 지금 풀을 보충할 수 없습니다 — 보충 단계는 쓸 수 있는 도메인이 없으면 그대로 실패합니다. 이번에도 자격 증명은 검증하지 않았습니다 — 이는 우리 쪽 방침으로, 도메인을 읽지 못하면 더 진행하지 않습니다. 채널에 따라서는 검증에 도메인이 필요 없습니다(스스로 인증을 확인하는 읽기 엔드포인트를 한 번 더 치면 됩니다). 즉 «검증할 수 없음»이 아니라 «검증하지 않음»입니다." },
-  // 401 与 403 合成一档：403 也可能是「凭据有效但没这个权限」「活跃邮箱名额用光」
-  // 「出口地址被拒」。要分开只能去解析上游的 errorCode 字符串，而那是
-  // `src/core/config-provenance.ts` 明令禁止的手写关键词表 ⇒ 措辞只说「被拒的是权限那一层」，
-  // 再给一个排查顺序，**不写死「你的 key 错了」**。
-  "reg.channel.testRejected": { "zh-CN": "上游拒绝了这次请求（HTTP {status}）。地址是通的，被拒的是权限那一层：先核对这条通道的凭据，再看这把凭据有没有权限。详情在事件板块里，事件名 registrar.channel_test_failed。", "zh-TW": "上游拒絕了這次請求（HTTP {status}）。位址是通的，被拒的是權限那一層：先核對這條通道的憑證，再看這把憑證有沒有權限。詳情在事件板塊裡，事件名 registrar.channel_test_failed。", en: "The upstream rejected this request (HTTP {status}). The address is reachable; what was rejected is the permission layer: first check this channel's credentials, then check whether they carry the permission needed. The details are in the Events section under registrar.channel_test_failed.", ja: "上流がこのリクエストを拒否しました（HTTP {status}）。アドレスには到達しています。拒否されたのは権限の層です: まずこのチャネルの認証情報を確認し、次にその認証情報に権限があるかを確認してください。詳細はイベントセクションの registrar.channel_test_failed を参照してください。", ko: "업스트림이 이번 요청을 거부했습니다(HTTP {status}). 주소에는 도달했고 거부된 것은 권한 계층입니다: 먼저 이 채널의 자격 증명을 확인하고, 그다음 그 자격 증명에 권한이 있는지 확인하세요. 자세한 내용은 이벤트 섹션의 registrar.channel_test_failed에 있습니다." },
-  // 限流那一档**什么都没测出来**，所以它既不许说通、也不许说不通 —— 凭据是好是坏同样没有结论。
-  "reg.channel.testRateLimited": { "zh-CN": "上游在限流（HTTP 429）。这一次什么都没测出来，凭据是好是坏同样没有结论，隔一会儿再试。", "zh-TW": "上游在限流（HTTP 429）。這一次什麼都沒測出來，憑證是好是壞同樣沒有結論，隔一會兒再試。", en: "The upstream is rate-limiting (HTTP 429). This attempt measured nothing at all, and it says nothing about whether the credentials work either. Try again in a while.", ja: "上流がレート制限をかけています（HTTP 429）。今回は何も測れておらず、認証情報が使えるかどうかについても結論はありません。しばらくしてからやり直してください。", ko: "업스트림이 요청 수를 제한하고 있습니다(HTTP 429). 이번에는 아무것도 측정하지 못했고, 자격 증명이 쓸 만한지에 대해서도 결론이 없습니다. 잠시 뒤에 다시 시도하세요." },
-  // ⚠️ 上一版这一条逐字写着「没有连上」，而上游回 401 时**我们明明连上了** —— 那句话
-  // 会把运维支去查 DNS 与地址，方向正好反了。现在它只在「上游回了话、但这一次没读到域名」
-  // 那一档出现，状态码原样摆出来。
-  "reg.channel.testFailed": { "zh-CN": "上游回了 HTTP {status}（{latencyMs} ms）—— 连上了，但这一次没测成（列域名与验凭据这两步里有一步失败了）。详细原因在事件板块里，事件名 registrar.channel_test_failed。", "zh-TW": "上游回了 HTTP {status}（{latencyMs} ms）—— 連上了，但這一次沒測成（列網域與驗憑證這兩步裡有一步失敗了）。詳細原因在事件板塊裡，事件名 registrar.channel_test_failed。", en: "The upstream answered HTTP {status} ({latencyMs} ms) — it was reached, but this run did not complete (one of the two steps, listing domains and verifying the credentials, failed). The details are in the Events section under registrar.channel_test_failed.", ja: "上流が HTTP {status} を返しました（{latencyMs} ms）—— 到達はしましたが、今回は測り切れませんでした（ドメイン一覧と認証情報の検証という 2 つの手順のいずれかが失敗しました）。詳細はイベントセクションの registrar.channel_test_failed を参照してください。", ko: "업스트림이 HTTP {status}를 반환했습니다({latencyMs} ms) — 도달은 했지만 이번에는 끝까지 측정하지 못했습니다(도메인 목록과 자격 증명 검증이라는 두 단계 중 하나가 실패했습니다). 자세한 내용은 이벤트 섹션의 registrar.channel_test_failed에 있습니다." },
-  // 后端在这一档**不带状态码、也不伪造一个**（`src/core/registrar/url.ts` 的 `httpFail`
-  // 那段），所以这里是独立的一句话：排查方向与上一条正好相反。
-  //
-  // ⚠️⚠️ **这一档的判据是「没拿到状态码」，不是「请求没发出去」，措辞不许把它说成后者。**
-  // 上一版逐字写着「这次请求没发出去或者没走通：地址、DNS、TLS、出网、超时都在这一档里」
-  // —— 那是一句**排他式**的枚举，而它有一支为假：两个邮箱适配器的 `listDomains` 在 2xx
-  // 之后直接 `await r.json()`（`src/adapters/mailbox-yyds.ts` / `mailbox-moemail.ts`），
-  // 上游回 **200 + 非 JSON 正文**（反向代理/CDN 错误页、正文截断、读正文时中止）时抛的是
-  // 裸 `SyntaxError`，身上没有 `status` ⇒ `httpFailStatus()` 给 `null` ⇒ 落到这一档。
-  // 那一次请求**发出去了、上游答了 200**，DNS/TLS/出网/超时全都正常，而那句话把这五样
-  // 列成了穷尽的候选，会把运维支去查 DNS 与地址 —— 与 `testFailed` 上一版那句「没有连上」
-  // 是同一个形态，只是换了触发条件。
-  // ⇒ **不做穷尽承诺**：先说这一次确定的事实（没读到域名列表、没拿到状态码），
-  // 再把两支都摆出来。判据是 `tests/ui/registrar.test.ts`
-  // 「缺陷复现：列域名端点回 200，正文却读不出来」那一格（真装配，从假上游走到运维眼里那句话），
-  // 五语言各一根毒刺在 `tests/unit/i18n-dict.test.ts`
-  // 「没拿到状态码那一档，五语言都留着上游答了话、正文读不出来那一支」。
-  "reg.channel.testFailedNoStatus": { "zh-CN": "这一次没从上游读到结果（{latencyMs} ms），而且没拿到状态码：可能是请求没走通（地址、DNS、TLS、出网、超时），也可能是上游回了话、正文读不出来。事件里那条失败信息带着它实际请求的那个地址，事件名 registrar.channel_test_failed。", "zh-TW": "這一次沒從上游讀到結果（{latencyMs} ms），而且沒拿到狀態碼：可能是請求沒走通（位址、DNS、TLS、出網、逾時），也可能是上游回了話、正文讀不出來。事件裡那條失敗訊息帶著它實際請求的那個位址，事件名 registrar.channel_test_failed。", en: "Nothing came back from the upstream this time ({latencyMs} ms), and no status code either: the request may never have got through (address, DNS, TLS, egress, timeouts), or the upstream may have answered and its body could not be read. The failure entry in Events carries the address it actually requested, under registrar.channel_test_failed.", ja: "今回は上流から結果を読み取れず、ステータスコードも返ってきませんでした（{latencyMs} ms）: リクエストが最後まで届かなかった（アドレス、DNS、TLS、外向き通信、タイムアウト）可能性もあれば、上流は応答したが本文を読み取れなかった可能性もあります。イベントに残る失敗メッセージには実際にリクエストしたアドレスが含まれます（registrar.channel_test_failed）。", ko: "이번에는 업스트림에서 결과를 읽지 못했고 상태 코드도 받지 못했습니다({latencyMs} ms): 요청이 끝까지 도달하지 못했을 수도 있고(주소, DNS, TLS, 아웃바운드, 타임아웃), 업스트림이 응답했지만 본문을 읽지 못한 것일 수도 있습니다. 이벤트에 남는 실패 메시지에는 실제로 요청한 주소가 함께 들어갑니다(registrar.channel_test_failed)." },
-  // 🔴🔴 **「一次上游请求都没发出去」自成一档，不许并进上面那条。**
-  // 上一版没有这一档：`buildTendDeps` 那次配置读（存储/KV）抛错时，它被记成
-  // `upstream_error` ——**而上游被调 0 次**（本轮实测：真装配 + KV `get` 抛错 ⇒
-  // 上游 0 次、body 是 `{"ok":false,"reason":"upstream_error"}`）。
-  // 那句话会把运维支去查地址、DNS 与上游，而要查的是存储，方向正好反了。
-  "reg.channel.testNotAttempted": { "zh-CN": "这一次一个上游请求都没发出去（{latencyMs} ms）：本网关连自己的配置都没读出来（存储 / KV 那一侧出了问题）。要查的是存储，不是地址、DNS 与上游。详细原因在事件板块里，事件名 registrar.channel_test_failed。", "zh-TW": "這一次一個上游請求都沒發出去（{latencyMs} ms）：本網關連自己的設定都沒讀出來（儲存 / KV 那一側出了問題）。要查的是儲存，不是位址、DNS 與上游。詳細原因在事件板塊裡，事件名 registrar.channel_test_failed。", en: "Not a single upstream request went out this time ({latencyMs} ms): the gateway could not even read its own configuration (something is wrong on the storage / KV side). What to check is storage, not the address, DNS or the upstream. The details are in the Events section under registrar.channel_test_failed.", ja: "今回は上流へのリクエストが 1 件も出ていません（{latencyMs} ms）: このゲートウェイが自分の設定すら読み取れませんでした（ストレージ / KV 側の問題です）。確認すべきはストレージであり、アドレス・DNS・上流ではありません。詳細はイベントセクションの registrar.channel_test_failed を参照してください。", ko: "이번에는 업스트림 요청이 한 건도 나가지 않았습니다({latencyMs} ms): 게이트웨이가 자기 설정조차 읽지 못했습니다(스토리지 / KV 쪽 문제입니다). 확인할 곳은 스토리지이며, 주소·DNS·업스트림이 아닙니다. 자세한 내용은 이벤트 섹션의 registrar.channel_test_failed에 있습니다." },
-  "reg.channel.testError":  { "zh-CN": "测试请求本身失败了，没有测到这条通道", "zh-TW": "測試請求本身失敗了，沒有測到這條通道", en: "The test request itself failed, so this channel was never reached", ja: "テストのリクエスト自体が失敗したため、このチャネルには到達していません", ko: "테스트 요청 자체가 실패해 이 채널에는 도달하지 못했습니다" },
-  "reg.channel.testHint":   { "zh-CN": "测试会读一次这条通道的可用域名列表；只要读到了域名，就再真的验一次凭据。验凭据的方式由通道自己决定：有的通道要先建一个临时邮箱、验完就删掉，那种通道上每点一次会占用一个活跃邮箱名额。测不通时，只要请求真的打出去了，事件里那条失败信息就会带上它实际请求的那个地址。", "zh-TW": "測試會讀一次這條通道的可用網域清單；只要讀到了網域，就再真的驗一次憑證。驗憑證的方式由通道自己決定：有的通道要先建一個臨時信箱、驗完就刪掉，那種通道上每點一次會佔用一個活躍信箱名額。測不通時，只要請求真的打出去了，事件裡那條失敗訊息就會帶上它實際請求的那個位址。", en: "The test reads this channel's list of usable domains once; if any domain came back, it then really verifies the credentials. How they are verified is up to the channel itself: some channels create a temporary mailbox and delete it right after, and on those every click takes one active-mailbox slot. When it fails, as long as the request actually went out, the failure entry in Events carries the address it actually requested.", ja: "テストはこのチャネルの利用可能ドメイン一覧を一度読み、ドメインが取得できた場合にかぎり実際に認証情報を検証します。検証の方法はチャネル自身が決めます: 一時メールボックスを作ってすぐ削除するチャネルもあり、その場合はクリックごとにアクティブメールボックス枠を 1 つ使います。失敗した場合、リクエストが実際に送信されていれば、イベントに残る失敗メッセージには実際にリクエストしたアドレスが含まれます。", ko: "테스트는 이 채널의 사용 가능한 도메인 목록을 한 번 읽고, 도메인을 받아 온 경우에만 실제로 자격 증명을 검증합니다. 검증 방식은 채널이 스스로 정합니다: 임시 메일박스를 만들었다가 바로 지우는 채널도 있으며, 그런 채널에서는 누를 때마다 활성 메일박스 정원 하나를 씁니다. 실패했을 때, 요청이 실제로 나갔다면 이벤트에 남는 실패 메시지에 실제로 요청한 주소가 함께 들어갑니다." },
-
-  "reg.tend.button":       { "zh-CN": "立即补池", "zh-TW": "立即補池", en: "Refill now", ja: "今すぐ補充", ko: "지금 보충" },
-  "reg.tend.confirmTitle": { "zh-CN": "确认立即补池", "zh-TW": "確認立即補池", en: "Confirm refill", ja: "補充の確認", ko: "보충 확인" },
-  // 设计 §10.2 第 3 条护栏：确认弹窗必须明示消耗。
-  // ⚠️ **两个外部服务的活跃邮箱上限一律不写数字**：一个与账号档位绑定、一个是可被
-  // 实例覆盖的上游默认值，把当前取值印在面板上，运维会当成自己这套部署的事实。
-  // 完整理由见 `src/http/admin/handlers/registrar.ts` 的文件头。
-  "reg.tend.confirmMsg":   { "zh-CN": "本次最多铸 {keys} 把 key，将消耗最多 {mailboxes} 个临时邮箱。两条通道各自的活跃邮箱上限请查各自服务商的文档。", "zh-TW": "本次最多鑄 {keys} 把 key，將消耗最多 {mailboxes} 個臨時郵箱。兩條通道各自的活躍郵箱上限請查各自服務商的文件。", en: "This run mints at most {keys} key(s) and consumes at most {mailboxes} temporary mailbox(es). For each channel's active-mailbox limit, check that provider's own documentation.", ja: "今回発行する key は最大 {keys} 件、消費する一時メールボックスは最大 {mailboxes} 件です。各チャネルのアクティブなメールボックス上限は、それぞれの提供元のドキュメントを確認してください。", ko: "이번 실행에서 최대 {keys}개의 key를 발급하고 최대 {mailboxes}개의 임시 메일박스를 사용합니다. 각 채널의 활성 메일박스 상한은 해당 제공자의 문서를 확인하세요." },
-  "reg.tend.confirmWait":  { "zh-CN": "这颗按钮会等这一轮真的跑完再给结果，最长约两分钟，期间别关这个标签页。", "zh-TW": "這顆按鈕會等這一輪真的跑完再給結果，最長約兩分鐘，期間別關這個分頁。", en: "This button waits for the round to actually finish before reporting, up to about two minutes — keep this tab open.", ja: "このボタンはラウンドが実際に完了するまで待ってから結果を返します（最長約 2 分）。その間はこのタブを閉じないでください。", ko: "이 버튼은 라운드가 실제로 끝날 때까지 기다린 뒤 결과를 알려 줍니다(최대 약 2분). 그동안 이 탭을 닫지 마세요." },
-  "reg.tend.confirmUnknown": { "zh-CN": "读不到当前的缺口与单轮上限，这次会铸几把 key 说不准。请先刷新，确认状态之后再点。", "zh-TW": "讀不到目前的缺口與單輪上限，這次會鑄幾把 key 說不準。請先重新整理，確認狀態之後再點。", en: "The current gap and per-round ceiling could not be read, so how many keys this run mints is unknown. Refresh first and confirm the state before proceeding.", ja: "現在の不足数と 1 ラウンドの上限が読み取れないため、今回いくつ key を発行するかは不明です。まず更新して状態を確認してから実行してください。", ko: "현재 부족분과 라운드당 상한을 읽지 못해 이번에 key를 몇 개 발급할지 알 수 없습니다. 먼저 새로고침해 상태를 확인한 뒤 진행하세요." },
-  // 通道下拉：**初始为占位符，两条通道都不预选**（设计 §10.3 第 1 条同一条纪律）。
-  "reg.tend.channelLabel": { "zh-CN": "用哪条通道", "zh-TW": "用哪條通道", en: "Which channel", ja: "使用するチャネル", ko: "사용할 채널" },
-  "reg.tend.channelAny":   { "zh-CN": "按设置里选中的那条", "zh-TW": "按設定裡選中的那條", en: "Use the channel from settings", ja: "設定で選んでいるチャネルを使う", ko: "설정에서 선택한 채널을 사용" },
-  // ── 掩码 / 显示明文 / 复制（Key 池与 API 密钥共用）──────────────────
-  // ⚠️ `reveal.unavailable` 与 `reveal.failed` **刻意是两句话**：前者是「这把密钥
-  // 签发在明文落盘之前，服务端从来就没有过它的明文」——一个永远不会变的事实，
-  // 处置是重发一把；后者是「这一次没拿到」，重试可能就好了。并成一句会让人
-  // 对着一把永远取不回的密钥反复点。
-  "reveal.show":           { "zh-CN": "显示", "zh-TW": "顯示", en: "Reveal", ja: "表示", ko: "표시" },
-  "reveal.hide":           { "zh-CN": "隐藏", "zh-TW": "隱藏", en: "Hide", ja: "隠す", ko: "숨기기" },
-  "reveal.unavailable":    { "zh-CN": "这把密钥签发在明文落盘之前，服务端没有它的明文，取不回来。要拿到明文只能重发一把。", "zh-TW": "這把密鑰簽發在明文落盤之前，伺服端沒有它的明文，取不回來。要拿到明文只能重發一把。", en: "This key was issued before plaintext was stored, so the server never had it — reveal is impossible. Issue a new key if you need the plaintext.", ja: "このキーは平文を保存する前に発行されたため、サーバー側に平文が存在せず取り出せません。平文が必要な場合は発行し直してください。", ko: "이 키는 평문을 저장하기 전에 발급되어 서버에 평문이 없으므로 가져올 수 없습니다. 평문이 필요하면 새로 발급하세요." },
-  "reveal.failed":         { "zh-CN": "这一次没取到明文，请稍后再试。", "zh-TW": "這一次沒取到明文，請稍後再試。", en: "Could not fetch the plaintext this time — try again.", ja: "今回は平文を取得できませんでした。しばらくしてからもう一度お試しください。", ko: "이번에는 평문을 가져오지 못했습니다. 잠시 후 다시 시도하세요." },
-  // ⚠️ `reveal.gone` 与上面那句同样**刻意是两句话**：这两张表都是轮询刷新的，一条记录
-  // 在另一个标签页被删掉之后屏幕上那一行还在，点下去必是 404。它的处置是「刷新列表」，
-  // 而 `reveal.failed` 的处置是「等一会儿再点」——并成一句会让人对着一条已经不存在的
-  // 记录反复点。分档在 `js/pure/reveal.mjs` 的 `revealErrorOutcome()`。
-  "reveal.gone":           { "zh-CN": "这一条已经不在了：服务端说没有这条记录，多半是它在别处被删掉了。刷新一下列表再看。", "zh-TW": "這一條已經不在了：伺服端說沒有這條記錄，多半是它在別處被刪掉了。重新整理一下清單再看。", en: "This entry is gone: the server says there is no such record — most likely it was deleted elsewhere. Refresh the list.", ja: "この項目はもうありません: サーバーはそのレコードが存在しないと応答しました。別の場所で削除された可能性が高いので、一覧を再読み込みしてください。", ko: "이 항목은 이미 없습니다: 서버에 해당 레코드가 없다고 합니다. 다른 곳에서 삭제되었을 가능성이 큽니다. 목록을 새로고침하세요." },
-  "reg.tend.done":         { "zh-CN": "这一轮跑完了：铸出 {minted} 把，尝试 {attempted} 次。明细见下面的补池历史。", "zh-TW": "這一輪跑完了：鑄出 {minted} 把，嘗試 {attempted} 次。明細見下面的補池歷史。", en: "This round finished: {minted} minted out of {attempted} attempts. Details are in the refill history below.", ja: "このラウンドが完了しました：{attempted} 回の試行で {minted} 本を発行しました。詳細は下の補充履歴にあります。", ko: "이번 라운드가 끝났습니다: {attempted}회 시도 중 {minted}개를 발급했습니다. 자세한 내용은 아래 보충 기록에 있습니다." },
-  "reg.tend.noRun":        { "zh-CN": "这一轮一次尝试都没开始，本网关一次上游请求都没发出去：{reason}。这次点击的冷却与当天名额照样扣掉了。", "zh-TW": "這一輪一次嘗試都沒開始，本閘道一次上游請求都沒發出去：{reason}。這次點擊的冷卻與當天名額照樣扣掉了。", en: "This round never started a single attempt — the gateway sent no upstream request at all: {reason}. The cooldown and today's allowance were still spent.", ja: "このラウンドは試行を 1 回も開始していません。上流へのリクエストは 1 本も送っていません：{reason}。クールダウンと本日の回数はそれでも消費されました。", ko: "이 라운드는 시도를 한 번도 시작하지 않았고 업스트림 요청도 전혀 보내지 않았습니다: {reason}. 쿨다운과 오늘 사용 횟수는 그대로 소모되었습니다." },
-  "reg.tend.skipped":      { "zh-CN": "这一轮一次上游请求都没发出去：注册机的配置在点击之后被改掉了。请到设置里核对再点。", "zh-TW": "這一輪一次上游請求都沒發出去：註冊機的設定在點擊之後被改掉了。請到設定裡核對再點。", en: "This round sent no upstream request at all: the registrar config changed after you clicked. Check the settings and try again.", ja: "このラウンドは上流へのリクエストを 1 回も送っていません：クリック後に登録機の設定が変更されました。設定を確認してからもう一度お試しください。", ko: "이번 라운드는 업스트림 요청을 한 번도 보내지 않았습니다: 클릭한 뒤 등록기 설정이 바뀌었습니다. 설정을 확인한 뒤 다시 시도하세요." },
-  "reg.tend.crashed":      { "zh-CN": "这一轮中途抛错了。上游那边可能已经建出临时邮箱，请到事件板块看归因。", "zh-TW": "這一輪中途拋錯了。上游那邊可能已經建出臨時信箱，請到事件板塊看歸因。", en: "This round threw partway through. A temporary mailbox may already exist upstream — check the events section for the cause.", ja: "このラウンドは途中で例外が発生しました。上流に一時メールボックスが残っている可能性があります。原因はイベント画面で確認してください。", ko: "이번 라운드는 도중에 예외가 발생했습니다. 업스트림에 임시 메일함이 남아 있을 수 있으니 이벤트 화면에서 원인을 확인하세요." },
-  "reg.tend.unknownOutcome": { "zh-CN": "后端给出了这一版面板不认识的一种结局，请核对两边的版本。", "zh-TW": "後端給出了這一版面板不認識的一種結局，請核對兩邊的版本。", en: "The backend reported an outcome this panel build does not recognise — check that both sides are on the same version.", ja: "この画面のビルドが認識できない結果がバックエンドから返りました。両者のバージョンを確認してください。", ko: "이 콘솔 빌드가 알지 못하는 결과가 백엔드에서 반환되었습니다. 양쪽 버전을 확인하세요." },
-  "reg.tend.unknownResult": { "zh-CN": "连接断了，这一轮的结果未知——它可能仍在跑。别急着重点，先看下面的补池历史。", "zh-TW": "連線斷了，這一輪的結果未知——它可能仍在跑。別急著重點，先看下面的補池歷史。", en: "The connection dropped, so this round's result is unknown — it may still be running. Check the refill history below before clicking again.", ja: "接続が切れたため、このラウンドの結果は不明です——まだ実行中の可能性があります。もう一度押す前に下の補充履歴を確認してください。", ko: "연결이 끊겨 이번 라운드의 결과를 알 수 없습니다 — 아직 실행 중일 수 있습니다. 다시 누르기 전에 아래 보충 기록을 확인하세요." },
-  "reg.tend.failed":       { "zh-CN": "这次补池没有发起成功", "zh-TW": "這次補池沒有發起成功", en: "This refill was not started", ja: "今回の補充は開始できませんでした", ko: "이번 보충을 시작하지 못했습니다" },
-  // 「今天还剩几次」**在点之前就要显示**，不是等到点不动了才说。
-  "reg.tend.quota":        { "zh-CN": "今天还可以点 {remaining} 次（每天上限 {perDay} 次）", "zh-TW": "今天還可以點 {remaining} 次（每天上限 {perDay} 次）", en: "{remaining} more click(s) available today (daily cap {perDay})", ja: "本日はあと {remaining} 回押せます（1 日の上限 {perDay} 回）", ko: "오늘 {remaining}번 더 누를 수 있습니다(하루 상한 {perDay}회)" },
-  "reg.tend.quotaReset":   { "zh-CN": "，{at} 重置", "zh-TW": "，{at} 重置", en: ", resets at {at}", ja: "、{at} にリセット", ko: ", {at}에 초기화" },
-  // ⚠️ **绝对时刻与相对时长成对给**：相对量做倒计时（免疫客户端时钟偏差），
-  // 绝对时刻显示「几点恢复」。绝不让面板拿本地时钟去减一个服务端时刻。
-  "reg.tend.cooldown":     { "zh-CN": "冷却中：{at} 之后可以再点（还有 {left}）", "zh-TW": "冷卻中：{at} 之後可以再點（還有 {left}）", en: "Cooling down: available again at {at} (in {left})", ja: "クールダウン中: {at} 以降に再度実行できます（あと {left}）", ko: "쿨다운 중: {at} 이후 다시 누를 수 있습니다(남은 시간 {left})" },
-  "reg.locked":            { "zh-CN": "有一轮补池正在跑，持锁方声明最晚 {at} 结束", "zh-TW": "有一輪補池正在跑，持鎖方聲明最晚 {at} 結束", en: "A refill round is running; the lock holder declares it ends by {at} at the latest", ja: "補充ラウンドが実行中です。ロック保持側は遅くとも {at} には終わると宣言しています", ko: "보충 라운드가 실행 중입니다. 잠금 보유자는 늦어도 {at}에는 끝난다고 선언했습니다" },
-
-  // ── 域名台账与退避 ────────────────────────────────────────────────────────
-  //
-  // ⚠️⚠️ **「判死」这一格用的是中性措辞，绝不能写成「被上游屏蔽」。**
-  // 那是**我们**按一张启发式词表做的判定（`src/core/registrar/domain-ledger.ts`），
-  // 上游改一次错误文案它就会误判 —— 把一个可能是我们判错的结论说成上游的声明，
-  // 运维会照着它去找上游的麻烦。
-  //
-  // ⚠️ **`cap`（台账条目上限）刻意不进文案**：它是照着上游当前域名数留的余量，
-  // 而上游有多少域名不是常数——把一个当前取值印在面板上，运维会把它当成事实。
-  "reg.domains.label": { "zh-CN": "域名台账（注册机记住的「哪些域名能过」）", "zh-TW": "網域台帳（註冊機記住的「哪些網域能過」）", en: "Domain ledger (which mail domains the registrar has learned work)", ja: "ドメイン台帳（レジストラーが学習した「通るドメイン」）", ko: "도메인 원장(등록기가 학습한 «통과되는 도메인»)" },
-  "reg.domains.summary": { "zh-CN": "可用 {ok} · 判死 {blocked} · 待复查 {suspect} · 未探过 {unknown}", "zh-TW": "可用 {ok} · 判死 {blocked} · 待複查 {suspect} · 未探過 {unknown}", en: "{ok} usable · {blocked} ruled out · {suspect} to re-check · {unknown} never probed", ja: "利用可 {ok} · 除外 {blocked} · 再確認待ち {suspect} · 未確認 {unknown}", ko: "사용 가능 {ok} · 제외 {blocked} · 재확인 대기 {suspect} · 미확인 {unknown}" },
-  "reg.domains.updatedAt": { "zh-CN": "（更新于 {at}）", "zh-TW": "（更新於 {at}）", en: " (updated {at})", ja: "（更新 {at}）", ko: "(갱신 {at})" },
-  // 三档退避的**处置完全不同**，所以是三条文案不是一条带参数的：
-  // edge 那一档运维能自己动手（把间隔调大），app 那一档他能动的更少，
-  // 而 cluster 那一档**我们的词表一个字都没命中**，先要去看的是事件里那几条上游原话。
-  // 三条都要说「换邮箱通道逃不掉」——限流在「出口 IP → 上游」这条边上，与通道无关。
-  //
-  // 🔴 **`reg.backoff.cluster` 是第三档，它的证据类型与前两档不同**：前两档来自
-  // 上游回话里的字眼，它来自**这一轮的形状**（同一轮里好几个域名被判屏蔽、或者上游列出来的
-  // 域名一个不落全被判屏蔽，且这一轮一把 key 都没铸出来，见
-  // `src/core/registrar/tender.ts` 的 `finishRound`）。
-  // ⇒ 它的文案里那句归属**不能照抄 app 那条**（那句说的是「按词表认出来的」，
-  // 而这一档一个词表都没命中）。
-  //
-  // 🔴🔴 **上一版这条文案把「我们的词表没命中」写成了「上游一句限流的话都没说」，那是假话，
-  // 而且恰恰在这一档要治的那个场景里假**：这一档存在的唯一理由就是「上游改了限流文案 ⇒ 真
-  // 限流被逐条读成域名屏蔽」，而那个场景里上游**明明说了一句限流的话**（实测探针里逐字是
-  // `Slow down, mate.`），只是我们的词表没认出来。⇒ 横幅在最该提示「可能是上游改了限流文案」
-  // 的那一刻反而明确否掉了这个方向。**这与上一轮刚从 `reg.backoff.app` 裁掉的那件事是同一个
-  // 形状的镜像**：那次是把「我们的判定」说成「上游的事实」，这次是把「我们的词表没命中」说成
-  //「上游的事实」。现在的措辞是「上游的回话里没有一句我们认得出的限流的话」，
-  // 并且**两个方向都摆出来**（上游换了限流措辞 / 上游真的成批换了黑名单），一个都不许否掉。
-  // 由 `tests/unit/i18n-dict.test.ts` 的这两格钉着：
-  // 「cluster 那条退避文案把判据归给我们自己的词表，再不许把换出口说成唯一出路（五语言各一格）」
-  // 与「cluster 那条退避文案不许把「我们的词表没命中」说成「上游没说」（五语言各一条毒刺）」。
-  //
-  // 🔴🔴 **`reg.backoff.app` 那一条必须先说清「这是谁下的结论」，理由是实测出来的一次
-  // 说假话。** 它从前逐字写着「这个出口地址的注册额度可能已经到顶，多半只能等，或者换
-  // 一个出口」——把**我们自己按一张词表做的判定**说成了「上游在限你」，而当时最容易触发
-  // 它的那条路径里根本没有任何限流：`mintOne` 有一道保险，已知能用的域名回 400 就改判成
-  // `rate_limited` / `limitKind: "app"`（那道保险已经拆掉，死锁全文见
-  // `src/core/registrar/mint.ts` 的 `domain_blocked` 那一支）。运维照着这句话去换出口，
-  // 换一百个出口都没用。
-  // ⇒ 现在这条文案的第一句是**证据**（上游回话里那类字眼），第二句是**归属**
-  //（这是我们按词表认出来的，不是上游给的结论），换出口那半句降级成**有条件的**。
-  // 由 `tests/unit/i18n-dict.test.ts` 的
-  // 「退避横幅那条 app 文案先说清判据归属，再不许把换出口说成唯一出路（五语言各一格）」钉着。
-  "reg.backoff.edge": { "zh-CN": "撞上了上游前面那层边缘限流，还要等 {left}（约 {at} 恢复）。多半是补池打得太密，可以把 MINT_DELAY_MIN_MS 调大。如果这一档的真相是「上游在限你的出口地址」，那么换邮箱通道没用——限流算在出口地址上，与用哪条通道无关；但如果真相是另一种（上游成批换了黑名单），换通道换掉的正是整套域名，那就可能有用。这一档分不出是哪一种，所以两条路都别先排除。", "zh-TW": "撞上了上游前面那層邊緣限流，還要等 {left}（約 {at} 恢復）。多半是補池打得太密，可以把 MINT_DELAY_MIN_MS 調大。如果這一檔的真相是「上游在限你的出口位址」，那麼換郵箱通道沒用——限流算在出口位址上，與用哪條通道無關；但如果真相是另一種（上游成批換了黑名單），換通道換掉的正是整套網域，那就可能有用。這一檔分不出是哪一種，所以兩條路都別先排除。", en: "Hit the edge rate limit in front of the upstream; {left} left (recovers around {at}). Refills are most likely too closely spaced — raise MINT_DELAY_MIN_MS. If the truth here is \"the upstream is limiting your egress address\", switching mailbox channel does not help — the limit is counted per egress address, not per channel. But if it is the other reading (the upstream swapped its blocklist), switching channel swaps the whole set of domains, so it may well help. This tier cannot tell the two apart, so do not rule either out yet.", ja: "上流の手前にあるエッジのレート制限に当たりました。残り {left}（{at} 頃に回復）。補充の間隔が詰まりすぎている可能性が高いので MINT_DELAY_MIN_MS を大きくしてください。このラウンドの真相が「上流が送信元アドレスを制限している」であれば、チャネルを切り替えても回避できません（制限は送信元アドレス単位でチャネルとは無関係）。しかしもう一方の真相（上流がブロックリストを入れ替えた）であれば、チャネルを切り替えるとドメイン一式が入れ替わるので効く可能性があります。この段階ではどちらか判別できないため、どちらの道も先に切り捨てないでください。", ko: "업스트림 앞단의 엣지 속도 제한에 걸렸습니다. {left} 남음({at}쯤 회복). 보충 간격이 너무 촘촘할 가능성이 높으니 MINT_DELAY_MIN_MS를 늘리세요. 이 라운드의 진상이 «업스트림이 발신 주소를 제한하고 있다»라면 채널을 바꿔도 피할 수 없습니다(제한은 발신 주소 기준이며 채널과 무관). 그러나 다른 진상(업스트림이 차단 목록을 갈아치웠다)이라면 채널을 바꾸는 것이 곧 도메인 전체를 바꾸는 것이라 효과가 있을 수 있습니다. 이 단계에서는 어느 쪽인지 가릴 수 없으니 어느 길도 미리 배제하지 마세요." },
-  "reg.backoff.app": { "zh-CN": "上游回的那句话里带着「请求过于频繁」这类字眼，据此记了一个退避窗口，还要等 {left}（约 {at} 恢复）。⚠️ 这是我们按一张词表认出来的判定，不是上游给的结论——词表认错时它也会这么说。先把 MINT_DELAY_MIN_MS 调大、MINT_BATCH 调小；等确认这个出口地址的注册额度真的到顶了，换出口才谈得上。如果这一档的真相是「上游在限你的出口地址」，那么换邮箱通道没用——限流算在出口地址上，与用哪条通道无关；但如果真相是另一种（上游成批换了黑名单），换通道换掉的正是整套域名，那就可能有用。这一档分不出是哪一种，所以两条路都别先排除。", "zh-TW": "上游回的那句話裡帶著「請求過於頻繁」這類字眼，據此記了一個退避視窗，還要等 {left}（約 {at} 恢復）。⚠️ 這是我們按一張詞表認出來的判定，不是上游給的結論——詞表認錯時它也會這麼說。先把 MINT_DELAY_MIN_MS 調大、MINT_BATCH 調小；等確認這個出口位址的註冊額度真的到頂了，換出口才談得上。如果這一檔的真相是「上游在限你的出口位址」，那麼換郵箱通道沒用——限流算在出口位址上，與用哪條通道無關；但如果真相是另一種（上游成批換了黑名單），換通道換掉的正是整套網域，那就可能有用。這一檔分不出是哪一種，所以兩條路都別先排除。", en: "The upstream's reply carried wording like «too many requests», and a backoff window was recorded on that basis; {left} left (recovers around {at}). ⚠️ This is a verdict we matched against our own word list, not a verdict the upstream handed us — it reads the same when the word list gets it wrong. Raise MINT_DELAY_MIN_MS and lower MINT_BATCH first; changing egress is worth considering only once you have confirmed this egress address really has exhausted its registration allowance. If the truth here is \"the upstream is limiting your egress address\", switching mailbox channel does not help — the limit is counted per egress address, not per channel. But if it is the other reading (the upstream swapped its blocklist), switching channel swaps the whole set of domains, so it may well help. This tier cannot tell the two apart, so do not rule either out yet.", ja: "上流の返答に「リクエストが多すぎます」といった文言が含まれていたため、それを根拠にバックオフ期間を記録しました。残り {left}（{at} 頃に回復）。⚠️ これは当方が語句リストと照合して下した判定であり、上流が下した結論ではありません——語句リストが誤認したときも同じ表示になります。まず MINT_DELAY_MIN_MS を大きくし、MINT_BATCH を小さくしてください。送信元の変更は、この送信元アドレスの登録枠を本当に使い切ったと確認できてから検討する話です。このラウンドの真相が「上流が送信元アドレスを制限している」であれば、チャネルを切り替えても回避できません（制限は送信元アドレス単位でチャネルとは無関係）。しかしもう一方の真相（上流がブロックリストを入れ替えた）であれば、チャネルを切り替えるとドメイン一式が入れ替わるので効く可能性があります。この段階ではどちらか判別できないため、どちらの道も先に切り捨てないでください。", ko: "업스트림 응답에 «요청이 너무 많습니다» 같은 문구가 있어 이를 근거로 백오프 구간을 기록했습니다. {left} 남음({at}쯤 회복). ⚠️ 이것은 우리가 단어 목록과 대조해 내린 판정이며, 업스트림이 내려준 결론이 아닙니다 — 단어 목록이 틀렸을 때도 똑같이 표시됩니다. 먼저 MINT_DELAY_MIN_MS를 늘리고 MINT_BATCH를 줄이세요. 발신 주소 변경은 이 발신 주소의 가입 한도를 정말로 다 썼다고 확인한 뒤에야 검토할 일입니다. 이 라운드의 진상이 «업스트림이 발신 주소를 제한하고 있다»라면 채널을 바꿔도 피할 수 없습니다(제한은 발신 주소 기준이며 채널과 무관). 그러나 다른 진상(업스트림이 차단 목록을 갈아치웠다)이라면 채널을 바꾸는 것이 곧 도메인 전체를 바꾸는 것이라 효과가 있을 수 있습니다. 이 단계에서는 어느 쪽인지 가릴 수 없으니 어느 길도 미리 배제하지 마세요." },
-  "reg.backoff.cluster": { "zh-CN": "这一轮补池里「域名被屏蔽」的判定成了片（要么同一轮里好几个域名一起被判成「被屏蔽」，要么上游列出来的域名这一轮一个不落全被判成「被屏蔽」），而这一轮一把 key 都没铸出来；按这个形状记了一个退避窗口，还要等 {left}（约 {at} 恢复）。⚠️ 上游的回话里没有一句我们认得出的限流的话——这是我们按这个形状下的判定，不是上游给的结论。两种可能都还开着：上游换了限流的措辞、我们的词表没认出来；或者上游真的成批换了黑名单。上游原话分两处，取决于你撞的是哪一支：好几个域名一起被判「被屏蔽」那一支，本轮的域名判定被整体作废、registrar.domain_blocked 一条都不会发，原话只剩 registrar.known_good_domain_rejected 里那几条（仅限台账里已知能用的那些域名，冷启动时一条都没有）；上游列出来的域名全被判「被屏蔽」那一支，原话要等第二跳判死之后才进 registrar.domain_blocked——第一轮还没有。看清是哪种，再决定调大 MINT_DELAY_MIN_MS 还是换出口。如果这一档的真相是「上游在限你的出口地址」，那么换邮箱通道没用——限流算在出口地址上，与用哪条通道无关；但如果真相是另一种（上游成批换了黑名单），换通道换掉的正是整套域名，那就可能有用。这一档分不出是哪一种，所以两条路都别先排除。", "zh-TW": "這一輪補池裡「網域被屏蔽」的判定成了片（要麼同一輪裡好幾個網域一起被判成「被屏蔽」，要麼上游列出來的網域這一輪一個不落全被判成「被屏蔽」），而這一輪一把 key 都沒鑄出來；按這個形狀記了一個退避視窗，還要等 {left}（約 {at} 恢復）。⚠️ 上游的回話裡沒有一句我們認得出的限流的話——這是我們按這個形狀下的判定，不是上游給的結論。兩種可能都還開著：上游換了限流的措辭、我們的詞表沒認出來；或者上游真的成批換了黑名單。上游原話分兩處，取決於你撞的是哪一支：好幾個網域一起被判「被屏蔽」那一支，本輪的網域判定被整體作廢、registrar.domain_blocked 一條都不會發，原話只剩 registrar.known_good_domain_rejected 裡那幾條（僅限台帳裡已知能用的那些網域，冷啟動時一條都沒有）；上游列出來的網域全被判「被屏蔽」那一支，原話要等第二跳判死之後才進 registrar.domain_blocked——第一輪還沒有。看清是哪種，再決定調大 MINT_DELAY_MIN_MS 還是換出口。如果這一檔的真相是「上游在限你的出口位址」，那麼換郵箱通道沒用——限流算在出口位址上，與用哪條通道無關；但如果真相是另一種（上游成批換了黑名單），換通道換掉的正是整套網域，那就可能有用。這一檔分不出是哪一種，所以兩條路都別先排除。", en: "«Domain blocked» verdicts arrived in a cluster during this refill round — either several domains were ruled «blocked» within the same round, or every domain the upstream lists was ruled «blocked» in that round — and the round minted no keys at all; a backoff window was recorded on the strength of that shape; {left} left (recovers around {at}). ⚠️ Nothing in the upstream's replies matched our rate-limit word list — this is a verdict we drew from that shape, not a verdict the upstream handed us. Both readings are still open: the upstream reworded its rate-limit message and our word list missed it, or the upstream really has swapped its blocklist. The upstream's own wording lives in two different places depending on which branch you hit: when several domains are ruled «blocked» together, this round's domain verdicts are discarded wholesale and not a single registrar.domain_blocked event is emitted — the wording survives only in the registrar.known_good_domain_rejected entries, and only for domains the ledger already knew were good (a cold start leaves none at all); when every domain the upstream lists is ruled «blocked», the wording only reaches registrar.domain_blocked from the second strike on — the first round has none. Work out which branch you are in, then decide between raising MINT_DELAY_MIN_MS and changing egress. If the truth here is \"the upstream is limiting your egress address\", switching mailbox channel does not help — the limit is counted per egress address, not per channel. But if it is the other reading (the upstream swapped its blocklist), switching channel swaps the whole set of domains, so it may well help. This tier cannot tell the two apart, so do not rule either out yet.", ja: "この補充ラウンドでは「ドメインがブロックされた」という判定がまとまって出ました（同じラウンドで複数のドメインが「ブロック」と判定されたか、上流が列挙するドメインが 1 つ残らず「ブロック」と判定されたかのどちらかです）。しかもそのラウンドでは key が 1 本も発行できませんでした。この形を根拠にバックオフ期間を記録しました。残り {left}（{at} 頃に回復）。⚠️ 上流の返答には当方の語句リストに載っているレート制限の文言がありませんでした——これはその形から当方が下した判定であり、上流が下した結論ではありません。可能性は 2 つとも残っています。上流がレート制限の文言を変えて当方の語句リストが取りこぼした場合と、上流が本当にブロックリストを入れ替えた場合です。上流の原文が残る場所は、どちらの分岐に当たったかで 2 つに分かれます。複数のドメインがまとめて「ブロック」と判定された分岐では、そのラウンドのドメイン判定が一括で破棄されるため registrar.domain_blocked は 1 件も発行されません——原文は registrar.known_good_domain_rejected に残る分だけ、しかも台帳が既に「使える」と知っていたドメインの分だけです（コールドスタートでは 1 件もありません）。上流が列挙するドメインが 1 つ残らず「ブロック」と判定された分岐では、原文が registrar.domain_blocked に入るのは 2 回目の判定以降で、最初のラウンドにはありません。どちらの分岐かを見極めたうえで、MINT_DELAY_MIN_MS を大きくするか送信元を変更するかを決めてください。このラウンドの真相が「上流が送信元アドレスを制限している」であれば、チャネルを切り替えても回避できません（制限は送信元アドレス単位でチャネルとは無関係）。しかしもう一方の真相（上流がブロックリストを入れ替えた）であれば、チャネルを切り替えるとドメイン一式が入れ替わるので効く可能性があります。この段階ではどちらか判別できないため、どちらの道も先に切り捨てないでください。", ko: "이번 보충 라운드에서 «도메인 차단» 판정이 무더기로 나왔고(같은 라운드에서 여러 도메인이 «차단»으로 판정되었거나, 업스트림이 제공하는 도메인이 하나도 빠짐없이 «차단»으로 판정되었습니다), 그 라운드에서는 key가 하나도 발급되지 않았습니다. 이 형태를 근거로 백오프 구간을 기록했습니다. {left} 남음({at}쯤 회복). ⚠️ 업스트림 응답에서 우리 단어 목록에 있는 속도 제한 문구를 찾지 못했습니다 — 이것은 그 형태를 보고 우리가 내린 판정이며, 업스트림이 내려준 결론이 아닙니다. 두 가지 가능성이 모두 남아 있습니다. 업스트림이 속도 제한 문구를 바꿔 우리 단어 목록이 놓쳤을 수도 있고, 업스트림이 실제로 차단 목록을 갈아치웠을 수도 있습니다. 업스트림 원문이 남는 곳은 어느 갈래에 걸렸는지에 따라 둘로 나뉩니다. 여러 도메인이 한꺼번에 «차단»으로 판정된 갈래에서는 그 라운드의 도메인 판정이 통째로 폐기되므로 registrar.domain_blocked는 한 건도 발행되지 않습니다 — 원문은 registrar.known_good_domain_rejected 항목에만, 그것도 원장이 이미 «사용 가능»으로 알고 있던 도메인에 대해서만 남습니다(콜드 스타트에서는 하나도 없습니다). 업스트림이 나열한 도메인이 하나도 빠짐없이 «차단»으로 판정된 갈래에서는 원문이 registrar.domain_blocked에 들어가는 것은 두 번째 판정부터이며 첫 라운드에는 없습니다. 어느 갈래인지 가려낸 뒤 MINT_DELAY_MIN_MS를 늘릴지 발신 주소를 바꿀지 결정하세요. 이 라운드의 진상이 «업스트림이 발신 주소를 제한하고 있다»라면 채널을 바꿔도 피할 수 없습니다(제한은 발신 주소 기준이며 채널과 무관). 그러나 다른 진상(업스트림이 차단 목록을 갈아치웠다)이라면 채널을 바꾸는 것이 곧 도메인 전체를 바꾸는 것이라 효과가 있을 수 있습니다. 이 단계에서는 어느 쪽인지 가릴 수 없으니 어느 길도 미리 배제하지 마세요." },
-
-  "reg.history.title":  { "zh-CN": "补池历史", "zh-TW": "補池歷史", en: "Refill history", ja: "補充履歴", ko: "보충 기록" },
-  "reg.history.empty":  { "zh-CN": "还没有补池记录。", "zh-TW": "還沒有補池記錄。", en: "No refill rounds recorded yet.", ja: "補充ラウンドの記録はまだありません。", ko: "아직 보충 라운드 기록이 없습니다." },
-  "reg.history.malformed": { "zh-CN": "存储里有 {count} 条读不得的补池记录被丢弃了，多半是存储被本网关之外的东西写过。", "zh-TW": "儲存裡有 {count} 條讀不得的補池記錄被丟棄了，多半是儲存被本閘道之外的東西寫過。", en: "{count} unreadable refill record(s) in storage were discarded — most likely storage was written by something other than this gateway.", ja: "ストレージ内の読み取れない補充記録 {count} 件を破棄しました。本ゲートウェイ以外から書き込まれた可能性が高いです。", ko: "저장소의 읽을 수 없는 보충 기록 {count}건을 버렸습니다. 이 게이트웨이 외부에서 기록되었을 가능성이 높습니다." },
-  "reg.col.at":       { "zh-CN": "时间", "zh-TW": "時間", en: "Time", ja: "時刻", ko: "시각" },
-  "reg.col.trigger":  { "zh-CN": "触发", "zh-TW": "觸發", en: "Trigger", ja: "トリガー", ko: "트리거" },
-  "reg.col.channel":  { "zh-CN": "这一轮的通道", "zh-TW": "這一輪的通道", en: "Channel this round", ja: "このラウンドのチャネル", ko: "이 라운드의 채널" },
-  "reg.col.result":   { "zh-CN": "结果", "zh-TW": "結果", en: "Result", ja: "結果", ko: "결과" },
-  "reg.col.duration": { "zh-CN": "耗时", "zh-TW": "耗時", en: "Duration", ja: "所要時間", ko: "소요 시간" },
-  "reg.col.failures": { "zh-CN": "失败归因", "zh-TW": "失敗歸因", en: "Failure reasons", ja: "失敗の内訳", ko: "실패 원인" },
-  "reg.trigger.cron":   { "zh-CN": "定时", "zh-TW": "定時", en: "Scheduled", ja: "定期実行", ko: "예약 실행" },
-  "reg.trigger.manual": { "zh-CN": "面板", "zh-TW": "面板", en: "Panel", ja: "パネル", ko: "패널" },
-  // 四种形态的判据来自 `src/core/registrar/tender.ts` 里 `mintedByChannel` 上那张表：
-  // `skipped` + `attempted` + `failures` **三个字段合读**才分得清。
-  "reg.row.skipped":  { "zh-CN": "注册机当时是关闭的，这一轮什么都没做", "zh-TW": "註冊機當時是關閉的，這一輪什麼都沒做", en: "The registrar was off at the time; this round did nothing", ja: "その時点でレジストラーは無効でした。このラウンドは何もしていません", ko: "그 시점에 등록기가 꺼져 있었고 이 라운드는 아무것도 하지 않았습니다" },
-  "reg.row.healthy":  { "zh-CN": "池子已经够用，这一轮不需要铸 key", "zh-TW": "池子已經夠用，這一輪不需要鑄 key", en: "The pool was already full enough; no key needed minting this round", ja: "プールは十分だったため、このラウンドでは key を発行していません", ko: "풀이 이미 충분해 이 라운드에서는 key를 발급하지 않았습니다" },
-  "reg.row.noAttempt": { "zh-CN": "这一轮一次尝试都没开始（不是「跑完了没产出」）", "zh-TW": "這一輪一次嘗試都沒開始（不是「跑完了沒產出」）", en: "This round never started a single attempt (not \"ran and produced nothing\")", ja: "このラウンドは 1 回も試行を開始していません（「実行したが成果ゼロ」ではありません）", ko: "이 라운드는 시도를 한 번도 시작하지 않았습니다(「실행했지만 성과 없음」이 아닙니다)" },
-  "reg.row.minted":   { "zh-CN": "铸出 {minted} / 尝试 {attempted}", "zh-TW": "鑄出 {minted} / 嘗試 {attempted}", en: "{minted} minted / {attempted} attempted", ja: "発行 {minted} / 試行 {attempted}", ko: "발급 {minted} / 시도 {attempted}" },
-  "reg.row.unreadable": { "zh-CN": "这一行读不得", "zh-TW": "這一行讀不得", en: "This row is unreadable", ja: "この行は読み取れません", ko: "이 행은 읽을 수 없습니다" },
-  // ⚠️ 逐通道铸出数**必须显示**。注意**旧理由已经不成立**：从前写的是「一轮全靠
-  // 备通道铸出来时看不出记在谁名下」，而主备降级已经拆掉，今天一轮只用选中的那条。
-  // 今天的理由是**历史行跨时间**：中间运维可能换过通道，而 `minted` 只有总数。
-  "reg.row.byChannel": { "zh-CN": "逐通道：{detail}", "zh-TW": "逐通道：{detail}", en: "By channel: {detail}", ja: "チャネル別: {detail}", ko: "채널별: {detail}" },
-  "reg.fail.unknownReason": { "zh-CN": "这个版本的面板不认识的失败归因：{reason}", "zh-TW": "這個版本的面板不認識的失敗歸因：{reason}", en: "A failure reason this panel build does not know: {reason}", ja: "このパネルのビルドが認識できない失敗理由: {reason}", ko: "이 패널 빌드가 알지 못하는 실패 원인: {reason}" },
-
-  // ── 后端拒绝的八种 reason，各自一句五语言 ─────────────────────────────────
-  //
-  // ⚠️⚠️ **状态码不是判据，`reason` 才是。** `409` 有三种、`429` 有两种，
-  // 而它们的处置毫无共同之处。逐条的语义差别必须在文案里体现出来，尤其：
-  // · `tend_in_flight`（**这个**副本在跑：等一会儿）与 `locked`（**另一个**副本在跑：
-  //   说明你是多副本部署，不是你点错了）；
-  // · `write_budget_exhausted` **不许写成「太频繁」**——它挡的是**存储写配额**、
-  //   不是邮箱名额，而运维看到「太频繁」的第一反应是等一等，正确处置却是等到
-  //   UTC 零点或者调 MANUAL_TENDS_PER_DAY。
-  "reg.refuse.tend_in_flight": { "zh-CN": "这个副本上已经有一轮补池在跑，等它结束就能再点。", "zh-TW": "這個副本上已經有一輪補池在跑，等它結束就能再點。", en: "This replica already has a refill round in flight; you can click again once it finishes.", ja: "このレプリカでは補充ラウンドがすでに実行中です。終了すれば再度実行できます。", ko: "이 복제본에서 이미 보충 라운드가 실행 중입니다. 끝나면 다시 누를 수 있습니다." },
-  "reg.refuse.locked":          { "zh-CN": "另一个副本正在补池，本次没有启动。补池是顺序执行的：并发会同时撞邮箱建号限流与上游注册风控。", "zh-TW": "另一個副本正在補池，本次沒有啟動。補池是順序執行的：並發會同時撞郵箱建號限流與上游註冊風控。", en: "Another replica is refilling, so this run did not start. Refills run one at a time: concurrent rounds hit both the mailbox creation rate limit and the upstream registration risk controls.", ja: "別のレプリカが補充中のため、今回は開始しませんでした。補充は逐次実行です: 同時に走らせるとメールボックス作成のレート制限と上流の登録リスク制御の両方に当たります。", ko: "다른 복제본이 보충 중이어서 이번에는 시작하지 않았습니다. 보충은 순차 실행입니다: 동시에 돌리면 메일박스 생성 속도 제한과 업스트림 가입 위험 관리에 모두 걸립니다." },
-  "reg.refuse.registrar_disabled": { "zh-CN": "注册机没有打开，没有可补的池。请先在设置里打开它，并配好至少一条邮箱通道。", "zh-TW": "註冊機沒有打開，沒有可補的池。請先在設定裡打開它，並配好至少一條郵箱通道。", en: "The registrar is not turned on, so there is nothing to refill. Turn it on in Settings and configure at least one mailbox channel first.", ja: "レジストラーが有効になっていないため、補充する対象がありません。まず設定で有効にし、メールボックスチャネルを少なくとも 1 つ構成してください。", ko: "등록기가 켜져 있지 않아 보충할 대상이 없습니다. 먼저 설정에서 켜고 메일박스 채널을 최소 하나 구성하세요." },
-  "reg.refuse.registrar_blocked": { "zh-CN": "注册机开着，但这份配置装不起来，本次没有启动它。先去设置页把下面缺的那几格补上。", "zh-TW": "註冊機開著，但這份設定裝不起來，本次沒有啟動它。先去設定頁把下面缺的那幾格補上。", en: "The registrar is on, but this configuration could not be loaded, so it was not started this time. Fill in the missing fields on the Settings page first.", ja: "レジストラーは有効ですが、この設定を読み込めなかったため今回は起動していません。まず設定ページで不足している項目を入力してください。", ko: "등록기는 켜져 있지만 이 설정을 불러오지 못해 이번에는 시작하지 않았습니다. 먼저 설정 페이지에서 빠진 항목을 채우세요." },
-  "reg.refuse.write_budget_exhausted": { "zh-CN": "今天的手动补池次数已经用完。这道闸挡的是存储写配额，不是邮箱名额——等到重置时刻会自动恢复，也可以调大 MANUAL_TENDS_PER_DAY。", "zh-TW": "今天的手動補池次數已經用完。這道閘擋的是儲存寫配額，不是郵箱名額——等到重置時刻會自動恢復，也可以調大 MANUAL_TENDS_PER_DAY。", en: "Today's manual refill allowance is used up. This gate protects the storage write quota, not the mailbox allowance — it restores itself at the reset time, or you can raise MANUAL_TENDS_PER_DAY.", ja: "本日の手動補充回数を使い切りました。このゲートが守っているのはストレージの書き込み割り当てであり、メールボックスの枠ではありません——リセット時刻に自動で回復します。MANUAL_TENDS_PER_DAY を大きくすることもできます。", ko: "오늘의 수동 보충 횟수를 모두 사용했습니다. 이 게이트가 지키는 것은 스토리지 쓰기 할당량이지 메일박스 정원이 아닙니다 — 초기화 시각에 자동으로 회복되며, MANUAL_TENDS_PER_DAY를 늘릴 수도 있습니다." },
-  "reg.refuse.manual_cooldown": { "zh-CN": "两次手动补池之间要隔一段冷却时间，还没到。", "zh-TW": "兩次手動補池之間要隔一段冷卻時間，還沒到。", en: "Two manual refills must be spaced apart by a cooldown, and it has not elapsed yet.", ja: "手動補充どうしの間にはクールダウンが必要で、まだ経過していません。", ko: "수동 보충 사이에는 쿨다운이 필요하며 아직 지나지 않았습니다." },
-  "reg.refuse.not_wired":      { "zh-CN": "这个部署没有接上注册机的执行体，读不到补池记录也补不了池。这是装配问题，不是运行状态——正常经容器 / Worker 入口启动的部署不会出现。", "zh-TW": "這個部署沒有接上註冊機的執行體，讀不到補池記錄也補不了池。這是裝配問題，不是執行狀態——正常經容器 / Worker 入口啟動的部署不會出現。", en: "This deployment has no registrar executor wired in, so it can neither read refill records nor refill. That is an assembly problem, not a runtime state — it cannot happen for deployments started through the container or Worker entry point.", ja: "このデプロイにはレジストラーの実行体が接続されていないため、補充記録を読むことも補充することもできません。これは組み立ての問題であり実行時の状態ではありません——コンテナや Worker のエントリーポイント経由で起動したデプロイでは発生しません。", ko: "이 배포에는 등록기 실행체가 연결되어 있지 않아 보충 기록을 읽을 수도, 보충할 수도 없습니다. 이는 조립 문제이지 실행 상태가 아닙니다 — 컨테이너나 Worker 진입점으로 기동한 배포에서는 발생하지 않습니다." },
-  "reg.refuse.unknown_channel": { "zh-CN": "通道名不认识，只能是 moemail 或 yyds。", "zh-TW": "通道名不認識，只能是 moemail 或 yyds。", en: "Unknown channel name; it can only be moemail or yyds.", ja: "チャネル名が不明です。moemail か yyds のいずれかである必要があります。", ko: "알 수 없는 채널 이름입니다. moemail 또는 yyds만 가능합니다." },
-  "reg.refuse.channel_not_configured": { "zh-CN": "这条通道在本次部署里没有配好凭据，用不了。请先在设置里把它配上。", "zh-TW": "這條通道在本次部署裡沒有配好憑證，用不了。請先在設定裡把它配上。", en: "This channel has no credentials configured in this deployment, so it cannot be used. Configure it in Settings first.", ja: "このチャネルはこのデプロイで資格情報が設定されていないため使用できません。まず設定で構成してください。", ko: "이 채널은 이 배포에 자격 증명이 설정되어 있지 않아 사용할 수 없습니다. 먼저 설정에서 구성하세요." },
-  "reg.refuse.probe_in_flight": { "zh-CN": "上一次探测还没有返回，等它结束再试（这颗按钮每按一次都会真的向邮箱服务发一次请求）。", "zh-TW": "上一次探測還沒有回來，等它結束再試（這顆按鈕每按一次都會真的向郵箱服務發一次請求）。", en: "The previous probe has not returned yet; wait for it to finish before retrying (each click really does send a request to the mailbox service).", ja: "前回のプローブがまだ返っていません。終了してから再試行してください（このボタンは押すたびにメールサービスへ実際にリクエストを送ります）。", ko: "이전 탐지가 아직 반환되지 않았습니다. 끝난 뒤에 다시 시도하세요(이 버튼은 누를 때마다 메일 서비스로 실제 요청을 보냅니다)." },
-  "reg.refuse.probe_cooldown": { "zh-CN": "两次探测之间至少要隔一小段时间，请稍后再试。这不是通道故障。", "zh-TW": "兩次探測之間至少要隔一小段時間，請稍後再試。這不是通道故障。", en: "There is a minimum interval between two probes; please retry shortly. This is not a channel failure.", ja: "プローブとプローブの間には最小間隔があります。少し待ってから再試行してください。チャネルの障害ではありません。", ko: "탐지와 탐지 사이에는 최소 간격이 있습니다. 잠시 후 다시 시도하세요. 채널 장애가 아닙니다." },
-
-  // ── Key 池板块（只读部分）─────────────────────────────────────────────────
-  "keys.title":       { "zh-CN": "Key 池", "zh-TW": "Key 池", en: "Key pool", ja: "キープール", ko: "키 풀" },
-  "keys.search":      { "zh-CN": "搜索 id 或掩码", "zh-TW": "搜尋 id 或遮罩", en: "Search by id or masked key", ja: "id またはマスクで検索", ko: "id 또는 마스크로 검색" },
-  "keys.filter":      { "zh-CN": "按状态筛选", "zh-TW": "依狀態篩選", en: "Filter by state", ja: "状態で絞り込み", ko: "상태로 필터" },
-  "keys.auto":        { "zh-CN": "自动刷新", "zh-TW": "自動重新整理", en: "Auto refresh", ja: "自動更新", ko: "자동 새로고침" },
-  "keys.auto.off":    { "zh-CN": "关", "zh-TW": "關", en: "Off", ja: "オフ", ko: "끄기" },
-  "keys.auto.30":     { "zh-CN": "30 秒", "zh-TW": "30 秒", en: "30s", ja: "30 秒", ko: "30초" },
-  "keys.auto.60":     { "zh-CN": "60 秒", "zh-TW": "60 秒", en: "60s", ja: "60 秒", ko: "60초" },
-  // 开销说明**如实写**，不抄一个吓人的估算数字：这个板块与转发共用同一份 isolate
-  // 快照，本期的形态下自动刷新确实不烧存储配额。
-  //
-  // ⚠️ **carry-forward（Key 池板块 → 概览板块）**：`{ttl}` / `{touch}` / `{poolTtl}` 三个
-  // 占位符在 Key 池板块交付时没有数据源（capabilities/overview 要到概览板块才有），
-  // 当时暂用「点名旋钮 + 括注默认值」。概览板块拿到 `GET /admin/api/overview` 之后
-  // 已把它们换成真实生效值——由 `js/pure/overview.mjs` 的 `poolKnobs()` 统一取数
-  // （两个板块共用同一份，不许各写各的），点名旋钮的写法保留（运维要知道该改哪个
-  // 环境变量），括注的默认值换成当前生效值。
-  "keys.autoNote":    { "zh-CN": "这个板块与网关转发共用同一份 isolate 内的池子快照，所以自动刷新不额外产生存储读写。你看到的数据最多晚一个 POOL_CACHE_TTL_MS（当前 {ttl}）。", "zh-TW": "這個板塊與網關轉發共用同一份 isolate 內的池子快照，所以自動重新整理不額外產生儲存讀寫。你看到的資料最多晚一個 POOL_CACHE_TTL_MS（目前 {ttl}）。", en: "This section shares the same in-isolate pool snapshot as request forwarding, so auto refresh costs no extra storage reads or writes. What you see can lag by up to one POOL_CACHE_TTL_MS (currently {ttl}).", ja: "このセクションはゲートウェイの転送と同じ isolate 内プールスナップショットを共有するため、自動更新でストレージの読み書きが増えることはありません。表示は最大で POOL_CACHE_TTL_MS ぶん（現在の値: {ttl}）遅れることがあります。", ko: "이 섹션은 게이트웨이 전달과 동일한 isolate 내 풀 스냅숏을 공유하므로 자동 새로고침이 스토리지 읽기/쓰기를 추가로 발생시키지 않습니다. 보이는 데이터는 최대 POOL_CACHE_TTL_MS(현재 값 {ttl})만큼 늦을 수 있습니다." },
-  // 新鲜度提示条：与概览页共用同一份文案（组织方式不同——概览页的 ov.freshness.pool
-  // 还多了 configTtl 那一半，键池板块本来就没有配置卡，只留池子那一半）。
-  //
-  // ⚠️ **上一版这句话里还有一个 `{edge}`（「约 60 秒」的 KV 边缘缓存），v0.4.0 整层
-  // 删掉了**：KV 随 Worker 形态一起没了 ⇒ 上界就等于一个池快照 TTL，`poolKnobs()`
-  // 也从三个旋钮收成两个（见 `pure/overview.mjs` 该函数的说明）。
-  "keys.freshness":   { "zh-CN": "别的实例判定的冷却 / 剔除，这里最多晚一个 {poolTtl} 的池快照才看到；而且这个窗口里本实例的写会覆盖对方刚写下的调度状态。", "zh-TW": "別的實例判定的冷卻 / 剔除，這裡最多晚一個 {poolTtl} 的池快照才看得到；而且這個視窗裡本實例的寫入會覆蓋對方剛寫下的排程狀態。", en: "Cooldowns and evictions decided by another instance take up to {poolTtl} — one pool snapshot — to show up here. Within that window, writes from this instance also overwrite the scheduling state the other one just wrote.", ja: "他のインスタンスが判定したクールダウン／除外がここに反映されるまで、最大で {poolTtl}（プールスナップショット 1 つぶん）かかります。しかもその間、このインスタンスの書き込みは相手が書いたばかりのスケジューリング状態を上書きします。", ko: "다른 인스턴스가 판정한 쿨다운/제외가 여기에 보이기까지 최대 {poolTtl}(풀 스냅숏 하나)가 걸립니다. 게다가 그 구간에서는 이 인스턴스의 쓰기가 상대가 방금 기록한 스케줄링 상태를 덮어씁니다." },
-  "keys.approxTip":   { "zh-CN": "近似值：并发请求下会少计（KV 没有 CAS）；且计数最多晚一个 POOL_TOUCH_INTERVAL_MS（当前 {touch}）才落盘，isolate 在此之前被回收时这一段会丢。", "zh-TW": "近似值：並發請求下會少計（KV 沒有 CAS）；且計數最多晚一個 POOL_TOUCH_INTERVAL_MS（目前 {touch}）才寫入，isolate 在此之前被回收時這一段會遺失。", en: "Approximate: concurrent requests undercount it (KV has no CAS), and counters are persisted up to one POOL_TOUCH_INTERVAL_MS late (currently {touch}) — whatever has not been persisted is lost if the isolate is recycled first.", ja: "概算値: 同時リクエスト下では少なく数えられます（KV に CAS がないため）。またカウンターの永続化は最大で POOL_TOUCH_INTERVAL_MS ぶん（現在の値: {touch}）遅れ、その前に isolate が回収されるとその分は失われます。", ko: "근사값: 동시 요청에서는 적게 집계됩니다(KV에 CAS가 없음). 또한 카운터는 최대 POOL_TOUCH_INTERVAL_MS(현재 값 {touch})만큼 늦게 저장되며, 그 전에 isolate가 회수되면 그 구간은 사라집니다." },
-  // 「最后使用」与计数是**同一份** staleness（同一次落盘一起带下去），所以它同样打 ≈。
-  // 这条与 keys.approxTip 说的不是一句话：那条讲「少计 + 晚落盘」，这条讲「时刻本身粗」。
-  "keys.approxLastUsedTip": { "zh-CN": "近似值：这一列的精度最粗到一个 POOL_TOUCH_INTERVAL_MS（当前 {touch}）——写消除会把「只更新了最后使用时间」的那次写整个丢掉。任何其他状态变更的落盘都会顺带把它刷新，所以真出故障时它反而是新的。", "zh-TW": "近似值：這一欄的精度最粗到一個 POOL_TOUCH_INTERVAL_MS（目前 {touch}）——寫入消除會把「只更新了最後使用時間」的那次寫入整個丟掉。任何其他狀態變更的寫入都會順帶刷新它，所以真出故障時它反而是新的。", en: "Approximate: this column is only as precise as one POOL_TOUCH_INTERVAL_MS (currently {touch}) — a write that only bumps the last-used time is dropped entirely. Any other state change persists it as a side effect, so it is actually fresh whenever something is going wrong.", ja: "概算値: この列の精度は最も粗い場合で POOL_TOUCH_INTERVAL_MS ぶん（現在の値: {touch}）です——「最終使用時刻だけが変わった」書き込みは丸ごと破棄されます。他の状態変更の永続化はこの値もついでに更新するため、障害が起きているときはむしろ新しい値になります。", ko: "근사값: 이 열의 정밀도는 최대 POOL_TOUCH_INTERVAL_MS(현재 값 {touch})까지 거칠어집니다 — 마지막 사용 시각만 바뀐 쓰기는 통째로 버려지기 때문입니다. 다른 상태 변경이 저장될 때 함께 갱신되므로, 실제로 문제가 생겼을 때는 오히려 최신입니다." },
-  "keys.bucket.all":     { "zh-CN": "全部", "zh-TW": "全部", en: "All", ja: "すべて", ko: "전체" },
-  "keys.bucket.fresh":   { "zh-CN": "可用", "zh-TW": "可用", en: "Available", ja: "利用可能", ko: "사용 가능" },
-  "keys.bucket.cooling": { "zh-CN": "冷却中", "zh-TW": "冷卻中", en: "Cooling down", ja: "クールダウン中", ko: "쿨다운 중" },
-  "keys.bucket.evicted": { "zh-CN": "已剔除", "zh-TW": "已剔除", en: "Evicted", ja: "除外済み", ko: "제외됨" },
-  "keys.bucket.disabled": { "zh-CN": "已停用", "zh-TW": "已停用", en: "Disabled", ja: "無効化済み", ko: "비활성화됨" },
-  "keys.col.seq":        { "zh-CN": "#", "zh-TW": "#", en: "#", ja: "#", ko: "#" },
-  "keys.col.key":        { "zh-CN": "Key", "zh-TW": "Key", en: "Key", ja: "Key", ko: "Key" },
-  "keys.col.bucket":     { "zh-CN": "状态", "zh-TW": "狀態", en: "State", ja: "状態", ko: "상태" },
-  "keys.col.addedAt":    { "zh-CN": "加入时间", "zh-TW": "加入時間", en: "Added", ja: "追加日時", ko: "추가 시각" },
-  "keys.col.lastUsedAt": { "zh-CN": "最后使用", "zh-TW": "最後使用", en: "Last used", ja: "最終使用", ko: "마지막 사용" },
-  "keys.col.cooldown":   { "zh-CN": "冷却剩余", "zh-TW": "冷卻剩餘", en: "Cooldown left", ja: "クールダウン残り", ko: "쿨다운 잔여" },
-  "keys.col.strikes":    { "zh-CN": "连续失败", "zh-TW": "連續失敗", en: "Strikes", ja: "連続失敗", ko: "연속 실패" },
-  "keys.col.usage":      { "zh-CN": "请求数 · 成功率", "zh-TW": "請求數 · 成功率", en: "Requests · success rate", ja: "リクエスト数 · 成功率", ko: "요청 수 · 성공률" },
-  "keys.col.lastError":  { "zh-CN": "最近错误", "zh-TW": "最近錯誤", en: "Last error", ja: "直近のエラー", ko: "최근 오류" },
-  "keys.empty":       { "zh-CN": "池子里还没有 key", "zh-TW": "池子裡還沒有 key", en: "No keys in the pool yet", ja: "プールにまだ key がありません", ko: "풀에 아직 key가 없습니다" },
-  "keys.noMatch":     { "zh-CN": "没有符合条件的 key", "zh-TW": "沒有符合條件的 key", en: "No keys match the current filter", ja: "条件に一致する key がありません", ko: "조건에 맞는 key가 없습니다" },
-  "keys.pageInfo":    { "zh-CN": "第 {page}/{pages} 页 · 共 {total} 条", "zh-TW": "第 {page}/{pages} 頁 · 共 {total} 筆", en: "Page {page} of {pages} · {total} in total", ja: "{pages} ページ中 {page} ページ目 · 全 {total} 件", ko: "{pages} 페이지 중 {page} 페이지 · 총 {total}개" },
-  "keys.prev":        { "zh-CN": "上一页", "zh-TW": "上一頁", en: "Previous", ja: "前へ", ko: "이전" },
-  "keys.next":        { "zh-CN": "下一页", "zh-TW": "下一頁", en: "Next", ja: "次へ", ko: "다음" },
-
-  // ── Key 池板块：写操作 ──────────────────────────────────────────────────────
-  // 行内动作列。**停用/启用/清冷却/清连续失败/解除剔除/删除**，与后端
-  // `PATCH /admin/api/keys/:id` 支持的五个字段逐一对应（见下面 `keys.action.clearStrikes`
-  // 那条注释——它是控制端追加裁定补的，简报第一版的动作清单漏列了它）。
-  "keys.action.disable":      { "zh-CN": "停用", "zh-TW": "停用", en: "Disable", ja: "無効化", ko: "정지" },
-  "keys.action.enable":       { "zh-CN": "启用", "zh-TW": "啟用", en: "Enable", ja: "有効化", ko: "활성화" },
-  "keys.action.clearCooldown":{ "zh-CN": "清冷却", "zh-TW": "清冷卻", en: "Clear cooldown", ja: "クールダウン解除", ko: "쿨다운 해제" },
-  // ⚠️ 控制端追加裁定（评审前）：设计 §10.2 的行内动作清单本来就有「清 strikes」，
-  // 后端 PATCH 的 clearStrikes 字段也早已实现全，是简报的动作清单第一版
-  // 漏列了它——补的是遗漏，不是新范围。命名跟着 keys.col.strikes（「连续失败」）
-  // 走，不叫「清 strikes」：面板上不该出现只有开发者认得的英文字段名。
-  "keys.action.clearStrikes": { "zh-CN": "清连续失败", "zh-TW": "清連續失敗", en: "Clear strikes", ja: "連続失敗をクリア", ko: "연속 실패 초기화" },
-  "keys.action.unevict":      { "zh-CN": "解除剔除", "zh-TW": "解除剔除", en: "Unevict", ja: "除外解除", ko: "제외 해제" },
-  "keys.action.note":         { "zh-CN": "备注", "zh-TW": "備註", en: "Note", ja: "備考", ko: "비고" },
-  "keys.action.delete":       { "zh-CN": "删除", "zh-TW": "刪除", en: "Delete", ja: "削除", ko: "삭제" },
-  "keys.col.note":            { "zh-CN": "备注", "zh-TW": "備註", en: "Note", ja: "備考", ko: "비고" },
-  "keys.col.actions":         { "zh-CN": "操作", "zh-TW": "操作", en: "Actions", ja: "操作", ko: "작업" },
-
-  // 批量选择：**全选只选当前页**（照抄 kiro2api 的安全约束，设计 §10.2：
-  // 一键选中一千个看不见的行再批量删除，后果不可挽回）。判据在
-  // `js/pure/keys-write.mjs` 的 `selectAllIds()`。
-  "keys.selectAll":  { "zh-CN": "全选本页", "zh-TW": "全選本頁", en: "Select all on this page", ja: "このページを全選択", ko: "이 페이지 전체 선택" },
-  "keys.selectRow":  { "zh-CN": "选择这一行", "zh-TW": "選擇這一行", en: "Select this row", ja: "この行を選択", ko: "이 행 선택" },
-  "keys.bulk.selectedCount": { "zh-CN": "已选中 {count} 把", "zh-TW": "已選中 {count} 把", en: "{count} selected", ja: "{count} 件選択中", ko: "{count}개 선택됨" },
-  "keys.bulk.disable":        { "zh-CN": "批量停用", "zh-TW": "批量停用", en: "Bulk disable", ja: "一括無効化", ko: "일괄 정지" },
-  "keys.bulk.clearCooldown":  { "zh-CN": "批量清冷却", "zh-TW": "批量清冷卻", en: "Bulk clear cooldown", ja: "一括クールダウン解除", ko: "일괄 쿨다운 해제" },
-  "keys.bulk.delete":         { "zh-CN": "批量删除", "zh-TW": "批量刪除", en: "Bulk delete", ja: "一括削除", ko: "일괄 삭제" },
-  "keys.bulk.confirmTitle":   { "zh-CN": "确认批量操作", "zh-TW": "確認批次操作", en: "Confirm bulk action", ja: "一括操作の確認", ko: "일괄 작업 확인" },
-  "keys.bulk.confirmDelete":  { "zh-CN": "确定要删除选中的 {count} 把 key 吗？此操作不可撤销。", "zh-TW": "確定要刪除選中的 {count} 把 key 嗎？此操作不可復原。", en: "Delete the selected {count} key(s)? This cannot be undone.", ja: "選択した {count} 件の key を削除しますか？この操作は取り消せません。", ko: "선택한 key {count}개를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다." },
-
-  // 批量结果提示。⚠️⚠️ **`keys.bulk.allOk` / `keys.bulk.partial` 刻意不带占位符**：
-  // `js/pure/keys-write.mjs` 的 `bulkResultKey()` 把它们当裸字符串 `return`，
-  // 若这两个 key 带 `{}` 占位符，`scripts/check-i18n.mjs` 第 ⑧ 条会在那一行报错
-  // （字面量后面跟的是 `;` 不是 `,`）。实际的数字由 `keys.bulk.countsSuffix` /
-  // `mustDisableFirstSuffix` / `notFoundSuffix` 三个**始终带参数调用**的 key 承载
-  // ——**「批量里有 3 把被拒、前端必须显示出来」这条判据落在这三个 key 上**。
-  "keys.bulk.allOk":  { "zh-CN": "批量操作已完成：全部成功。", "zh-TW": "批次操作已完成：全部成功。", en: "Bulk action completed: all succeeded.", ja: "一括操作が完了しました：すべて成功しました。", ko: "일괄 작업 완료: 모두 성공했습니다." },
-  "keys.bulk.partial":{ "zh-CN": "批量操作已完成，但不是全部成功。", "zh-TW": "批次操作已完成，但不是全部成功。", en: "Bulk action completed, but not all succeeded.", ja: "一括操作は完了しましたが、すべては成功していません。", ko: "일괄 작업이 완료되었지만 전부 성공하지는 않았습니다." },
-  "keys.bulk.countsSuffix":           { "zh-CN": "（{ok}/{total} 把成功）", "zh-TW": "（{ok}/{total} 把成功）", en: " ({ok}/{total} succeeded)", ja: "（{ok}/{total} 件成功）", ko: " ({ok}/{total}개 성공)" },
-  "keys.bulk.mustDisableFirstSuffix": { "zh-CN": "；{mustDisableFirst} 把未停用/未剔除，需要先停用才能删除。", "zh-TW": "；{mustDisableFirst} 把未停用/未剔除，需要先停用才能刪除。", en: "; {mustDisableFirst} key(s) are neither disabled nor evicted and must be disabled before deletion.", ja: "；{mustDisableFirst} 件は無効化も除外もされていないため、削除には先に無効化が必要です。", ko: "; {mustDisableFirst}개는 정지되지도 제외되지도 않아 삭제 전에 먼저 정지해야 합니다." },
-  "keys.bulk.notFoundSuffix":         { "zh-CN": "；{notFound} 把已经不存在。", "zh-TW": "；{notFound} 把已經不存在。", en: "; {notFound} key(s) no longer exist.", ja: "；{notFound} 件はすでに存在しません。", ko: "; {notFound}개는 이미 존재하지 않습니다." },
-
-  // 「添加 Key」分组下拉（设计 §10.2，控制端裁定现在就建容器）。
-  // 【自动注册】两项先占位禁用，留给注册机板块接线到注册机端点；容器与两组
-  // 平级的结构现在定死，到时候只需要摘掉 disabled、接上真实 onClick。
-  "keys.addMenu.open":          { "zh-CN": "添加 Key", "zh-TW": "新增 Key", en: "Add key", ja: "Key を追加", ko: "Key 추가" },
-  "keys.addMenu.autoGroup":     { "zh-CN": "自动注册", "zh-TW": "自動註冊", en: "Auto-register", ja: "自動登録", ko: "자동 등록" },
-  "keys.addMenu.autoMoemail":   { "zh-CN": "通过 MoeMail 通道立即补池", "zh-TW": "透過 MoeMail 通道立即補池", en: "Mint via the MoeMail channel now", ja: "MoeMail チャネルで今すぐ補充", ko: "MoeMail 채널로 즉시 보충" },
-  "keys.addMenu.autoYyds":      { "zh-CN": "通过 YYDS 通道立即补池", "zh-TW": "透過 YYDS 通道立即補池", en: "Mint via the YYDS channel now", ja: "YYDS チャネルで今すぐ補充", ko: "YYDS 채널로 즉시 보충" },
-  // ⚠️ **`keys.addMenu.autoPlaceholder` 是被删掉的，不是漏了。**
-  // 它是当初给【自动注册】那两项占位时用的 tooltip（「这个通道还没有接入本面板」），
-  // 本任务把两项真的接上了 ⇒ 那句话变成假话。**留一条零消费者的死文案比删掉它更贵**：
-  // 下一个读字典的人会以为面板上还有这么一句提示。
-  // ⚠️ **上一版这里写的理由是「check-i18n 只会把它报成一条警告」，那句话
-  // 今天是假的**：第 ④ 条已升成硬错 ⇒ 真留着它，`scripts/check-i18n.mjs` 这道门禁当场 exit 1。
-  // 删它的理由因此不再是「门禁拦不住」，而是上面那句——**死文案本身会骗人**。
-  "keys.addMenu.manualGroup":   { "zh-CN": "手动", "zh-TW": "手動", en: "Manual", ja: "手動", ko: "수동" },
-  "keys.addMenu.pasteSingle":   { "zh-CN": "粘贴单个 Key", "zh-TW": "貼上單一 Key", en: "Paste a single key", ja: "単一の key を貼り付け", ko: "단일 key 붙여넣기" },
-  // ⚠️ **不照抄设计原文"批量导入（多行 / JSON 数组）"**：导入框只按行拆
-  // （`js/pure/keys-write.mjs` 的 `importLines()`），不解析 JSON 数组——照抄那句
-  // 等于承诺一个没有实现的能力，粘一个 `["sk-a","sk-b"]` 进去只会得到"不合法
-  // 的 key"，不是两把导入成功的 key。这句话如实描述现在的行为。
-  "keys.addMenu.bulkImport":    { "zh-CN": "批量导入（每行一把）", "zh-TW": "批量匯入（每行一把）", en: "Bulk import (one per line)", ja: "一括インポート（1 行に 1 つ）", ko: "일괄 가져오기(한 줄에 하나)" },
-
-  // 导入弹窗。⚠️ **导入框必须原样按行发（空行也发）**：`js/pure/keys-write.mjs`
-  // 的 `importLines()` 与后端 `src/core/keypool-repo.ts` 的 `addMany()` 共用同一个
-  // 口径——位置（1 基）就是行号，前端先过滤空行会让报给运维的行号错位。
-  "keys.import.title":      { "zh-CN": "批量导入 Key", "zh-TW": "批量匯入 Key", en: "Import keys", ja: "Key の一括インポート", ko: "Key 일괄 가져오기" },
-  "keys.import.placeholder":{ "zh-CN": "每行一把 key，支持多行粘贴", "zh-TW": "每行一把 key，支援多行貼上", en: "One key per line; multi-line paste supported", ja: "1 行につき 1 つの key。複数行の貼り付けに対応", ko: "한 줄에 하나의 key. 여러 줄 붙여넣기 지원" },
-  "keys.import.resetExisting":    { "zh-CN": "对已存在的 key 也重置冷却 / strikes / 剔除状态", "zh-TW": "對已存在的 key 也重設冷卻 / strikes / 剔除狀態", en: "Also reset cooldown / strikes / eviction for keys that already exist", ja: "既存の key もクールダウン／strikes／除外状態をリセットする", ko: "이미 존재하는 key도 쿨다운/strikes/제외 상태를 재설정" },
-  "keys.import.resetExistingWarn":{ "zh-CN": "这会让一把被剔除的 key 重新可用，请确认这是你想要的。", "zh-TW": "這會讓一把被剔除的 key 重新可用，請確認這是你想要的。", en: "This can bring an evicted key back into service — make sure this is what you want.", ja: "これにより除外済みの key が再び使用可能になります。意図した操作か確認してください。", ko: "이렇게 하면 제외된 key가 다시 사용 가능해집니다. 의도한 작업인지 확인하세요." },
-  "keys.import.submit":     { "zh-CN": "导入", "zh-TW": "匯入", en: "Import", ja: "インポート", ko: "가져오기" },
-  "keys.import.emptyErr":   { "zh-CN": "请至少输入一把 key", "zh-TW": "請至少輸入一把 key", en: "Enter at least one key", ja: "少なくとも 1 つの key を入力してください", ko: "key를 하나 이상 입력하세요" },
-  // ⚠️⚠️ **`reset` 直接取响应字段，不是 `duplicated.length`**（评审提出）——
-  // 两个数字不是一回事，见 `js/pure/keys-write.mjs` 的 `importResultCounts()`。
-  "keys.import.result":       { "zh-CN": "已添加 {added} 把，{duplicated} 把重复被跳过（其中 {reset} 把已重置状态），{invalid} 行不是合法的 key。", "zh-TW": "已新增 {added} 把，{duplicated} 把重複被跳過（其中 {reset} 把已重設狀態），{invalid} 行不是合法的 key。", en: "Added {added}, skipped {duplicated} duplicate(s) ({reset} of them reset), {invalid} line(s) are not valid keys.", ja: "{added} 件を追加、{duplicated} 件の重複をスキップ（うち {reset} 件をリセット）、{invalid} 行は無効な key です。", ko: "{added}개 추가, 중복 {duplicated}개 건너뜀(그중 {reset}개 재설정), {invalid}줄은 유효한 key가 아닙니다." },
-  "keys.import.invalidLines": { "zh-CN": "不合法的行：{lines}", "zh-TW": "不合法的行：{lines}", en: " Invalid line(s): {lines}", ja: "無効な行：{lines}", ko: " 잘못된 줄: {lines}" },
-
-  "keys.note.title": { "zh-CN": "编辑备注", "zh-TW": "編輯備註", en: "Edit note", ja: "備考を編集", ko: "비고 편집" },
-  "keys.note.save":  { "zh-CN": "保存", "zh-TW": "儲存", en: "Save", ja: "保存", ko: "저장" },
-
-  "keys.deleteConfirmTitle": { "zh-CN": "删除这把 key？", "zh-TW": "刪除這把 key？", en: "Delete this key?", ja: "この key を削除しますか？", ko: "이 key를 삭제하시겠습니까?" },
-  "keys.deleteConfirmMsg":   { "zh-CN": "此操作不可撤销。删除前请确认这把 key 已经停用或已被剔除。", "zh-TW": "此操作不可復原。刪除前請確認這把 key 已經停用或已被剔除。", en: "This cannot be undone. Make sure this key is already disabled or evicted before deleting.", ja: "この操作は取り消せません。削除する前に、この key がすでに無効化または除外されていることを確認してください。", ko: "이 작업은 되돌릴 수 없습니다. 삭제하기 전에 이 key가 이미 정지되었거나 제외되었는지 확인하세요." },
-  // 「清连续失败」的确认弹窗：**它保护的不是"能不能撤销"，是"点的时候知不知道
-  // 点的是哪一个"**——清冷却只让 key 现在就能用，离下一次被剔除仍只差一次失败；
-  // 清连续失败才是真的清账。两句话必须点名对方，不能只说"这是一个危险操作"。
-  "keys.clearStrikesConfirmTitle": { "zh-CN": "清空连续失败计数？", "zh-TW": "清空連續失敗計數？", en: "Clear the strike count?", ja: "連続失敗回数をクリアしますか？", ko: "연속 실패 횟수를 초기화하시겠습니까?" },
-  "keys.clearStrikesConfirmMsg":   { "zh-CN": "这与「清冷却」不是一回事：清冷却只是让这把 key 现在就能用，它离下一次被剔除仍然只差一次失败；清连续失败才会把失败计数真正清零，给它一次干净的机会。", "zh-TW": "這與「清冷卻」不是一回事：清冷卻只是讓這把 key 現在就能用，它離下一次被剔除仍然只差一次失敗；清連續失敗才會把失敗計數真正清零，給它一次乾淨的機會。", en: "This is not the same as clearing the cooldown: clearing the cooldown only lets this key work right now — it is still just one more failure away from eviction. Clearing strikes actually zeroes the failure count, giving it a genuinely clean slate.", ja: "「クールダウン解除」とは別物です。クールダウン解除はこの key を今すぐ使えるようにするだけで、次に 1 回失敗すれば依然として除外されます。連続失敗回数のクリアは、その回数を実際にゼロへ戻し、本当の意味でやり直させます。", ko: "「쿨다운 해제」와는 다릅니다. 쿨다운 해제는 이 key를 지금 당장 사용할 수 있게 할 뿐, 여전히 한 번만 더 실패하면 제외됩니다. 연속 실패 초기화는 실패 횟수를 실제로 0으로 되돌려 진짜 깨끗한 기회를 줍니다." },
-  // 单条 DELETE 的 409 拒绝文案（HTTP 409 + 顶层 reason，与批量路径的 200 + 逐项
-  // reason 是两种不同的形状，见 `src/http/admin/handlers/keys-write.ts` 的
-  // `keyDeleteHandler` 文件头 ⚠️⚠️ 那一段）。
-  "keys.mustDisableFirst": { "zh-CN": "请先停用这把 key 再删除（删除不可撤销，而停用随时可以撤销）", "zh-TW": "請先停用這把 key 再刪除（刪除不可復原，而停用隨時可以復原）", en: "Disable this key before deleting it (deletion is permanent; disabling can be undone anytime)", ja: "削除する前にこの key を無効化してください（削除は取り消せませんが、無効化はいつでも元に戻せます）", ko: "삭제하기 전에 이 key를 먼저 정지하세요(삭제는 되돌릴 수 없지만 정지는 언제든 되돌릴 수 있습니다)" },
-  "keys.actionOk":     { "zh-CN": "操作成功", "zh-TW": "操作成功", en: "Done", ja: "操作が完了しました", ko: "작업 완료" },
-  "keys.writeFailed":  { "zh-CN": "操作失败，请稍后重试", "zh-TW": "操作失敗，請稍後重試", en: "Action failed, please try again", ja: "操作に失敗しました。しばらくしてから再試行してください", ko: "작업에 실패했습니다. 잠시 후 다시 시도하세요" },
-
-  // ── Key 池板块：单把 key 的验活 ────────────────────────────────────────────
-  //
-  // ⚠️⚠️ **这一整段刻意一个 `{占位符}` 都没有。** 它们全部经
-  // `js/pure/keys-write.mjs` 的 `verifyResultLabelKey()` / `verifyDisabledTitleKey()`
-  // 以**裸标签**的形式返回，再交给 `elI18n(tag, key)`（不带参数的 `t()`）。
-  // 任何一条加上占位符，`scripts/check-i18n.mjs` 第 ⑧ 条会在那两个函数的
-  // `return "…";` 那一行报错（字面量后面跟的是 `;` 不是 `,`）——与
-  // `keys.bulk.allOk` / `keys.bulk.partial` 那两条是同一个约束。
-  //
-  // ⚠️⚠️ **`probeInFlight` 与 `probeCooldown` 是两条键，不许合成一条。**
-  // 后端 `src/http/admin/probe-guard.ts` 在**同一个 429** 下产出这两种拒绝，
-  // 而处置完全不同：前者等上一次回来，后者隔一小段再来，**且后者不是这把 key
-  // 的故障**。合成一条就是让运维去换一把其实完好的 key。这两句与 `reg.refuse.*`
-  // 那两条说的是同一件事的两个入口（通道测试 / 验活共用同一份护栏），文案因此
-  // 只差「向邮箱服务发一次请求」与「向上游发一次请求」这一处。
-  "keys.action.verify": { "zh-CN": "验活", "zh-TW": "驗活", en: "Verify", ja: "疎通確認", ko: "활성 확인" },
-  "keys.verify.running": { "zh-CN": "正在探测…", "zh-TW": "正在探測…", en: "Probing…", ja: "確認中…", ko: "확인 중…" },
-  // 只读探针那句话（订正）。**它必须是可见文本，不是 tooltip**：运维会以为
-  // 「验活成功」就等于把 strikes 清了，而这条端点写零个存储字段。
-  "keys.verify.readOnlyNote": { "zh-CN": "这是一次人造探测，不改变这把 key 的状态：strikes、冷却、用量统计都不会动。", "zh-TW": "這是一次人造探測，不改變這把 key 的狀態：strikes、冷卻、用量統計都不會動。", en: "This is a synthetic probe. It does not change this key's state — strikes, cooldown and usage stats all stay untouched.", ja: "これは人工的なプローブです。この key の状態は変わりません（strikes・クールダウン・利用統計はいずれも動きません）。", ko: "이것은 인위적인 탐지입니다. 이 key의 상태는 바뀌지 않습니다(strikes·쿨다운·사용량 통계 모두 그대로입니다)." },
-  "keys.verify.hintEnabled": { "zh-CN": "按一下会真的向上游发一次请求。", "zh-TW": "按一下會真的向上游發一次請求。", en: "Each click really does send one request upstream.", ja: "クリックするたびに上流へ実際にリクエストを 1 回送ります。", ko: "누를 때마다 업스트림으로 실제 요청을 한 번 보냅니다." },
-  "keys.verify.disabledInFlight": { "zh-CN": "上一次探测还在飞，等它回来。", "zh-TW": "上一次探測還在飛，等它回來。", en: "The previous probe is still in flight; wait for it to come back.", ja: "前回のプローブがまだ実行中です。戻るまでお待ちください。", ko: "이전 탐지가 아직 진행 중입니다. 돌아올 때까지 기다리세요." },
-  "keys.verify.disabledCoolingDown": { "zh-CN": "刚探过，隔一小段时间再试。", "zh-TW": "剛探過，隔一小段時間再試。", en: "Just probed; try again in a moment.", ja: "たった今確認したばかりです。少し待ってから再試行してください。", ko: "방금 탐지했습니다. 잠시 후 다시 시도하세요." },
-  "keys.verify.disabledNoKey": { "zh-CN": "这一行没有可用的 key 标识，点不了。", "zh-TW": "這一行沒有可用的 key 識別碼，點不了。", en: "This row has no usable key id, so the button does nothing.", ja: "この行には利用可能な key の識別子がないため、押せません。", ko: "이 행에는 사용할 수 있는 key 식별자가 없어 누를 수 없습니다." },
-  "keys.verify.ok": { "zh-CN": "验活通过：上游接受了这把 key。", "zh-TW": "驗活通過：上游接受了這把 key。", en: "Verified: upstream accepted this key.", ja: "確認できました：上流はこの key を受け付けました。", ko: "확인 완료: 업스트림이 이 key를 수락했습니다." },
-  "keys.verify.unauthorized": { "zh-CN": "上游拒绝了这把 key（401/403）：它已经失效，需要换一把。", "zh-TW": "上游拒絕了這把 key（401/403）：它已經失效，需要換一把。", en: "Upstream rejected this key (401/403): it is no longer valid — replace it.", ja: "上流がこの key を拒否しました（401/403）：すでに無効です。差し替えてください。", ko: "업스트림이 이 key를 거부했습니다(401/403): 이미 무효이므로 교체해야 합니다." },
-  "keys.verify.rateLimited": { "zh-CN": "上游正在限流（429）：这把 key 本身没问题，等一会儿再用。", "zh-TW": "上游正在限流（429）：這把 key 本身沒問題，等一會兒再用。", en: "Upstream is rate limiting (429): the key itself is fine — wait a while.", ja: "上流がレート制限中です（429）：key 自体に問題はありません。しばらく待ってください。", ko: "업스트림이 속도를 제한하고 있습니다(429): key 자체는 문제없으니 잠시 기다리세요." },
-  "keys.verify.upstreamError": { "zh-CN": "上游回了一个未细分的错误状态码：这次探测没能确认这把 key 是好是坏。", "zh-TW": "上游回了一個未細分的錯誤狀態碼：這次探測沒能確認這把 key 是好是壞。", en: "Upstream returned an error status we do not classify further: this probe could not tell whether the key is good.", ja: "上流が細分していないエラーステータスを返しました：この key が有効かどうかは今回の確認では判断できません。", ko: "업스트림이 세분화하지 않은 오류 상태를 반환했습니다: 이번 탐지로는 이 key의 정상 여부를 알 수 없습니다." },
-  "keys.verify.timeout": { "zh-CN": "探测超时：上游在超时档内没有返回响应头。", "zh-TW": "探測逾時：上游在逾時檔內沒有返回回應標頭。", en: "Probe timed out: upstream did not return response headers within the timeout budget.", ja: "プローブがタイムアウトしました：上流はタイムアウト時間内にレスポンスヘッダーを返しませんでした。", ko: "탐지 시간 초과: 업스트림이 제한 시간 안에 응답 헤더를 반환하지 않았습니다." },
-  "keys.verify.networkError": { "zh-CN": "连不上上游：这次探测没有拿到任何响应。", "zh-TW": "連不上上游：這次探測沒有拿到任何回應。", en: "Cannot reach upstream: this probe got no response at all.", ja: "上流に到達できません：今回のプローブは応答をまったく受け取れませんでした。", ko: "업스트림에 연결할 수 없습니다: 이번 탐지는 어떤 응답도 받지 못했습니다." },
-  // 「后端加了一种、面板还不认识」时的诚实出口。**绝不冒充任何一档已知原因**——
-  // 落进「连不上上游」的话，面板会把一件它其实不懂的事说成一句确定的话。
-  "keys.verify.unknownReason": { "zh-CN": "后端给出了面板还不认识的一种探测结果，请核对两边的版本。", "zh-TW": "後端給出了面板還不認識的一種探測結果，請核對兩邊的版本。", en: "The backend reported a probe outcome this panel does not recognise yet — check that both sides are on the same version.", ja: "この画面がまだ認識できない種類の結果がバックエンドから返りました。両者のバージョンを確認してください。", ko: "이 콘솔이 아직 인식하지 못하는 종류의 결과가 백엔드에서 반환되었습니다. 양쪽 버전을 확인하세요." },
-  "keys.verify.probeInFlight": { "zh-CN": "上一次探测还没有返回，等它结束再试（这颗按钮每按一次都会真的向上游发一次请求）。", "zh-TW": "上一次探測還沒有回來，等它結束再試（這顆按鈕每按一次都會真的向上游發一次請求）。", en: "The previous probe has not returned yet; wait for it to finish before retrying (each click really does send a request upstream).", ja: "前回のプローブがまだ返っていません。終了してから再試行してください（このボタンは押すたびに上流へ実際にリクエストを送ります）。", ko: "이전 탐지가 아직 반환되지 않았습니다. 끝난 뒤에 다시 시도하세요(이 버튼은 누를 때마다 업스트림으로 실제 요청을 보냅니다)." },
-  "keys.verify.probeCooldown": { "zh-CN": "两次探测之间至少要隔一小段时间，请稍后再试。这不是这把 key 的故障。", "zh-TW": "兩次探測之間至少要隔一小段時間，請稍後再試。這不是這把 key 的故障。", en: "There is a minimum interval between two probes; please retry shortly. This is not a fault of the key.", ja: "プローブとプローブの間には最小間隔があります。少し待ってから再試行してください。key の障害ではありません。", ko: "탐지와 탐지 사이에는 최소 간격이 있습니다. 잠시 후 다시 시도하세요. key의 장애가 아닙니다." },
-  "keys.verify.keyNotFound": { "zh-CN": "这把 key 已经不在池子里了，刷新一下列表。", "zh-TW": "這把 key 已經不在池子裡了，重新整理一下列表。", en: "This key is no longer in the pool — refresh the list.", ja: "この key はすでにプールにありません。一覧を再読み込みしてください。", ko: "이 key는 더 이상 풀에 없습니다. 목록을 새로 고치세요." },
-  "keys.verify.unauthorizedAdmin": { "zh-CN": "管理会话已失效，请重新输入管理口令。", "zh-TW": "管理工作階段已失效，請重新輸入管理口令。", en: "The admin session has expired; enter the admin token again.", ja: "管理セッションの有効期限が切れました。管理トークンを入力し直してください。", ko: "관리 세션이 만료되었습니다. 관리 토큰을 다시 입력하세요." },
-  "keys.verify.transportError": { "zh-CN": "这次探测没有发出去：请求本身失败了，与上游状态无关。", "zh-TW": "這次探測沒有發出去：請求本身失敗了，與上游狀態無關。", en: "This probe never left the panel: the request itself failed, which says nothing about upstream.", ja: "今回のプローブは送信されていません：リクエスト自体が失敗しており、上流の状態とは無関係です。", ko: "이번 탐지는 전송되지 않았습니다: 요청 자체가 실패한 것이며 업스트림 상태와는 무관합니다." },
-
-  // ── 概览板块 ───────────────────────────────────────────────────────────────
-  "ov.title":            { "zh-CN": "概览", "zh-TW": "概覽", en: "Overview", ja: "概要", ko: "개요" },
-  "ov.pool.total":       { "zh-CN": "总数", "zh-TW": "總數", en: "Total", ja: "総数", ko: "총계" },
-  "ov.pool.fresh":       { "zh-CN": "可用", "zh-TW": "可用", en: "Available", ja: "利用可能", ko: "사용 가능" },
-  "ov.pool.cooling":     { "zh-CN": "冷却中", "zh-TW": "冷卻中", en: "Cooling down", ja: "クールダウン中", ko: "쿨다운 중" },
-  "ov.pool.evicted":     { "zh-CN": "已剔除", "zh-TW": "已剔除", en: "Evicted", ja: "除外済み", ko: "제외됨" },
-  "ov.pool.disabled":    { "zh-CN": "已停用", "zh-TW": "已停用", en: "Disabled", ja: "無効化済み", ko: "비활성화됨" },
-
-  "ov.runtime.title":       { "zh-CN": "运行时信息", "zh-TW": "執行時資訊", en: "Runtime info", ja: "ランタイム情報", ko: "런타임 정보" },
-  "ov.runtime.version":     { "zh-CN": "版本号", "zh-TW": "版本號", en: "Version", ja: "バージョン", ko: "버전" },
-  "ov.runtime.runtimeLabel":{ "zh-CN": "运行时", "zh-TW": "執行時", en: "Runtime", ja: "ランタイム", ko: "런타임" },
-  "ov.runtime.node":        { "zh-CN": "Node", "zh-TW": "Node", en: "Node", ja: "Node", ko: "Node" },
-  "ov.runtime.worker":      { "zh-CN": "Cloudflare Workers", "zh-TW": "Cloudflare Workers", en: "Cloudflare Workers", ja: "Cloudflare Workers", ko: "Cloudflare Workers" },
-  "ov.runtime.serverTime":  { "zh-CN": "服务器时间", "zh-TW": "伺服器時間", en: "Server time", ja: "サーバー時刻", ko: "서버 시각" },
-  "ov.runtime.storageBackend": { "zh-CN": "存储后端", "zh-TW": "儲存後端", en: "Storage backend", ja: "ストレージバックエンド", ko: "스토리지 백엔드" },
-  "ov.storage.file":        { "zh-CN": "文件（store.json）", "zh-TW": "檔案（store.json）", en: "File (store.json)", ja: "ファイル（store.json）", ko: "파일(store.json)" },
-  "ov.storage.kv":          { "zh-CN": "KV", "zh-TW": "KV", en: "KV", ja: "KV", ko: "KV" },
-  "ov.runtime.memory":      { "zh-CN": "内存", "zh-TW": "記憶體", en: "Memory", ja: "メモリ", ko: "메모리" },
-  "ov.runtime.uptime":      { "zh-CN": "进程存活", "zh-TW": "行程存活時間", en: "Process uptime", ja: "プロセス稼働時間", ko: "프로세스 가동 시간" },
-  "ov.runtime.pid":         { "zh-CN": "PID", "zh-TW": "PID", en: "PID", ja: "PID", ko: "PID" },
-  // 产品不变式 11 逐字要求的那句话：不是 0、不是空、不隐藏格子。五语言都必须译出
-  // 同一个意思（Serverless、没有常驻进程），不许省略成一个模糊词。
-  "ov.runtime.serverless":  { "zh-CN": "Serverless · 无常驻进程", "zh-TW": "Serverless · 無常駐行程", en: "Serverless · no long-lived process", ja: "サーバーレス · 常駐プロセスなし", ko: "서버리스 · 상주 프로세스 없음" },
-  "ov.runtime.writable":    { "zh-CN": "存储可写", "zh-TW": "儲存可寫", en: "Storage writable", ja: "ストレージ書き込み可否", ko: "스토리지 쓰기 가능 여부" },
-  "ov.runtime.writableYes": { "zh-CN": "可写", "zh-TW": "可寫", en: "Writable", ja: "書き込み可能", ko: "쓰기 가능" },
-  "ov.runtime.writableNo":  { "zh-CN": "不可写", "zh-TW": "不可寫", en: "Not writable", ja: "書き込み不可", ko: "쓰기 불가" },
-  "ov.runtime.checkedAt":   { "zh-CN": "最近一次探测：{at}", "zh-TW": "最近一次探測：{at}", en: "Last checked: {at}", ja: "直近の確認: {at}", ko: "최근 확인: {at}" },
-
-  "ov.freshness.title": { "zh-CN": "新鲜度", "zh-TW": "新鮮度", en: "Freshness", ja: "鮮度", ko: "신선도" },
-  // 两条都要显示（当时登记的那条发现），各自给出真实上界。数字全部由
-  // overview.freshness 的响应值插入，不是硬编码。⚠️ 上一版这两句里还各有一个
-  // `{edge}`（KV 边缘缓存那个量），v0.4.0 整层删掉了 ⇒ `{upper}` 就等于 `{ttl}`，
-  // 两个占位符都留着是为了让「上界 = 哪个旋钮」在屏幕上看得见。
-  "ov.freshness.pool":  { "zh-CN": "别的实例判定的冷却 / 剔除：最多晚 {upper}（= 一个 {ttl} 的池快照，中间没有别的缓存）。这个窗口里本实例的写会覆盖对方刚写下的调度状态。", "zh-TW": "別的實例判定的冷卻 / 剔除：最多晚 {upper}（= 一個 {ttl} 的池快照，中間沒有別的快取）。這個視窗裡本實例的寫入會覆蓋對方剛寫下的排程狀態。", en: "Cooldowns/evictions decided by another instance: up to {upper} late (= one {ttl} pool snapshot, with no other cache in between). Within that window, writes from this instance also overwrite the scheduling state the other one just wrote.", ja: "他のインスタンスが判定したクールダウン／除外：最大 {upper} 遅れます（= {ttl} のスナップショット 1 つぶんで、間に別のキャッシュはありません）。この間、このインスタンスの書き込みは相手が書いたばかりのスケジューリング状態を上書きします。", ko: "다른 인스턴스가 판정한 쿨다운/제외: 최대 {upper} 늦게 반영됩니다(= {ttl} 스냅숏 하나이며 중간에 다른 캐시는 없습니다). 이 구간에서는 이 인스턴스의 쓰기가 상대가 방금 기록한 스케줄링 상태를 덮어씁니다." },
-  "ov.freshness.config":{ "zh-CN": "配置保存之后生效：最多 {upper}（= 一个 {ttl} 的配置缓存，中间没有别的缓存）。不是「立即生效」。", "zh-TW": "設定儲存之後生效：最多 {upper}（= 一個 {ttl} 的設定快取，中間沒有別的快取）。不是「立即生效」。", en: "Config changes take effect after saving: up to {upper} (= one {ttl} config cache, with no other cache in between). Not \"immediately\".", ja: "設定は保存後に反映されます：最大 {upper}（= {ttl} の設定キャッシュ 1 つぶんで、間に別のキャッシュはありません）。「即時反映」ではありません。", ko: "설정은 저장 후 반영됩니다: 최대 {upper}(= {ttl} 설정 캐시 하나이며 중간에 다른 캐시는 없습니다). \"즉시 반영\"이 아닙니다." },
-
-  // 设计文档 §10.1「今日用量」的订正。Tier-1 的 stats 是自这把 key 加入以来的
-  // 累计值，没有任何时间维度；把它标成「今日」是撒谎，标题直接写「累计（≈）」。
-  // **不再硬编码 (≈)**：`≈` 现在由 usageStats() 的 approx 字段驱动，逐格渲染
-  // （见 sec-overview.js 的 renderUsage/approxMark），标题只说「累计」这件事本身。
-  "ov.usage.title":       { "zh-CN": "累计", "zh-TW": "累計", en: "Cumulative", ja: "累計", ko: "누적" },
-  "ov.usage.requests":    { "zh-CN": "请求数", "zh-TW": "請求數", en: "Requests", ja: "リクエスト数", ko: "요청 수" },
-  "ov.usage.success":     { "zh-CN": "成功", "zh-TW": "成功", en: "Success", ja: "成功", ko: "성공" },
-  "ov.usage.failed":      { "zh-CN": "失败", "zh-TW": "失敗", en: "Failed", ja: "失敗", ko: "실패" },
-  "ov.usage.clientErrors":{ "zh-CN": "客户端 4xx", "zh-TW": "用戶端 4xx", en: "Client 4xx", ja: "クライアント 4xx", ko: "클라이언트 4xx" },
-  "ov.usage.successRate": { "zh-CN": "成功率", "zh-TW": "成功率", en: "Success rate", ja: "成功率", ko: "성공률" },
-  // ⚠️⚠️ **这一句分两版，选哪一版由 `pure/overview.mjs` 的 `usageTipKey(caps)` 判**
-  //    （终检点名的第二处）。上一版只有一句、**无条件**渲染，说的是「按天/按小时的
-  //    分解要等启用时间序列统计之后才有」——对一个**已经打开**统计的部署，
-  //    那句话把人从「用量」板块支开，而那里正挂着「还有 N 条没落盘」的横幅。
-  //    ⇒ 默认这一版**无论开没开都成立**（只说分解在哪个板块），
-  //    只有 `capabilities.stats.tier2Enabled === false`（确知关着）才换下面那一版。
-  "ov.usage.tip":         { "zh-CN": "这是自这批 key 加入以来的累计值，不是「今日」——按天/按小时的分解在「用量」板块。", "zh-TW": "這是自這批 key 加入以來的累計值，不是「今日」——按天/按小時的分解在「用量」板塊。", en: "This is the cumulative value since these keys were added, not \"today\" — the per-day/per-hour breakdown lives in the Usage section.", ja: "これはこの key が追加されて以降の累計値であり、「本日」ではありません——日次／時間次の分解は「使用量」セクションにあります。", ko: "이는 이 key가 추가된 이후의 누적값이며 \"오늘\"이 아닙니다 — 일별/시간별 분해는 \"사용량\" 섹션에 있습니다." },
-  // 确知关着时才多说一句「怎么开」。**「用量」板块的说明卡里写着开法**
-  //（`usage.off.howto`：环境变量 + 重启），所以这半句指过去是真的。
-  "ov.usage.tipTier2Off": { "zh-CN": "这是自这批 key 加入以来的累计值，不是「今日」——时间序列统计现在是关着的，按天/按小时的分解要等开启之后才有，开法写在「用量」板块里。", "zh-TW": "這是自這批 key 加入以來的累計值，不是「今日」——時間序列統計現在是關著的，按天/按小時的分解要等開啟之後才有，開法寫在「用量」板塊裡。", en: "This is the cumulative value since these keys were added, not \"today\" — time-series stats are currently off, so the per-day/per-hour breakdown only appears once they are enabled; the Usage section explains how.", ja: "これはこの key が追加されて以降の累計値であり、「本日」ではありません——時系列統計は現在無効のため、日次／時間次の分解は有効化してからになります。有効化の方法は「使用量」セクションに書かれています。", ko: "이는 이 key가 추가된 이후의 누적값이며 \"오늘\"이 아닙니다 — 시계열 통계가 현재 꺼져 있어 일별/시간별 분해는 켠 뒤에야 나옵니다. 켜는 방법은 \"사용량\" 섹션에 적혀 있습니다." },
-  // `≈` 标记的 tooltip：与 keys.approxTip 同一条道理（并发下少计 + 写消除延迟落盘），
-  // 这里是整池聚合（sumStats），不是单把 key，措辞相应调整。
-  // ⚠️ **「isolate 被回收时这一段会丢」这半句是补上去的，别再删**（评审第 2 轮）：
-  //    上一版只说「最多延迟一个触达间隔才落盘」，而紧挨着的 `keys.approxTip`
-  //    一直明写着「会丢」——它们说的是**同一个**未落盘窗口，两种诚实度只能取低的那一种。
-  //    由 `tests/ui/usage.test.ts` 的
-  //    「Tier-2 的 ≈ tooltip 与 Tier-1 一样明写「这一段会丢」」那一格的 key 名单钉着。
-  "ov.usage.approxTip":   { "zh-CN": "近似值：这是整池所有 key 的累计聚合，单把 key 的计数在并发下会少计（KV 没有 CAS），且最多延迟一个触达间隔才落盘，isolate 在此之前被回收时这一段会丢。", "zh-TW": "近似值：這是整池所有 key 的累計聚合，單把 key 的計數在並發下會少計（KV 沒有 CAS），且最多延遲一個觸達間隔才寫入，isolate 在此之前被回收時這一段會遺失。", en: "Approximate: this is the pool-wide aggregate over every key. Per-key counters undercount under concurrent requests (KV has no CAS) and can lag by up to one touch interval before being persisted — whatever has not been persisted is lost if the isolate is recycled first.", ja: "概算値: これはプール内の全 key を集計した値です。key ごとのカウンターは同時リクエスト下で少なく数えられ（KV に CAS がないため）、永続化は最大でタッチ間隔ぶん遅れることがあり、その前に isolate が回収されるとその分は失われます。", ko: "근사값: 이는 풀 전체 key의 누적 합계입니다. key별 카운터는 동시 요청에서 적게 집계되며(KV에 CAS 없음), 저장은 최대 하나의 접촉 간격만큼 늦어질 수 있고, 그 전에 isolate가 회수되면 그 구간은 사라집니다." },
-
-  "ov.config.title":      { "zh-CN": "配置摘要", "zh-TW": "設定摘要", en: "Config summary", ja: "設定サマリー", ko: "설정 요약" },
-  "ov.config.registrar":  { "zh-CN": "注册机", "zh-TW": "註冊機", en: "Registrar", ja: "レジストラー", ko: "등록기" },
-  "ov.config.on":         { "zh-CN": "已启用", "zh-TW": "已啟用", en: "Enabled", ja: "有効", ko: "활성화됨" },
-  "ov.config.off":        { "zh-CN": "已关闭", "zh-TW": "已關閉", en: "Disabled", ja: "無効", ko: "비활성화됨" },
-  "ov.config.blocked":    { "zh-CN": "已启用 · 本次没跑起来", "zh-TW": "已啟用 · 本次沒跑起來", en: "Enabled \u00b7 not started this time", ja: "有効 \u00b7 今回は起動せず", ko: "사용 중 \u00b7 이번에는 시작 못 함" },
-  "ov.config.channel":    { "zh-CN": "使用的通道", "zh-TW": "使用的通道", en: "Channel in use", ja: "使用するチャネル", ko: "사용 중인 채널" },
-  "ov.config.none":       { "zh-CN": "无", "zh-TW": "無", en: "None", ja: "なし", ko: "없음" },
-  "ov.config.targetKeys": { "zh-CN": "目标 key 数", "zh-TW": "目標 key 數", en: "Target key count", ja: "目標 key 数", ko: "목표 key 수" },
-  "ov.config.envLocked":  { "zh-CN": "被环境变量锁定的字段数：{count}", "zh-TW": "被環境變數鎖定的欄位數：{count}", en: "Fields locked by environment variables: {count}", ja: "環境変数でロックされているフィールド数: {count}", ko: "환경 변수로 잠긴 필드 수: {count}" },
-  "ov.config.envLockedTip": { "zh-CN": "这些字段在面板上改了也不会生效，因为环境变量的优先级更高：{fields}", "zh-TW": "這些欄位在面板上改了也不會生效，因為環境變數的優先權更高：{fields}", en: "Changing these fields in the panel has no effect — the environment variable takes priority: {fields}", ja: "これらのフィールドはパネルで変更しても反映されません。環境変数が優先されるためです: {fields}", ko: "이 필드는 패널에서 변경해도 적용되지 않습니다. 환경 변수가 우선하기 때문입니다: {fields}" },
-  // 红色横幅：设计 §5.4/config.ts 的 degraded 信号第一次有消费者。
-  "ov.config.degradedBanner": { "zh-CN": "本次配置装载发生了降级：部分字段读取失败或已回落到默认值，你在面板上保存过的值可能没有生效。", "zh-TW": "本次設定載入發生了降級：部分欄位讀取失敗或已回落到預設值，你在面板上儲存過的值可能沒有生效。", en: "This config load was degraded: some fields failed to read or fell back to defaults — values you saved in the panel may not be in effect.", ja: "今回の設定読み込みは劣化しました：一部のフィールドが読み込みに失敗したか既定値にフォールバックしています。パネルで保存した値が反映されていない可能性があります。", ko: "이번 설정 로드는 저하된 상태입니다: 일부 필드를 읽지 못했거나 기본값으로 대체되었습니다. 패널에서 저장한 값이 적용되지 않았을 수 있습니다." },
-
-  "ov.storageCard.title":    { "zh-CN": "存储", "zh-TW": "儲存", en: "Storage", ja: "ストレージ", ko: "스토리지" },
-  "ov.storageCard.backend":  { "zh-CN": "后端类型", "zh-TW": "後端類型", en: "Backend type", ja: "バックエンド種別", ko: "백엔드 유형" },
-  "ov.storageCard.writable": { "zh-CN": "可写性", "zh-TW": "可寫性", en: "Writability", ja: "書き込み可否", ko: "쓰기 가능 여부" },
-  "ov.storageCard.workerNote": { "zh-CN": "本部署预计每个 isolate 每天约 {estimate} 次 KV 读，只取决于刷新频率与池子规模，与请求数无关；实际总量还要乘以并发的 isolate 数目。详见 DEPLOY.md 的配额账小节。", "zh-TW": "本部署預計每個 isolate 每天約 {estimate} 次 KV 讀取，只取決於重新整理頻率與池子規模，與請求數無關；實際總量還要乘以並發的 isolate 數目。詳見 DEPLOY.md 的配額帳小節。", en: "This deployment is estimated at about {estimate} KV reads per isolate per day, driven only by refresh frequency and pool size — not by request volume. The real total also scales with the number of concurrently active isolates. See the quota section in DEPLOY.md.", ja: "このデプロイでは、1 isolate あたり 1 日約 {estimate} 回の KV 読み取りが見込まれます。これはリクエスト数ではなく更新頻度とプール規模だけで決まります。実際の合計は同時に動く isolate 数に比例して増えます。詳しくは DEPLOY.md の割り当てのセクションを参照してください。", ko: "이 배포는 isolate당 하루 약 {estimate}회의 KV 읽기가 예상되며, 요청 수가 아니라 새로고침 빈도와 풀 규모에만 좌우됩니다. 실제 총량은 동시에 활성화된 isolate 수만큼 곱해집니다. 자세한 내용은 DEPLOY.md의 할당량 섹션을 참고하세요." },
-  "ov.storageCard.workerNoteUnknown": { "zh-CN": "本部署的 KV 读写与请求数无关，只取决于刷新频率与池子规模；相关数字暂时读不到，无法给出估算，详见 DEPLOY.md 的配额账小节。", "zh-TW": "本部署的 KV 讀寫與請求數無關，只取決於重新整理頻率與池子規模；相關數字暫時讀不到，無法給出估算，詳見 DEPLOY.md 的配額帳小節。", en: "This deployment's KV reads/writes are independent of request volume — driven only by refresh frequency and pool size. The numbers needed for an estimate are unavailable right now. See the quota section in DEPLOY.md.", ja: "このデプロイの KV 読み書きはリクエスト数とは無関係で、更新頻度とプール規模だけで決まります。見積もりに必要な数値が現在取得できません。詳しくは DEPLOY.md の割り当てのセクションを参照してください。", ko: "이 배포의 KV 읽기/쓰기는 요청 수와 무관하며 새로고침 빈도와 풀 규모에만 좌우됩니다. 추정에 필요한 수치를 현재 가져올 수 없습니다. 자세한 내용은 DEPLOY.md의 할당량 섹션을 참고하세요." },
-  "ov.storageCard.nodeNote":  { "zh-CN": "文件存储没有配额限制，但每次写都会重写整个 store.json。", "zh-TW": "檔案儲存沒有配額限制，但每次寫入都會重寫整個 store.json。", en: "File storage has no quota limit, but every write rewrites the entire store.json.", ja: "ファイルストレージには割り当て制限はありませんが、書き込みのたびに store.json 全体を書き直します。", ko: "파일 스토리지는 할당량 제한이 없지만, 쓸 때마다 store.json 전체를 다시 씁니다." },
-
-  // ── 事件板块 ─────────────────────────────────────────────────────────────
-  "ev.title":  { "zh-CN": "事件", "zh-TW": "事件", en: "Events", ja: "イベント", ko: "이벤트" },
-  // 顶部常驻说明（两种运行时同一句，见概览板块 logs.processLog: false 那条先例）：
-  // Serverless 没有常驻进程，逐请求日志流在这里物理上不可能是完整的。
-  // **评审提出**：本期只有 config/pool 索引/管理接口/事件落库自身四类运维诊断事件
-  // 会出现在本面板（见 src/core/keypool-repo.ts / config.ts / admin/auth.ts /
-  // adapters/logger-store.ts 的 logger.log() 调用点）。
-  // **第三轮评审修正**：上一轮的文案曾错误地说"注册机（补池）事件还没有
-  // 产出"——这不属实。`src/core/registrar/{mint,config,tender}.ts` 与
-  // `adapters/mailbox-*.ts` 里有二十多处 `registrar.*` logger.log() 调用点，
-  // 这些事件是真实产出的，只是走的是裸 `ConsoleLogger`（src/http/wire.ts 的
-  // buildTendDeps()，Worker 的 scheduled() 与 fetch() 是两个不同的 isolate
-  // 生命周期，没有请求/响应边界可挂 logFlush，接上去需要 ctx.waitUntil 一类的
-  // 独立落盘机制，留给后续与注册机板块一起做），从未接进 `StoreLogger`，因此
-  // 从不落库、也就从不出现在本面板——"产出了但没接线"与"压根没产出"是两件不同
-  // 的事，前一版文案把它们混成了一件。key 的冷却/剔除**确实**目前压根不为这两类
-  // 状态变化打事件，这半句评审确认属实，未改动。
-  // ⚠️ 订正（§0.1 的禁令到这一步才解除，且**改之前跑过一次真机冒烟**：
-  // Node 真进程 + 真存储 + 真跑一轮补池，事件板块里数出 registrar.list_domains_failed ×4 /
-  // registrar.manual_tend_started ×1 / registrar.manual_tend_partial ×1 / config.updated ×1 /
-  // key.added ×2，凭据明文一个字都没有）。上一版说「注册机事件还没接入本面板」——
-  // **那句话早就不成立了**。同时补两件当时没说的事：面板自己的写操作也进这里；
-  // 事件要等攒批或一个触达间隔才落盘，刚发生的那条最长晚一分钟。
-  // **没变的那一半仍然如实写着**：转发路径自动打的冷却/剔除今天还是不产出事件。
-  "ev.notice": {"zh-CN": "这里只有低频结构化事件：配置读取失败、池索引重建、管理接口登录失败这类运维诊断，加上注册机的补池事件与面板自己的写操作（导入 / 停用 / 删除 key、改配置）。key 被转发路径自动打进冷却或剔除时目前仍然不产出事件，那一段要看池子里那把 key 自己的状态。事件是攒够一批或隔满一个触达间隔才落盘的，所以刚发生的那条最长要等一分钟才出现在这里。逐请求日志请看容器 stdout / Cloudflare 控制台的 Workers Logs——Serverless 形态没有常驻进程，逐请求日志流在这里物理上不可能是完整的。", "zh-TW": "這裡只有低頻結構化事件：設定讀取失敗、池索引重建、管理接口登入失敗這類維運診斷，加上註冊機的補池事件與面板自己的寫操作（匯入 / 停用 / 刪除 key、改設定）。key 被轉發路徑自動打進冷卻或剔除時目前仍然不產出事件，那一段要看池子裡那把 key 自己的狀態。事件是攢夠一批或隔滿一個觸達間隔才寫入的，所以剛發生的那條最長要等一分鐘才出現在這裡。逐請求日誌請看容器 stdout / Cloudflare 主控台的 Workers Logs——Serverless 形態沒有常駐行程，逐請求日誌流在這裡物理上不可能是完整的。", en: "This board shows only low-frequency structured events: operational diagnostics such as config read failures, pool index rebuilds and failed admin logins, plus the registrar's pool-refill events and the panel's own write operations (importing / disabling / deleting keys, changing configuration). Cooldowns and evictions applied automatically by the forwarding path still produce no events — for those, look at the state of the key itself in the pool. Events are persisted in batches or once a flush interval has elapsed, so a just-happened event can take up to a minute to appear here. For per-request logs, check container stdout or Cloudflare's Workers Logs — the serverless shape has no long-lived process, so a complete per-request log stream is physically impossible here.", ja: "ここには低頻度の構造化イベントのみが表示されます：設定読み込み失敗、プール索引の再構築、管理者ログイン失敗などの運用診断に加え、レジストラーの補充イベントと、パネル自身の書き込み操作（キーのインポート／無効化／削除、設定変更）です。転送経路が自動で付けたクールダウンや除外は、今のところイベントを出力しません——その分はプール内のキー自身の状態を見てください。イベントはまとめて、またはフラッシュ間隔が経過してから保存されるため、たった今起きたものがここに現れるまで最大 1 分かかることがあります。リクエストごとのログはコンテナの stdout または Cloudflare コンソールの Workers Logs をご覧ください——サーバーレス形態には常駐プロセスがなく、ここで完全なリクエストごとのログストリームを見ることは物理的に不可能です。", ko: "여기에는 저빈도 구조화 이벤트만 표시됩니다: 설정 읽기 실패, 풀 인덱스 재구축, 관리자 로그인 실패 같은 운영 진단에 더해, 등록기의 풀 보충 이벤트와 패널 자신의 쓰기 작업(키 가져오기/정지/삭제, 설정 변경)입니다. 전달 경로가 자동으로 적용한 쿨다운·제외는 아직 이벤트를 생성하지 않습니다 — 그 부분은 풀에 있는 키 자체의 상태를 보세요. 이벤트는 일정량이 모이거나 플러시 간격이 지난 뒤에 저장되므로, 방금 발생한 이벤트가 여기에 나타나기까지 최대 1분이 걸릴 수 있습니다. 요청별 로그는 컨테이너 stdout 또는 Cloudflare 콘솔의 Workers Logs를 확인하세요 — 서버리스 형태에는 상주 프로세스가 없어 여기서 완전한 요청별 로그 스트림을 보는 것은 물리적으로 불가능합니다."},
-  "ev.search": { "zh-CN": "搜索事件名 / 说明 / 字段…", "zh-TW": "搜尋事件名 / 說明 / 欄位…", en: "Search event / message / fields…", ja: "イベント名／説明／フィールドを検索…", ko: "이벤트명/설명/필드 검색…" },
-
-  "ev.level.all":   { "zh-CN": "全部级别", "zh-TW": "全部級別", en: "All levels", ja: "すべてのレベル", ko: "모든 레벨" },
-  "ev.level.debug": { "zh-CN": "调试", "zh-TW": "偵錯", en: "Debug", ja: "デバッグ", ko: "디버그" },
-  "ev.level.info":  { "zh-CN": "信息", "zh-TW": "資訊", en: "Info", ja: "情報", ko: "정보" },
-  "ev.level.warn":  { "zh-CN": "警告", "zh-TW": "警告", en: "Warn", ja: "警告", ko: "경고" },
-  "ev.level.error": { "zh-CN": "错误", "zh-TW": "錯誤", en: "Error", ja: "エラー", ko: "오류" },
-  // 评审提出：一条事件的 level 字段缺失/畸形时，显式归到这一档，不冒充任何已知级别。
-  "ev.level.unknown": { "zh-CN": "未知", "zh-TW": "未知", en: "Unknown", ja: "不明", ko: "알 수 없음" },
-
-  "ev.pause":   { "zh-CN": "暂停", "zh-TW": "暫停", en: "Pause", ja: "一時停止", ko: "일시 정지" },
-  "ev.resume":  { "zh-CN": "继续", "zh-TW": "繼續", en: "Resume", ja: "再開", ko: "재개" },
-  "ev.clear":   { "zh-CN": "清空", "zh-TW": "清空", en: "Clear", ja: "クリア", ko: "지우기" },
-  "ev.clearTip":{ "zh-CN": "只清前端当前显示的列表，不影响服务端已落盘的事件。被清掉的不会自动回来——要重看请点「下载」或刷新页面", "zh-TW": "只清前端目前顯示的清單，不影響服務端已寫入的事件。被清掉的不會自動回來——要重看請點「下載」或重新整理頁面", en: "Clears only the list shown here; events already persisted server-side are unaffected. Cleared entries do not come back on their own — use Download, or reload the page", ja: "ここに表示中のリストのみクリアします。サーバー側に保存済みのイベントには影響しません。クリアした分は自動では戻りません——「ダウンロード」を使うか、ページを再読み込みしてください", ko: "여기에 표시된 목록만 지웁니다. 서버에 이미 저장된 이벤트에는 영향을 주지 않습니다. 지운 항목은 저절로 돌아오지 않습니다 — 「다운로드」를 쓰거나 페이지를 새로고침하세요" },
-  "ev.download":{ "zh-CN": "下载", "zh-TW": "下載", en: "Download", ja: "ダウンロード", ko: "다운로드" },
-  "ev.downloadFailed": { "zh-CN": "下载失败", "zh-TW": "下載失敗", en: "Download failed", ja: "ダウンロードに失敗しました", ko: "다운로드 실패" },
-  "ev.autoScroll": { "zh-CN": "自动滚动", "zh-TW": "自動捲動", en: "Auto-scroll", ja: "自動スクロール", ko: "자동 스크롤" },
-
-  "ev.pollStatus.active": { "zh-CN": "轮询中", "zh-TW": "輪詢中", en: "Polling", ja: "ポーリング中", ko: "폴링 중" },
-  "ev.pollStatus.paused": { "zh-CN": "已暂停", "zh-TW": "已暫停", en: "Paused", ja: "一時停止中", ko: "일시 정지됨" },
-  "ev.pollStatus.error":  { "zh-CN": "轮询出错，稍后重试", "zh-TW": "輪詢出錯，稍後重試", en: "Polling error, will retry", ja: "ポーリングエラー、後で再試行します", ko: "폴링 오류, 나중에 재시도합니다" },
-  // 评审发现：轮询指示灯的提示语接上"本 isolate"到底是哪一个（shardId），
-  // 拼在状态文案后面，不是独立一句——避免多语言各自维护一套"状态+分片"的组合句。
-  "ev.pollStatus.shardSuffix": { "zh-CN": "（本 isolate：{shardId}）", "zh-TW": "（本 isolate：{shardId}）", en: " (this isolate: {shardId})", ja: "（この isolate：{shardId}）", ko: "(이 isolate: {shardId})" },
-  // 评审发现：`buffered` 单独不占用黄条（见 pure/events.mjs 的 shouldWarn 说明），
-  // 但 isolate 随时可能被回收、缓冲里的事件会随之永久丢失——这里补一句 tooltip
-  // 常驻提示，愿意看的人看得到，不打扰不关心的人。
-  "ev.pollStatus.bufferedSuffix": { "zh-CN": "（本 isolate 还有 {count} 条事件未落盘，isolate 被回收会丢失）", "zh-TW": "（本 isolate 還有 {count} 條事件未寫入，isolate 被回收會遺失）", en: " ({count} events in this isolate not yet persisted — lost if the isolate is recycled)", ja: "（この isolate にはまだ {count} 件のイベントが未保存です。isolate が回収されると失われます）", ko: "(이 isolate에 아직 저장되지 않은 이벤트 {count}건이 있습니다. isolate가 회수되면 손실됩니다)" },
-  // 评审发现 [LOW]：`generatedAt` 是响应生成时刻，tooltip 报一句"数据截至几点"，
-  // 运维不用另外去猜面板有没有卡住（同 pure/keys.mjs 用它当参照时刻的理由）。
-  "ev.pollStatus.generatedAtSuffix": { "zh-CN": "（数据截至 {time}）", "zh-TW": "（資料截至 {time}）", en: " (data as of {time})", ja: "（データ基準時刻：{time}）", ko: "(데이터 기준 시각: {time})" },
-  // 本任务：`malformed` 恒为 0（`src/` 里没有产出畸形条目的路径），非 0 就说明
-  // 存储被外部写坏过。与 `buffered` 一样只进 tooltip、**不进黄条**——恒为假的
-  // 分支挂在告警判据上没有意义（见 pure/events.mjs 的 shouldWarn 说明）。
-  "ev.pollStatus.malformedSuffix": { "zh-CN": "（存储里有 {count} 条畸形事件被丢弃，多半是存储被本网关之外的东西写过）", "zh-TW": "（儲存裡有 {count} 條畸形事件被丟棄，多半是儲存被本閘道之外的東西寫過）", en: " ({count} malformed events in storage were discarded — most likely storage was written by something other than this gateway)", ja: "（ストレージ内の不正なイベント {count} 件を破棄しました。本ゲートウェイ以外から書き込まれた可能性が高いです）", ko: "(저장소의 잘못된 이벤트 {count}건을 버렸습니다. 이 게이트웨이 외부에서 기록되었을 가능성이 높습니다)" },
-
-
-  // dropped/budgetExhausted/truncated/cursorAhead 四条黄条文案：**各自独立**，
-  // 由响应对应字段各自驱动，不是同一句话的两种措辞（见 pure/events.mjs 的
-  // shouldWarn 说明）。
-  "ev.warnDropped": { "zh-CN": "本 isolate 的事件缓冲已丢弃 {count} 条最旧的事件（环形缓冲上限 100 条，落盘前被新事件顶掉）。", "zh-TW": "本 isolate 的事件緩衝已丟棄 {count} 條最舊的事件（環形緩衝上限 100 條，寫入前被新事件頂掉）。", en: "This isolate's event buffer has dropped {count} of the oldest events (ring buffer caps at 100 entries; new events pushed them out before they were persisted).", ja: "この isolate のイベントバッファは最も古い {count} 件のイベントを破棄しました（リングバッファの上限は 100 件で、書き込み前に新しいイベントに押し出されました）。", ko: "이 isolate의 이벤트 버퍼가 가장 오래된 이벤트 {count}건을 삭제했습니다(링 버퍼 상한 100건, 저장 전에 새 이벤트에 밀려남)." },
-  "ev.warnBudget":  { "zh-CN": "本 isolate 今天的事件写入预算已用完，未落盘的事件仍在容器日志 / Cloudflare 控制台的 Workers Logs 里。", "zh-TW": "本 isolate 今天的事件寫入預算已用完，未寫入的事件仍在容器日誌 / Cloudflare 主控台的 Workers Logs 裡。", en: "This isolate's event-write budget for today is used up. Events that were not persisted are still available in container logs / Cloudflare's Workers Logs.", ja: "この isolate の本日のイベント書き込み予算を使い切りました。書き込まれなかったイベントはコンテナログ／Cloudflare コンソールの Workers Logs に残っています。", ko: "이 isolate의 오늘 이벤트 쓰기 예산을 모두 사용했습니다. 저장되지 않은 이벤트는 컨테이너 로그/Cloudflare 콘솔의 Workers Logs에 남아 있습니다." },
-  // 评审提出：after+limit 组合截掉了一部分本该出现的旧事件，必须如实说，不能悄悄吞掉。
-  "ev.warnTruncated": { "zh-CN": "这一页没有显示全部符合条件的事件（超出了每次拉取的上限），更早的一部分被截掉了。", "zh-TW": "這一頁沒有顯示全部符合條件的事件（超出了每次拉取的上限），更早的一部分被截掉了。", en: "This page doesn't show every matching event (the per-fetch limit was exceeded); some older ones were cut off.", ja: "このページには条件に一致するすべてのイベントが表示されていません（取得件数の上限を超えました）。より古い一部が省略されています。", ko: "이 페이지에는 조건에 맞는 모든 이벤트가 표시되지 않습니다(가져오기 상한 초과). 더 오래된 일부가 잘렸습니다." },
-  // 评审提出：游标领先于本次请求的时钟（时钟回拨 / isolate 间时钟偏移），空结果
-  // 不代表没有新事件。前端已经自动把冻结的游标丢掉重新冷读（见 sec-events.js 的
-  // poll()），这条只是如实告诉运维"刚刚发生过一次自动恢复"，不需要手动操作。
-  // 评审要求：后端吐的 `cursor` 既不是有限数字也不是 null ⇒ **后端契约当场被破坏**。
-  // **上黄条**（不是只进 tooltip）：它意味着游标推不动、面板可能永远看不到新事件，
-  // 而旁边那条会自愈的 `cursorAhead` 反倒在判据里。一个悬停才看得见的提示，
-  // 把「面板在撒谎」降级成了「面板在小声说」。
-  "ev.warnCursorBroken": { "zh-CN": "接口返回的游标不合契约（既不是数字也不是空），面板可能一直看不到新事件。已保留上一个游标；请检查事件存储是否被本网关之外的东西写过。", "zh-TW": "介面回傳的游標不合契約（既不是數字也不是空），面板可能一直看不到新事件。已保留上一個游標；請檢查事件儲存是否被本閘道之外的東西寫過。", en: "The cursor returned by the API violates the contract (neither a number nor null); the board may never show new events. The previous cursor was kept — check whether the event storage was written by something other than this gateway.", ja: "API が返したカーソルが契約に反しています（数値でも null でもありません）。ボードに新しいイベントが今後まったく表示されない可能性があります。直前のカーソルを保持しました。イベントストレージが本ゲートウェイ以外から書き込まれていないか確認してください。", ko: "API가 반환한 커서가 계약을 위반했습니다(숫자도 null도 아님). 보드에 새 이벤트가 계속 표시되지 않을 수 있습니다. 이전 커서를 유지했으니, 이벤트 저장소가 이 게이트웨이 외부에서 기록되지 않았는지 확인하세요.", },
-  "ev.warnCursorAhead": { "zh-CN": "检测到游标领先于服务端时钟（可能是时钟回拨或 isolate 间时钟偏移），已自动重新拉取最新数据。", "zh-TW": "偵測到游標領先於服務端時鐘（可能是時鐘回撥或 isolate 間時鐘偏移），已自動重新擷取最新資料。", en: "Detected a cursor ahead of the server clock (possibly a clock rollback or skew between isolates); automatically re-fetched from a fresh cursor.", ja: "カーソルがサーバー時刻より先行していることを検出しました（時刻の巻き戻し、または isolate 間の時刻ずれの可能性）。自動的に新しいカーソルから再取得しました。", ko: "커서가 서버 시계보다 앞서 있는 것을 감지했습니다(시계 롤백 또는 isolate 간 시계 편차 가능성). 새 커서로 자동으로 다시 가져왔습니다." },
-
-  "ev.empty":   { "zh-CN": "还没有事件。", "zh-TW": "還沒有事件。", en: "No events yet.", ja: "まだイベントはありません。", ko: "아직 이벤트가 없습니다." },
-  // 通读评审提出：点过「清空」之后**不许**再显示 ev.empty ——那是在对运维说
-  // "这个部署从来没出过事"，而服务端明明有事件。这一句同时说清恢复路径。
-  "ev.cleared": { "zh-CN": "已清空本页显示。服务端已落盘的事件不受影响——点「下载」可取到全部，或刷新页面重新拉取。", "zh-TW": "已清空本頁顯示。服務端已寫入的事件不受影響——點「下載」可取得全部，或重新整理頁面重新拉取。", en: "Cleared the list shown here. Events already persisted server-side are unaffected — use Download to get them all, or reload the page to fetch them again.", ja: "このページの表示をクリアしました。サーバー側に保存済みのイベントには影響しません——「ダウンロード」で全件取得できます。ページを再読み込みすれば再取得されます。", ko: "이 페이지의 표시를 지웠습니다. 서버에 이미 저장된 이벤트에는 영향이 없습니다 — 「다운로드」로 전부 받을 수 있고, 페이지를 새로고침하면 다시 불러옵니다." },
-  "ev.noMatch": { "zh-CN": "没有符合筛选条件的事件。", "zh-TW": "沒有符合篩選條件的事件。", en: "No events match the current filters.", ja: "現在のフィルター条件に一致するイベントはありません。", ko: "현재 필터 조건에 맞는 이벤트가 없습니다." },
-
-  "ev.col.time":   { "zh-CN": "时间", "zh-TW": "時間", en: "Time", ja: "時刻", ko: "시각" },
-  "ev.col.level":  { "zh-CN": "级别", "zh-TW": "級別", en: "Level", ja: "レベル", ko: "레벨" },
-  "ev.col.event":  { "zh-CN": "事件", "zh-TW": "事件", en: "Event", ja: "イベント", ko: "이벤트" },
-  "ev.col.detail": { "zh-CN": "说明 / 字段", "zh-TW": "說明 / 欄位", en: "Message / fields", ja: "説明／フィールド", ko: "설명/필드" },
-
-  // 分组时间线的组头文案（按 corr 相邻折叠）。
-  "ev.timeline": { "zh-CN": "时间线 · {count} 条 · {corr}", "zh-TW": "時間線 · {count} 條 · {corr}", en: "Timeline · {count} events · {corr}", ja: "タイムライン · {count} 件 · {corr}", ko: "타임라인 · {count}건 · {corr}" },
-
-  // ── `set.*` 命名空间（设计 §10.4 的前三张卡，注册机那张已搬走）────────────
-  //
-  // ⚠️ **这一族不再全在设置页上**：`set.card.auth` / `set.card.upstream` 那两张卡在设置页，
-  // `set.card.registrar` 那张挂在注册机板块的「设置」分页里（`admin-ui/js/sec-registrar.js`
-  // 的 TAB，实现仍在 `sec-settings.js` 的 `registrarConfigPanel`）。**命名空间没跟着搬**，
-  // 理由就是下面那两条——`set.*` 的分界线是「谁在 `GET/PUT /admin/api/config` 那张表单上」，
-  // 不是「谁画在哪一页上」。
-  //
-  // ⚠️ **命名空间刻意用 `set.*` 而不是 `reg.*`**，两条理由：
-  // ① `reg.*` 是禁用词门禁（`scripts/check-i18n.mjs` 第 ⑥ 条）的作用域，而那道门禁
-  //    管的是「两条邮箱通道有没有被暗示成有高下」；设置页里绝大多数文案（超时、
-  //    冷却、口令）与通道毫无关系，塞进 `reg.*` 只会让那道门禁的作用域失焦。
-  // ② **真正与通道有关的那几处，本任务用的是结构性做法而不是词表**：两条通道的
-  //    凭据字段**共用同一对 key**（`set.field.channel.baseUrl` / `…apiKey`），
-  //    通道名与地址事实那两句仍然走 `reg.channel.*`（在门禁作用域内）。
-  //    共用一对 key 比词表强：想给某一条通道多写半句话，得先造出第二个 key，
-  //    而那一步在评审里看得见。
-  //
-  // ⚠️⚠️ **`set.field.*` 这一整族的完整名字，静态判据看不出来**：`fieldLabelKey()`
-  // 返回的是**模板字面量** `` `set.field.${path}` ``（`reg.fail.*` 那一族因为在 switch 里
-  // 直接 return 字面量，已经踩过同一个坑）。
-  // ⚠️ **上一版这里写的两句今天是假的，订正如下**：
-  // ①「这一族对三道 i18n 门禁是隐身的」—— 今天 `scripts/check-i18n.mjs` 把
-  //   `` `set.field.${…}` `` 收成一条**拼键前缀**（横幅第二行逐字打出来），
-  //   这一族落进「拼键覆盖」桶。**代价换了个形状但没消失**：那一桶等于**永久豁免
-  //   死 key 检查** —— 这一族里真有一条没人用的 key，第 ④ 条那条硬错永远看不见它。
-  // ②「门禁第 ① 条不去注释，注释里写一个长得像调用点的片段会被当成真实引用」——
-  //   **归到第 ① 条头上这半句今天是假的**：它现在先抠注释再广扫（实测：注释里写一个
-  //   拼错的完整属性形态 ⇒ EXIT=0；同一串挪到注释之外 ⇒ EXIT=1）。
-  //   ⚠️ **但「别在注释里把形态写全」这条纪律没作废，只是换了个引信**：真正不抠注释的是
-  //   `tests/unit/i18n-dict.test.ts` 的「admin-ui 里引用的每个 key 都在字典里」那一格，
-  //   它对整份原文跑两条窄正则 —— 改注释时当场把它踩响过一次。
-  //   ⚠️ **那两条正则今天是引号无关的**（单双引号都认，反引号仍不认）
-  //   ⇒ 这条纪律的射程**变大了**：从前写成单引号能躲过去，今天躲不掉。
-  // ⇒ **补一道自己的**：`tests/ui/settings.test.ts` 的
-  // 「后端 EDITABLE_FIELDS 的每条路径都有一条 set.field.* 文案」从后端那份
-  // 编译期强制的清单出发反查字典，加字段不补文案当场红。
-  "set.title": { "zh-CN": "设置", "zh-TW": "設定", en: "Settings", ja: "設定", ko: "설정" },
-  "set.save": { "zh-CN": "保存", "zh-TW": "儲存", en: "Save", ja: "保存", ko: "저장" },
-  "set.card.auth": { "zh-CN": "认证密钥", "zh-TW": "認證密鑰", en: "Credentials", ja: "認証キー", ko: "인증 키" },
-  "set.card.upstream": { "zh-CN": "上游与冷却", "zh-TW": "上游與冷卻", en: "Upstream & cooldowns", ja: "上流とクールダウン", ko: "업스트림 및 쿨다운" },
-  "set.card.registrar": { "zh-CN": "注册机", "zh-TW": "註冊機", en: "Registrar", ja: "レジストラー", ko: "등록기" },
-  // ── 第 4 张卡：集成示例（设计 §10.4）────────────────────────────────────────
-  // ⚠️ **这几条里一个地址字面量都不许出现。** 示例里的 base URL 只能在运行期从
-  // 面板自己的 origin 取（`admin-ui/js/sec-settings.js` 读一次再传给纯函数），
-  // 写死任何一个都是错的；占位口令走 `{key}` 插值，取值是
-  // `admin-ui/js/pure/examples.mjs` 的 `KEY_PLACEHOLDER`，字典里不再抄一份。
-  "set.card.examples": { "zh-CN": "集成示例", "zh-TW": "整合範例", en: "Integration examples", ja: "統合サンプル", ko: "통합 예제" },
-  "set.examples.desc": { "zh-CN": "下面的示例由本网关自己的协议目录生成，地址取自你现在访问面板用的那个域名。把 {key} 换成你的网关口令再执行——面板读不到明文口令，这里只能给占位符。", "zh-TW": "下面的範例由本網關自己的協議目錄產生，位址取自你現在存取面板用的那個網域。把 {key} 換成你的網關口令再執行——面板讀不到明文口令，這裡只能給佔位符。", en: "These snippets are generated from this gateway's own protocol catalog, and the base address is the origin you are viewing this panel on. Replace {key} with your gateway token before running them — the panel cannot read the token in clear text, so only a placeholder is shown here.", ja: "以下のサンプルはこのゲートウェイ自身のプロトコルカタログから生成され、基準アドレスは今このパネルを開いているオリジンです。実行する前に {key} をご自身のゲートウェイトークンに置き換えてください。パネルはトークンの平文を読めないため、ここではプレースホルダーのみを表示します。", ko: "아래 예제는 이 게이트웨이 자체의 프로토콜 카탈로그에서 생성되며, 기준 주소는 지금 이 패널을 열고 있는 오리진입니다. 실행하기 전에 {key}를 본인의 게이트웨이 토큰으로 바꾸세요. 패널은 토큰 평문을 읽을 수 없으므로 여기에는 자리표시자만 표시합니다." },
-  "set.examples.proto": { "zh-CN": "协议", "zh-TW": "協議", en: "Protocol", ja: "プロトコル", ko: "프로토콜" },
-  "set.examples.lang": { "zh-CN": "语言", "zh-TW": "語言", en: "Language", ja: "言語", ko: "언어" },
-  "set.examples.noModel": { "zh-CN": "这条协议上没有可用的模型，因此没有可以照抄的示例。", "zh-TW": "這條協議上沒有可用的模型，因此沒有可以照抄的範例。", en: "No model is available on this protocol, so there is no example to copy.", ja: "このプロトコルで使えるモデルがないため、コピーできるサンプルはありません。", ko: "이 프로토콜에서 쓸 수 있는 모델이 없어 복사할 예제가 없습니다." },
-  "set.examples.unavailable": { "zh-CN": "协议目录读不出来，这里不猜一段示例给你看。", "zh-TW": "協議目錄讀不出來，這裡不猜一段範例給你看。", en: "The protocol catalog could not be read, and no example is guessed here.", ja: "プロトコルカタログを取得できませんでした。ここで推測したサンプルは出しません。", ko: "프로토콜 카탈로그를 읽지 못했습니다. 여기서 추측한 예제는 보여 주지 않습니다." },
-  "set.card.upstreamNote": { "zh-CN": "池快照缓存与写消除间隔是建实例时读一次的：改了要重启容器 / 等 isolate 回收才生效，不是下一个请求就变。", "zh-TW": "池快照快取與寫入消除間隔是建立實例時讀一次的：改了要重啟容器 / 等 isolate 回收才生效，不是下一個請求就變。", en: "The pool snapshot cache and the write-elision interval are read once when the instance is built: changing them takes effect after a container restart or isolate recycle, not on the next request.", ja: "プールスナップショットのキャッシュと書き込み省略の間隔は、インスタンス構築時に一度だけ読まれます。変更は次のリクエストではなく、コンテナ再起動または isolate の再生成後に反映されます。", ko: "풀 스냅숏 캐시와 쓰기 생략 간격은 인스턴스를 만들 때 한 번만 읽습니다. 변경은 다음 요청이 아니라 컨테이너 재시작 또는 isolate 회수 이후에 반영됩니다." },
-  "set.adminTokenNote": { "zh-CN": "管理口令（ADMIN_TOKEN）只从环境变量读，面板改不了自己的钥匙；要轮换请改部署那一侧的环境变量并重启。", "zh-TW": "管理口令（ADMIN_TOKEN）只從環境變數讀，面板改不了自己的鑰匙；要輪換請改部署那一側的環境變數並重啟。", en: "The admin token (ADMIN_TOKEN) is read from the environment only — the panel cannot change its own key. To rotate it, change the environment variable on the deployment side and restart.", ja: "管理トークン（ADMIN_TOKEN）は環境変数からのみ読み込まれ、パネルが自分の鍵を変更することはできません。ローテーションするにはデプロイ側の環境変数を変更して再起動してください。", ko: "관리 토큰(ADMIN_TOKEN)은 환경 변수에서만 읽으며, 패널이 자신의 키를 바꿀 수는 없습니다. 교체하려면 배포 쪽 환경 변수를 바꾸고 재시작하세요." },
-  // ── 卡 1 顶上那一行「主 API 密钥」。**这三条里一个占位符字面量都不许出现**（同 `set.examples.desc`）。
-  "set.master.label": { "zh-CN": "主 API 密钥", "zh-TW": "主 API 金鑰", en: "Primary API key", ja: "メイン API キー", ko: "기본 API 키" },
-  "set.master.copy": { "zh-CN": "复制占位符", "zh-TW": "複製佔位符", en: "Copy placeholder", ja: "プレースホルダーをコピー", ko: "자리표시자 복사" },
-  "set.master.note": { "zh-CN": "客户端调用本网关用的就是这把口令。面板只看得到末 4 位，所以按钮复制的是占位符；明文在部署侧的 GATEWAY_TOKEN 里。", "zh-TW": "客戶端呼叫本網關用的就是這把口令。面板只看得到末 4 位，所以按鈕複製的是佔位符；明文在部署側的 GATEWAY_TOKEN 裡。", en: "Clients send this token to call the gateway. The panel sees only the last 4 characters, so the button copies a placeholder; the clear text lives in GATEWAY_TOKEN on the deployment side.", ja: "クライアントはこのトークンでゲートウェイを呼びます。パネルは末尾 4 文字しか見えないため、ボタンはプレースホルダーをコピーします。平文はデプロイ側の GATEWAY_TOKEN にあります。", ko: "클라이언트는 이 토큰으로 게이트웨이를 호출합니다. 패널은 마지막 4자리만 볼 수 있어 버튼은 자리표시자를 복사합니다. 평문은 배포 쪽 GATEWAY_TOKEN에 있습니다." },
-  "set.secretPlaceholder": { "zh-CN": "留空则不修改", "zh-TW": "留空則不修改", en: "Leave blank to keep unchanged", ja: "空欄のままにすると変更されません", ko: "비워 두면 변경되지 않습니다" },
-  "set.secretSet": { "zh-CN": "已配置", "zh-TW": "已設定", en: "configured", ja: "設定済み", ko: "설정됨" },
-  "set.secretUnset": { "zh-CN": "未配置", "zh-TW": "未設定", en: "not configured", ja: "未設定", ko: "설정 안 됨" },
-  "set.clearSecret": { "zh-CN": "清空", "zh-TW": "清空", en: "Clear", ja: "クリア", ko: "지우기" },
-  "set.meta.secret": { "zh-CN": "{state} · 末 4 位 {hint}", "zh-TW": "{state} · 末 4 位 {hint}", en: "{state} · last 4: {hint}", ja: "{state} · 末尾 4 桁 {hint}", ko: "{state} · 마지막 4자리 {hint}" },
-  "set.meta.quad": { "zh-CN": "存储 {stored} · 环境变量 {env} · 生效 {effective}", "zh-TW": "儲存 {stored} · 環境變數 {env} · 生效 {effective}", en: "stored {stored} · env {env} · effective {effective}", ja: "保存値 {stored} · 環境変数 {env} · 実効値 {effective}", ko: "저장값 {stored} · 환경 변수 {env} · 실효값 {effective}" },
-  "set.meta.unreadable": { "zh-CN": "这一格没读到", "zh-TW": "這一格沒讀到", en: "Could not read this field", ja: "この項目は取得できませんでした", ko: "이 항목을 읽지 못했습니다" },
-  "set.lockedBy": { "zh-CN": "由环境变量 {env} 锁定，面板改了不会生效；要改请改部署那一侧的 {env} 并重启。", "zh-TW": "由環境變數 {env} 鎖定，面板改了不會生效；要改請改部署那一側的 {env} 並重啟。", en: "Locked by the environment variable {env}; editing it here has no effect. Change {env} on the deployment side and restart.", ja: "環境変数 {env} によりロックされています。ここで編集しても反映されません。デプロイ側の {env} を変更して再起動してください。", ko: "환경 변수 {env}로 잠겨 있어 여기서 수정해도 반영되지 않습니다. 배포 쪽 {env}를 바꾸고 재시작하세요." },
-  "set.propagation": { "zh-CN": "本实例已经生效；别的副本 / isolate 最长 {bound} 之后才看得到这次改动。", "zh-TW": "本實例已經生效；別的副本 / isolate 最長 {bound} 之後才看得到這次改動。", en: "This instance already picked it up; other replicas/isolates may take up to {bound} to see the change.", ja: "このインスタンスには既に反映されています。他のレプリカ／isolate には最大 {bound} かかります。", ko: "이 인스턴스에는 이미 반영되었습니다. 다른 복제본/isolate는 최대 {bound} 걸릴 수 있습니다." },
-  "set.propagation.buildTime": { "zh-CN": "这次改动里有建实例时读一次的字段：已经落盘，但本实例也还没生效——要重启容器 / 等 isolate 回收才看得到。", "zh-TW": "這次改動裡有建立實例時讀一次的欄位：已經落盤，但本實例也還沒生效——要重啟容器 / 等 isolate 回收才看得到。", en: "This save touched fields that are read once when the instance is built: they are persisted, but this instance has not picked them up either — restart the container or wait for the isolate to be recycled.", ja: "今回の変更には、インスタンス構築時に一度だけ読まれる項目が含まれます。保存はされましたが、このインスタンスにもまだ反映されていません。コンテナを再起動するか、isolate の再生成を待ってください。", ko: "이번 변경에는 인스턴스를 만들 때 한 번만 읽는 항목이 있습니다. 저장은 되었지만 이 인스턴스에도 아직 반영되지 않았습니다. 컨테이너를 재시작하거나 isolate가 회수되기를 기다리세요." },
-  "set.readback": { "zh-CN": "已回读生效值，{count} 个字段发生了变化（已高亮）。", "zh-TW": "已回讀生效值，{count} 個欄位發生了變化（已標示）。", en: "Read back the effective values: {count} field(s) changed (highlighted).", ja: "実効値を読み戻しました。{count} 個の項目が変化しました（ハイライト済み）。", ko: "실효값을 다시 읽었습니다. {count}개 항목이 변경되었습니다(강조 표시)." },
-  "set.readback.none": { "zh-CN": "已回读生效值，没有字段发生变化。", "zh-TW": "已回讀生效值，沒有欄位發生變化。", en: "Read back the effective values: nothing changed.", ja: "実効値を読み戻しました。変化した項目はありません。", ko: "실효값을 다시 읽었습니다. 변경된 항목이 없습니다." },
-  "set.nothingToSave": { "zh-CN": "没有要保存的改动", "zh-TW": "沒有要儲存的改動", en: "Nothing to save", ja: "保存する変更はありません", ko: "저장할 변경 사항이 없습니다" },
-  "set.saveFailed": { "zh-CN": "保存失败", "zh-TW": "儲存失敗", en: "Save failed", ja: "保存に失敗しました", ko: "저장에 실패했습니다" },
-  "set.degraded": { "zh-CN": "本次装载有字段回落到了内置取值（存储里的值读不出来或不合法）。面板上「生效」那一列才是真的在用的值。", "zh-TW": "本次載入有欄位回落到了內建取值（儲存裡的值讀不出來或不合法）。面板上「生效」那一列才是真的在用的值。", en: "Some fields fell back to their built-in values on this load (the stored value was unreadable or invalid). The \\u201ceffective\\u201d column is what is actually in use.", ja: "今回の読み込みで一部の項目が組み込み値にフォールバックしました（保存値が読めないか不正）。実際に使われているのは「実効値」の列です。", ko: "이번 로드에서 일부 항목이 내장값으로 폴백했습니다(저장값을 읽을 수 없거나 올바르지 않음). 실제로 쓰이는 값은 「실효값」 열입니다." },
-  "set.advanced.title": { "zh-CN": "高级（改动前请读一遍说明）", "zh-TW": "進階（改動前請讀一遍說明）", en: "Advanced (read the note first)", ja: "詳細設定（先に説明をお読みください）", ko: "고급(먼저 설명을 읽으세요)" },
-  "set.advanced.warn": { "zh-CN": "这里填的地址是每一次自动注册的去向：换成别的服务器，那台服务器就能收到本网关注册时用的邮箱、密码与验证码。只有你自己搭了同样的注册后端时才改它。", "zh-TW": "這裡填的位址是每一次自動註冊的去向：換成別的伺服器，那台伺服器就能收到本網關註冊時用的信箱、密碼與驗證碼。只有你自己搭了同樣的註冊後端時才改它。", en: "This address is where every automated registration goes. Point it elsewhere and that server receives the mailbox, password and verification code used for each registration. Change it only if you run an equivalent registration backend yourself.", ja: "ここに入れるアドレスは、すべての自動登録の送信先です。別のサーバーに変えると、そのサーバーが各登録に使うメールアドレス・パスワード・認証コードを受け取ります。同等の登録バックエンドを自分で運用している場合にのみ変更してください。", ko: "여기에 넣는 주소는 모든 자동 가입의 전송 대상입니다. 다른 서버로 바꾸면 그 서버가 각 가입에 쓰이는 메일 주소·비밀번호·인증 코드를 받게 됩니다. 동일한 가입 백엔드를 직접 운영하는 경우에만 변경하세요." },
-  "set.advanced.confirmTitle": { "zh-CN": "确认修改注册去向", "zh-TW": "確認修改註冊去向", en: "Confirm the registration endpoint change", ja: "登録先の変更を確認", ko: "가입 대상 변경 확인" },
-  "set.advanced.save": { "zh-CN": "保存高级设置", "zh-TW": "儲存進階設定", en: "Save advanced settings", ja: "詳細設定を保存", ko: "고급 설정 저장" },
-  "set.clear.title": { "zh-CN": "清空凭据", "zh-TW": "清空憑據", en: "Clear credential", ja: "資格情報をクリア", ko: "자격 증명 지우기" },
-  "set.clear.warn": { "zh-CN": "要把「{field}」从存储里删掉吗？这一步不可撤销。", "zh-TW": "要把「{field}」從儲存裡刪掉嗎？這一步不可撤銷。", en: "Delete \\u201c{field}\\u201d from storage? This cannot be undone.", ja: "「{field}」をストレージから削除しますか？この操作は取り消せません。", ko: "「{field}」을(를) 저장소에서 삭제할까요? 되돌릴 수 없습니다." },
-  // ⚠️⚠️ **清空凭据的那句警告按状态分岔成四条，每一条都是确定句、没有「如果」。**
-  // 第一版是一句带「如果环境变量里也没有……」的条件句 —— 那等于把判断推回给读的人，
-  // 而他手上恰恰没有比面板更多的信息。**同一句通用红字，在这几种状态下有的是救命、
-  // 有的是吓人。** 分岔判据在 `admin-ui/js/pure/settings.mjs` 的 `clearWarning()`，
-  // 那里连「红不红」也一起给（取值决策不许落在板块文件里）。
-  "set.clear.effect.env": { "zh-CN": "环境变量里也提供了这一项：清空之后会回落到环境变量里的值，生效值不变。", "zh-TW": "環境變數裡也提供了這一項：清空之後會回落到環境變數裡的值，生效值不變。", en: "The environment also supplies this value: after clearing, it falls back to the environment variable and the effective value does not change.", ja: "この項目は環境変数からも与えられています。クリアすると環境変数の値にフォールバックし、実効値は変わりません。", ko: "이 항목은 환경 변수에서도 제공됩니다. 지우면 환경 변수의 값으로 폴백하며 실효값은 바뀌지 않습니다." },
-  "set.clear.effect.gatewayMissing": { "zh-CN": "环境变量里没有 GATEWAY_TOKEN：清空之后当前进程靠上一份快照还能继续跑，但下一次重启 / isolate 回收会起不来。清完请立刻在这一页写一把新的网关口令。", "zh-TW": "環境變數裡沒有 GATEWAY_TOKEN：清空之後當前行程靠上一份快照還能繼續跑，但下一次重啟 / isolate 回收會起不來。清完請立刻在這一頁寫一把新的網關口令。", en: "GATEWAY_TOKEN is not in the environment: after clearing, this process keeps running on its last good snapshot, but the next restart or isolate recycle will fail to start. Set a new gateway token on this page immediately afterwards.", ja: "環境変数に GATEWAY_TOKEN がありません。クリア後、現在のプロセスは直前の有効なスナップショットで動き続けますが、次の再起動や isolate の再生成で起動できなくなります。クリア後はすぐにこのページで新しいゲートウェイトークンを設定してください。", ko: "환경 변수에 GATEWAY_TOKEN이 없습니다. 지운 뒤 현재 프로세스는 마지막 정상 스냅숏으로 계속 동작하지만, 다음 재시작이나 isolate 회수 시 기동에 실패합니다. 지운 직후 이 페이지에서 새 게이트웨이 토큰을 설정하세요." },
-  "set.clear.effect.channelBreaks": { "zh-CN": "环境变量里没有这一项，而注册机开着、这条通道就是本次选中的那条：清空之后注册机装不起来，补池会停摆、池子慢慢耗干（网关转发不受影响）。清完请立刻重新填上，或者改选另一条通道。", "zh-TW": "環境變數裡沒有這一項，而註冊機開著、這條通道就是本次選中的那條：清空之後註冊機裝不起來，補池會停擺、池子慢慢耗乾（網關轉發不受影響）。清完請立刻重新填上，或者改選另一條通道。", en: "The environment does not supply this value, the registrar is on, and this is the channel it is set to use: after clearing, the registrar will not load, refilling stops and the pool drains slowly (gateway forwarding is unaffected). Re-enter it immediately, or switch to the other channel.", ja: "この項目は環境変数になく、レジストラーは有効で、このチャネルが今回使われるものです。クリアするとレジストラーは読み込めず、補充が止まってプールは少しずつ枯れます（ゲートウェイの転送は影響を受けません）。すぐに入れ直すか、もう一方のチャネルに切り替えてください。", ko: "이 항목은 환경 변수에 없고, 등록기가 켜져 있으며, 이 채널이 이번에 사용되는 채널입니다. 지우면 등록기를 불러오지 못해 보충이 멈추고 풀이 서서히 마릅니다(게이트웨이 전달은 영향을 받지 않습니다). 즉시 다시 입력하거나 다른 채널로 바꾸세요." },
-  "set.clear.effect.channelIdle": { "zh-CN": "这条通道不是本次选中的那条（或注册机是关着的），清空它现在不影响任何东西；但改用这条通道之前必须重新填。", "zh-TW": "這條通道不是本次選中的那條（或註冊機是關著的），清空它現在不影響任何東西；但改用這條通道之前必須重新填。", en: "This is not the channel the registrar is set to use (or the registrar is off), so clearing it changes nothing today — but you must fill it in again before switching to this channel.", ja: "このチャネルは今回使われるものではありません（またはレジストラーが無効です）。今クリアしても何にも影響しませんが、このチャネルに切り替える前には入れ直す必要があります。", ko: "이 채널은 이번에 사용되는 채널이 아닙니다(또는 등록기가 꺼져 있습니다). 지금 지워도 아무 영향이 없지만, 이 채널로 바꾸기 전에는 반드시 다시 입력해야 합니다." },
-  "set.clear.gatewayMissing": { "zh-CN": "网关口令已经被清空，而环境变量里也没有：请立刻在这一页写一把新的，否则下一次重启会起不来。", "zh-TW": "網關口令已經被清空，而環境變數裡也沒有：請立刻在這一頁寫一把新的，否則下一次重啟會起不來。", en: "The gateway token has been cleared and there is none in the environment either. Set a new one on this page now, or the next restart will fail.", ja: "ゲートウェイトークンがクリアされ、環境変数にもありません。今すぐこのページで新しいものを設定してください。さもないと次回の起動に失敗します。", ko: "게이트웨이 토큰이 지워졌고 환경 변수에도 없습니다. 지금 이 페이지에서 새로 설정하지 않으면 다음 재시작에 실패합니다." },
-  "set.clear.done": { "zh-CN": "「{field}」已从存储里清空", "zh-TW": "「{field}」已從儲存裡清空", en: "\\u201c{field}\\u201d cleared from storage", ja: "「{field}」をストレージからクリアしました", ko: "「{field}」을(를) 저장소에서 지웠습니다" },
-
-  // ── 危险区（设计里不带编号的那一节「重置到底重置了什么」）─────────────
-  //
-  // ⚠️⚠️ **这一族文案里一个「立即生效」都不许有**（设计 §5.3 那句同源）：两颗按钮的
-  // 后果都要等传播窗口才在别的副本上成立，说成「立即生效」就是当面说反话。
-  // **今天守它的不是 `scripts/check-i18n.mjs` 的禁词表**——那张表是「偏好词」表
-  //（推荐/默认/おすすめ/권장……）、作用域被 `BANNED_PREFIXES` 钉在 `reg.` /
-  // `keys.addMenu.auto` / 设置页那几条 `set.*` / 概览页那两条 `ov.config.*` 上
-  //（逐条以那张表为准，本文件头也说明了同一件事），
-  // 两张表里都没有「立即」这一族词，而且**今天也加不进去**：
-  // 字典里含「立即」的 key 全是正当使用（「立即补池」那一族，外加 `ov.freshness.config`
-  // 那句正文本身就写着「不是「立即生效」」），按词扫会先打中做对了的那几条。
-  // ⇒ 守它的是 `tests/unit/i18n-dict.test.ts` 的
-  // 「危险区那一族文案里一句「立即生效」都没有 —— 词表是「概念 × 语言」的矩阵」那一格。
-  "set.card.danger": { "zh-CN": "危险区", "zh-TW": "危險區", en: "Danger zone", ja: "危険ゾーン", ko: "위험 구역" },
-  "set.danger.intro": { "zh-CN": "这一区里的两个操作都不可撤销，而且没有任何撤销路径。点之前请把每一句话读完。", "zh-TW": "這一區裡的兩個操作都不可撤銷，而且沒有任何撤銷路徑。點之前請把每一句話讀完。", en: "Both actions in this zone are irreversible and there is no undo path. Read every line before you click.", ja: "このゾーンの 2 つの操作はいずれも取り消せず、元に戻す手段もありません。押す前にすべて読んでください。", ko: "이 구역의 두 작업은 모두 되돌릴 수 없으며 취소 경로도 없습니다. 누르기 전에 모두 읽어 주세요." },
-
-  "set.danger.reset.title": { "zh-CN": "重置配置", "zh-TW": "重置設定", en: "Reset configuration", ja: "設定をリセット", ko: "설정 초기화" },
-  "set.danger.reset.desc": { "zh-CN": "把存储里那份配置整把写回空，含网关口令与两条邮箱通道的凭据。生效值随后回落到环境变量与内置取值——被环境变量锁住的字段一个比特都不会动，所以这一步不等于恢复出厂。key 池、用量、事件与补池历史都不碰。", "zh-TW": "把儲存裡那份設定整把寫回空，含網關口令與兩條郵箱通道的憑據。生效值隨後回落到環境變數與內建取值——被環境變數鎖住的欄位一個位元都不會動，所以這一步不等於恢復原廠。key 池、用量、事件與補池歷史都不碰。", en: "Writes the stored configuration back to empty in one go, including the gateway token and both mailbox channel credentials. Effective values then fall back to environment variables and built-in values \u2014 fields locked by the environment do not move by a single bit, so this is not a factory reset. The key pool, usage, events and refill history are left alone.", ja: "ストレージ上の設定をまるごと空に書き戻します（ゲートウェイトークンと 2 つのメールチャネルの資格情報を含む）。実効値はその後、環境変数と組み込みの値にフォールバックします。環境変数でロックされた項目は 1 ビットも動かないため、これは工場出荷状態への復元ではありません。キープール・使用量・イベント・補充履歴には触れません。", ko: "저장소에 있는 설정을 통째로 비웁니다(게이트웨이 토큰과 두 메일 채널의 자격 증명 포함). 이후 실효값은 환경 변수와 내장 값으로 폴백합니다. 환경 변수로 잠긴 항목은 1비트도 움직이지 않으므로 이것은 공장 초기화가 아닙니다. 키 풀·사용량·이벤트·보충 이력은 건드리지 않습니다." },
-  "set.danger.reset.button": { "zh-CN": "重置配置", "zh-TW": "重置設定", en: "Reset configuration", ja: "設定をリセット", ko: "설정 초기화" },
-  "set.danger.reset.confirmTitle": { "zh-CN": "确认重置配置", "zh-TW": "確認重置設定", en: "Confirm resetting the configuration", ja: "設定のリセットを確認", ko: "설정 초기화 확인" },
-  "set.danger.reset.warn": { "zh-CN": "这一步不可撤销：存储里那份配置会被整把抹掉，其中包括网关口令与两条邮箱通道的凭据。", "zh-TW": "這一步不可撤銷：儲存裡那份設定會被整把抹掉，其中包括網關口令與兩條郵箱通道的憑據。", en: "This cannot be undone: the stored configuration is wiped in one go, including the gateway token and both mailbox channel credentials.", ja: "この操作は取り消せません。ストレージ上の設定はまるごと消去され、ゲートウェイトークンと 2 つのメールチャネルの資格情報も含まれます。", ko: "이 작업은 되돌릴 수 없습니다. 저장소의 설정이 통째로 지워지며 게이트웨이 토큰과 두 메일 채널의 자격 증명도 함께 사라집니다." },
-  "set.danger.reset.scope": { "zh-CN": "只动存储里那一把配置：key 池、每把 key 的用量、事件记录与补池历史都不会被碰。", "zh-TW": "只動儲存裡那一把設定：key 池、每把 key 的用量、事件記錄與補池歷史都不會被碰。", en: "Only that one stored configuration entry is touched: the key pool, per-key usage, event records and refill history are all left alone.", ja: "触れるのはストレージ上のその設定 1 件だけです。キープール、キーごとの使用量、イベント記録、補充履歴には一切触れません。", ko: "저장소의 그 설정 항목 하나만 바뀝니다. 키 풀, 키별 사용량, 이벤트 기록, 보충 이력은 전혀 건드리지 않습니다." },
-  "set.danger.reset.propagation": { "zh-CN": "本实例下一个请求就按新值跑；别的副本 / isolate 最长 {bound} 之后才看得到这次重置。", "zh-TW": "本執行個體下一個請求就按新值跑；別的副本 / isolate 最長 {bound} 之後才看得到這次重置。", en: "The next request on this instance already uses the new values; other replicas or isolates can take up to {bound} to see this reset.", ja: "このインスタンスは次のリクエストから新しい値で動きます。他のレプリカや isolate がこのリセットを見るまで最大 {bound} かかります。", ko: "이 인스턴스는 다음 요청부터 새 값으로 동작합니다. 다른 복제본이나 isolate가 이 초기화를 보기까지 최대 {bound}가 걸립니다." },
-  "set.danger.reset.effect.ok": { "zh-CN": "按逐字段判据看，重置之后这份配置仍然装载得起来（缺的那几格环境变量兜住了）。这条判据本身并不完备，它说不出「一定没事」。", "zh-TW": "按逐欄位判據看，重置之後這份設定仍然裝載得起來（缺的那幾格環境變數兜住了）。這條判據本身並不完備，它說不出「一定沒事」。", en: "By the field-by-field check, the configuration still loads after the reset (the environment covers what is removed). That check is not complete, so it cannot promise that nothing will break.", ja: "項目ごとの判定では、リセット後もこの設定は読み込めます（欠ける項目は環境変数が補います）。この判定自体は網羅的ではないため、「絶対に問題ない」とは言えません。", ko: "항목별 판정 기준으로는 초기화 후에도 이 설정을 불러올 수 있습니다(빠지는 항목은 환경 변수가 채웁니다). 이 판정 자체가 완전하지는 않으므로 문제가 없다고 단정할 수는 없습니다." },
-  "set.danger.reset.effect.unknown": { "zh-CN": "读不到当前配置，因此判断不了重置之后这份配置还会缺什么。这一步照样可以执行，但后果只能按最坏情况准备。", "zh-TW": "讀不到目前設定，因此判斷不了重置之後這份設定還會缺什麼。這一步照樣可以執行，但後果只能按最壞情況準備。", en: "The current configuration could not be read, so there is no way to tell what will be missing after the reset. You can still go ahead, but assume the worst case.", ja: "現在の設定を読み取れないため、リセット後に何が欠けるかを判断できません。実行は可能ですが、結果は最悪の場合を想定してください。", ko: "현재 설정을 읽지 못해 초기화 뒤에 무엇이 빠지는지 판단할 수 없습니다. 그래도 실행할 수는 있지만 결과는 최악의 경우를 가정하세요." },
-  // ⚠️ **这一条与上面 `set.danger.reset.propagation` 是同一件事的两档**：上界读得到就说数，
-  // 读不到时**照样要说「别的副本不会在这一刻看到」**（设计 §5.2 那条「不许写立即生效」在这一档
-  // 同样成立）——上一版在这一档整句消失，屏幕上于是一个字都不提传播（复评回填）。
-  "set.danger.reset.propagation.unknown": { "zh-CN": "读不到这个部署的传播上界；别的副本 / isolate 不会在这一刻就看到这次重置，具体要等多久这里说不出来。", "zh-TW": "讀不到這個部署的傳播上界；別的副本 / isolate 不會在這一刻就看到這次重置，具體要等多久這裡說不出來。", en: "The propagation upper bound for this deployment could not be read; other replicas or isolates will not see this reset at this moment, and there is no number to give for how long it takes.", ja: "このデプロイの伝播の上限を読み取れません。他のレプリカや isolate がこのリセットを見るのはこの瞬間ではありませんが、どれだけかかるかはここでは示せません。", ko: "이 배포의 전파 상한을 읽지 못했습니다. 다른 복제본이나 isolate가 이 초기화를 보는 것은 지금 이 순간이 아니지만, 얼마나 걸리는지는 여기서 말할 수 없습니다." },
-  // ⚠️ **回执分两档，判据是回执里 `changed` 的长度**（复评回填）：上一版只有一句
-  // 「真的变了的那几格已经高亮出来」，而重置对一部分字段**什么都没做**（存储里本来就没有值、
-  // 或者被环境变量锁着）——`changed: []` 那一档一格都没高亮，那句话是当面说反话。
-  // `save()` 为同一件事早就有 `set.readback` / `set.readback.none` 两档，这里照它的形状补齐。
-  "set.danger.reset.done": { "zh-CN": "已重置，并已回读生效值；有 {count} 格的生效值真的变了，已经高亮出来。", "zh-TW": "已重置，並已回讀生效值；有 {count} 格的生效值真的變了，已經標示出來。", en: "Reset done, and the effective values were read back: {count} field(s) actually changed and are highlighted.", ja: "リセットが完了し、実効値を読み戻しました。{count} 個の項目の実効値が実際に変わり、ハイライトしています。", ko: "초기화를 마치고 실효값을 다시 읽어 왔습니다. {count}개 항목의 실효값이 실제로 바뀌어 강조 표시했습니다." },
-  "set.danger.reset.doneNone": { "zh-CN": "已重置，并已回读生效值；一格的生效值都没有变——这些格存储里本来就没有值，或者它们被环境变量锁着。", "zh-TW": "已重置，並已回讀生效值；一格的生效值都沒有變——這些格儲存裡本來就沒有值，或者它們被環境變數鎖著。", en: "Reset done, and the effective values were read back: not a single effective value changed — those fields had nothing in storage, or the environment holds them.", ja: "リセットが完了し、実効値を読み戻しました。実効値が変わった項目は 1 つもありません。これらの項目はもともとストレージに値がないか、環境変数で固定されています。", ko: "초기화를 마치고 실효값을 다시 읽어 왔습니다. 실효값이 바뀐 항목은 하나도 없습니다. 해당 항목은 저장소에 값이 없었거나 환경 변수가 잡고 있습니다." },
-
-  "set.danger.purge.title": { "zh-CN": "清空 Key 池", "zh-TW": "清空 Key 池", en: "Purge the key pool", ja: "Key プールを空にする", ko: "Key 풀 비우기" },
-  "set.danger.purge.desc": { "zh-CN": "删掉池子里每一把 key 的记录。key 明文只在存储里有这一份，删了没有第二处可以找回来；每把 key 的用量历史住在记录里面，跟着一起没。配置、事件与补池历史都不碰。", "zh-TW": "刪掉池子裡每一把 key 的記錄。key 明文只在儲存裡有這一份，刪了沒有第二處可以找回來；每把 key 的用量歷史住在記錄裡面，跟著一起沒。設定、事件與補池歷史都不碰。", en: "Deletes the record of every key in the pool. The key material exists only in storage, so once deleted there is no second copy to recover from; each key\u2019s usage history lives inside its record and goes with it. Configuration, events and refill history are left alone.", ja: "プール内のすべての key のレコードを削除します。key の平文はストレージにしか存在せず、削除すると取り戻せる場所は他にありません。キーごとの使用量履歴はレコードの中にあるため一緒に消えます。設定・イベント・補充履歴には触れません。", ko: "풀에 있는 모든 key의 레코드를 삭제합니다. key 원문은 저장소에만 있으므로 지우면 되찾을 곳이 없습니다. 키별 사용량 이력은 레코드 안에 있어 함께 사라집니다. 설정·이벤트·보충 이력은 건드리지 않습니다." },
-  "set.danger.purge.button": { "zh-CN": "清空 Key 池", "zh-TW": "清空 Key 池", en: "Purge the key pool", ja: "Key プールを空にする", ko: "Key 풀 비우기" },
-  "set.danger.purge.confirmTitle": { "zh-CN": "确认清空 Key 池", "zh-TW": "確認清空 Key 池", en: "Confirm purging the key pool", ja: "Key プールを空にする確認", ko: "Key 풀 비우기 확인" },
-  "set.danger.purge.warn": { "zh-CN": "池子里现在有 {count} 把 key，这一步会把它们全部永久删掉。", "zh-TW": "池子裡現在有 {count} 把 key，這一步會把它們全部永久刪掉。", en: "The pool currently holds {count} keys; this will permanently delete all of them.", ja: "プールには現在 {count} 件の key があります。この操作でそのすべてを完全に削除します。", ko: "풀에는 현재 {count}개의 key가 있으며, 이 작업으로 모두 영구 삭제됩니다." },
-  "set.danger.purge.stats": { "zh-CN": "每把 key 的用量历史（请求数 / 成功数 / 最近一次错误）住在这条记录的值里面：删记录就是删历史，没有第二份。", "zh-TW": "每把 key 的用量歷史（請求數 / 成功數 / 最近一次錯誤）住在這條記錄的值裡面：刪記錄就是刪歷史，沒有第二份。", en: "Each key\u2019s usage history (requests, successes, last error) lives inside the value of that record: deleting the record deletes the history, and there is no second copy.", ja: "キーごとの使用量履歴（リクエスト数・成功数・直近のエラー）はそのレコードの値の中にあります。レコードを削除することは履歴を削除することであり、控えはありません。", ko: "키별 사용량 이력(요청 수, 성공 수, 마지막 오류)은 그 레코드의 값 안에 있습니다. 레코드를 지우는 것은 이력을 지우는 것이며 사본은 없습니다." },
-  "set.danger.purge.propagation": { "zh-CN": "转发路径最长要等一个池快照 TTL 才不再选中这些 key；屏幕上清空了不等于那一刻它们就退出服役。", "zh-TW": "轉發路徑最長要等一個池快照 TTL 才不再選中這些 key；螢幕上清空了不等於那一刻它們就退出服役。", en: "The forwarding path can keep selecting these keys for up to one pool-snapshot TTL; a cleared screen does not mean they leave service at that moment.", ja: "転送経路はプールスナップショットの TTL のあいだ、これらの key を選び続けることがあります。画面上で空になっても、その時点で稼働から外れたわけではありません。", ko: "전달 경로는 풀 스냅숏 TTL만큼 이 key들을 계속 고를 수 있습니다. 화면이 비었다고 그 시점에 서비스에서 빠진 것은 아닙니다." },
-  "set.danger.purge.typeTo": { "zh-CN": "请把当前池大小 {count} 手打一遍以确认：", "zh-TW": "請把目前池大小 {count} 手打一遍以確認：", en: "Type the current pool size {count} to confirm:", ja: "確認のため、現在のプールサイズ {count} を入力してください:", ko: "확인을 위해 현재 풀 크기 {count}을(를) 입력하세요:" },
-  "set.danger.purge.mismatch": { "zh-CN": "输入的数字与当前池大小对不上，这一步没有执行。", "zh-TW": "輸入的數字與目前池大小對不上，這一步沒有執行。", en: "The number you typed does not match the current pool size; nothing was done.", ja: "入力された数値が現在のプールサイズと一致しません。何も実行していません。", ko: "입력한 숫자가 현재 풀 크기와 다릅니다. 아무것도 실행하지 않았습니다." },
-  "set.danger.purge.done": { "zh-CN": "已删掉 {deleted} 把 key；回读之后池子是空的。", "zh-TW": "已刪掉 {deleted} 把 key；回讀之後池子是空的。", en: "Deleted {deleted} keys; the read-back shows the pool is empty.", ja: "{deleted} 件の key を削除しました。読み戻した結果、プールは空です。", ko: "{deleted}개의 key를 삭제했습니다. 다시 읽어 본 결과 풀은 비어 있습니다." },
-  "set.danger.purge.leftover": { "zh-CN": "已删掉 {deleted} 把 key，但回读之后存储里还有 {remaining} 把——多半是别的副本在这中间又写进来了。请刷新之后再看一眼。", "zh-TW": "已刪掉 {deleted} 把 key，但回讀之後儲存裡還有 {remaining} 把——多半是別的副本在這中間又寫進來了。請重新整理之後再看一眼。", en: "Deleted {deleted} keys, but the read-back still finds {remaining} in storage \u2014 most likely another replica wrote some in the meantime. Refresh and take another look.", ja: "{deleted} 件の key を削除しましたが、読み戻すとストレージにまだ {remaining} 件あります。おそらくその間に別のレプリカが書き込んでいます。再読み込みしてもう一度確認してください。", ko: "{deleted}개의 key를 삭제했지만 다시 읽어 보니 저장소에 {remaining}개가 남아 있습니다. 그 사이 다른 복제본이 기록했을 가능성이 큽니다. 새로 고친 뒤 다시 확인하세요." },
-  "set.danger.purge.sizeUnknown": { "zh-CN": "读不到当前池大小，因此不打开确认框：没有那个数就无法确认你要删的到底是哪一池。", "zh-TW": "讀不到目前池大小，因此不打開確認框：沒有那個數就無法確認你要刪的到底是哪一池。", en: "The current pool size could not be read, so no confirmation dialog is opened: without that number there is no way to confirm which pool you are about to delete.", ja: "現在のプールサイズを取得できないため、確認ダイアログは開きません。その数値がなければ、どのプールを削除しようとしているのか確認できません。", ko: "현재 풀 크기를 읽지 못해 확인 창을 열지 않습니다. 그 숫자가 없으면 어떤 풀을 지우려는지 확인할 수 없습니다." },
-  "set.danger.purge.changed": { "zh-CN": "池子在你确认之前变了，一把都没有删。请刷新之后重来。", "zh-TW": "池子在你確認之前變了，一把都沒有刪。請重新整理之後重來。", en: "The pool changed before you confirmed, so nothing was deleted. Refresh and try again.", ja: "確認する前にプールが変化したため、1 件も削除していません。再読み込みしてやり直してください。", ko: "확인하기 전에 풀이 바뀌어 하나도 삭제하지 않았습니다. 새로 고친 뒤 다시 시도하세요." },
-  "set.danger.failed": { "zh-CN": "这一步没有成功。存储可能一个字节都没动，也可能只做了一半。请刷新之后核对当前状态，再决定要不要重来。", "zh-TW": "這一步沒有成功。儲存可能一個位元組都沒動，也可能只做了一半。請重新整理之後核對目前狀態，再決定要不要重來。", en: "This step did not succeed. Storage may be untouched, or the work may be half done. Refresh, check the current state, and then decide whether to retry.", ja: "この操作は成功しませんでした。ストレージは 1 バイトも変わっていないかもしれませんし、途中まで進んでいるかもしれません。再読み込みして現在の状態を確認してから、やり直すかどうかを決めてください。", ko: "이 작업은 성공하지 못했습니다. 저장소가 전혀 바뀌지 않았을 수도 있고, 절반만 진행되었을 수도 있습니다. 새로 고쳐 현재 상태를 확인한 뒤 다시 시도할지 결정하세요." },
-  "set.loadBlocked.fatal": { "zh-CN": "存储里这份配置现在装载不起来：当前进程靠上一份合法快照还在跑，但下一次重启 / isolate 回收会失败。下面逐条列出缺什么，改完保存即可恢复——这一页仍然可以编辑。", "zh-TW": "儲存裡這份設定現在載入不起來：當前行程靠上一份合法快照還在跑，但下一次重啟 / isolate 回收會失敗。下面逐條列出缺什麼，改完儲存即可恢復——這一頁仍然可以編輯。", en: "The stored configuration currently cannot be loaded: this process is still running on its last good snapshot, but the next restart or isolate recycle will fail. What is missing is listed below — fix and save to recover; this page is still editable.", ja: "保存されている設定は現在読み込めません。このプロセスは直前の有効なスナップショットで動作を続けていますが、次の再起動や isolate の再生成で失敗します。不足している項目を以下に列挙します。修正して保存すれば復旧できます——このページは引き続き編集できます。", ko: "저장된 설정을 현재 불러올 수 없습니다. 이 프로세스는 마지막 정상 스냅숏으로 계속 동작 중이지만 다음 재시작이나 isolate 회수 시 실패합니다. 무엇이 빠졌는지 아래에 나열합니다. 고쳐서 저장하면 복구됩니다 — 이 페이지는 계속 편집할 수 있습니다." },
-  "set.loadBlocked.registrar": { "zh-CN": "注册机开着，但这份配置装不起来，本次没有启动它；转发不受影响。下面逐条列出缺什么，改完保存即可恢复，不需要重启容器 / 重新部署。", "zh-TW": "註冊機開著，但這份設定裝不起來，本次沒有啟動它；轉發不受影響。下面逐條列出缺什麼，改完儲存即可恢復，不需要重啟容器 / 重新部署。", en: "The registrar is on, but this configuration could not be loaded, so it was not started this time — forwarding is unaffected. What is missing is listed below; fix and save to recover, with no container restart or redeploy needed.", ja: "レジストラーは有効ですが、この設定を読み込めなかったため今回は起動していません。転送には影響しません。不足している項目を以下に列挙します。修正して保存すれば復旧でき、コンテナの再起動や再デプロイは不要です。", ko: "등록기는 켜져 있지만 이 설정을 불러오지 못해 이번에는 시작하지 않았습니다. 전달에는 영향이 없습니다. 무엇이 빠졌는지 아래에 나열합니다. 고쳐서 저장하면 복구되며 컨테이너 재시작이나 재배포는 필요 없습니다." },
-  // ⚠️ **第三档：注册机关着、但这份配置里仍然有 blocker。** 这一档可达且是刻意保留的
-  //（`delay_min_gt_max` 不受 `enabled` 门控），选键逻辑见 `pure/settings.mjs` 的 `loadBlockedKey()`。
-  // **这句话一个字都不许说「注册机开着」**——同一块面板里注册机板块与概览卡片这时都写「已关闭」。
-  "set.loadBlocked.registrarOff": { "zh-CN": "注册机没有开着，但这份配置里有几格填得不对，打开它之前得先改掉；转发不受影响。下面逐条列出是哪几格，改完保存即可，不需要重启容器 / 重新部署。", "zh-TW": "註冊機沒有開著，但這份設定裡有幾格填得不對，打開它之前得先改掉；轉發不受影響。下面逐條列出是哪幾格，改完儲存即可，不需要重啟容器 / 重新部署。", en: "The registrar is not on, but a few fields in this configuration are wrong and have to be fixed before you can turn it on — forwarding is unaffected. Which ones is listed below; fix and save, with no container restart or redeploy needed.", ja: "レジストラーは有効になっていませんが、この設定には誤った項目がいくつかあり、有効にする前に直す必要があります。転送には影響しません。該当する項目を以下に列挙します。修正して保存すればよく、コンテナの再起動や再デプロイは不要です。", ko: "등록기는 켜져 있지 않지만 이 설정에 잘못 입력된 항목이 몇 개 있어 켜기 전에 고쳐야 합니다. 전달에는 영향이 없습니다. 어느 항목인지 아래에 나열합니다. 고쳐서 저장하면 되며 컨테이너 재시작이나 재배포는 필요 없습니다." },
-  "set.err.unknown_field": { "zh-CN": "这个字段后端不认识", "zh-TW": "這個欄位後端不認識", en: "The backend does not recognize this field", ja: "このフィールドはバックエンドが認識しません", ko: "백엔드가 인식하지 못하는 항목입니다" },
-  "set.err.locked_by_env": { "zh-CN": "被环境变量 {env} 锁定，改不了", "zh-TW": "被環境變數 {env} 鎖定，改不了", en: "Locked by the environment variable {env}", ja: "環境変数 {env} によりロックされています", ko: "환경 변수 {env}로 잠겨 있습니다" },
-  "set.err.not_an_integer": { "zh-CN": "必须是整数", "zh-TW": "必須是整數", en: "Must be an integer", ja: "整数である必要があります", ko: "정수여야 합니다" },
-  "set.err.below_min": { "zh-CN": "不能小于 {min}", "zh-TW": "不能小於 {min}", en: "Must be at least {min}", ja: "{min} 以上である必要があります", ko: "{min} 이상이어야 합니다" },
-  "set.err.not_a_string": { "zh-CN": "必须是文本", "zh-TW": "必須是文字", en: "Must be text", ja: "文字列である必要があります", ko: "문자열이어야 합니다" },
-  "set.err.not_a_boolean": { "zh-CN": "必须是开或关", "zh-TW": "必須是開或關", en: "Must be on or off", ja: "オンまたはオフである必要があります", ko: "켜기 또는 끄기여야 합니다" },
-  "set.err.empty": { "zh-CN": "这一格不能留空", "zh-TW": "這一格不能留空", en: "This field cannot be empty", ja: "この項目は空にできません", ko: "이 항목은 비울 수 없습니다" },
-  "set.err.too_long": { "zh-CN": "最长 {max} 个字符", "zh-TW": "最長 {max} 個字元", en: "At most {max} characters", ja: "最大 {max} 文字です", ko: "최대 {max}자입니다" },
-  "set.err.not_a_url": { "zh-CN": "必须是 http:// 或 https:// 开头的地址", "zh-TW": "必須是 http:// 或 https:// 開頭的位址", en: "Must be an http:// or https:// URL", ja: "http:// または https:// で始まる URL が必要です", ko: "http:// 또는 https:// 로 시작하는 주소여야 합니다" },
-  "set.err.not_a_channel": { "zh-CN": "只能选列表里的通道", "zh-TW": "只能選清單裡的通道", en: "Pick one of the listed channels", ja: "一覧にあるチャネルから選んでください", ko: "목록에 있는 채널 중에서 선택하세요" },
-  "set.err.channel_required": { "zh-CN": "注册机开着时必须选一条通道", "zh-TW": "註冊機開著時必須選一條通道", en: "A channel must be selected while the registrar is on", ja: "レジストラーが有効なときはチャネルを 1 つ選ぶ必要があります", ko: "등록기가 켜져 있을 때는 채널을 하나 선택해야 합니다" },
-  "set.err.legacy_channel_key": { "zh-CN": "这一格的值来自旧的存储键 registrar.primary。在这一页保存任意一次，旧键会被清掉，这条提示随之消失。", "zh-TW": "這一格的值來自舊的儲存鍵 registrar.primary。在這一頁儲存任意一次，舊鍵會被清掉，這條提示隨之消失。", en: "This value comes from the legacy stored key registrar.primary. Save anything on this page once and the legacy key is cleaned up, after which this notice goes away.", ja: "この値は旧ストレージキー registrar.primary から読まれています。このページで一度保存すれば旧キーは削除され、この通知も消えます。", ko: "이 값은 예전 저장 키 registrar.primary에서 읽어 온 것입니다. 이 페이지에서 한 번 저장하면 예전 키가 정리되고 이 알림도 사라집니다." },
-  "set.err.legacy_channel_env": { "zh-CN": "这一格的值来自旧的环境变量名 REGISTRAR_PRIMARY。它作为兼容别名长期保留，改成 REGISTRAR_CHANNEL 之后这条提示会消失。", "zh-TW": "這一格的值來自舊的環境變數名 REGISTRAR_PRIMARY。它作為相容別名長期保留，改成 REGISTRAR_CHANNEL 之後這條提示會消失。", en: "This value comes from the legacy environment variable REGISTRAR_PRIMARY. It is kept as a compatibility alias indefinitely; rename it to REGISTRAR_CHANNEL and this notice goes away.", ja: "この値は旧環境変数名 REGISTRAR_PRIMARY から読まれています。互換エイリアスとして今後も残りますが、REGISTRAR_CHANNEL に変えればこの通知は消えます。", ko: "이 값은 예전 환경 변수 이름 REGISTRAR_PRIMARY에서 읽어 온 것입니다. 호환 별칭으로 계속 남지만, REGISTRAR_CHANNEL로 바꾸면 이 알림이 사라집니다." },
-  "set.err.legacy_fallback_ignored": { "zh-CN": "备通道 {dropped} 已经被丢掉：两条通道现在是二选一，它不再参与选路，也不会在失败时被自动启用。如果你的部署一直靠它在铸 key，现在一把都不会铸出来了——要用它，请把上面那一格改成它。", "zh-TW": "備通道 {dropped} 已經被丟掉：兩條通道現在是二選一，它不再參與選路，也不會在失敗時被自動啟用。如果你的部署一直靠它在鑄 key，現在一把都不會鑄出來了——要用它，請把上面那一格改成它。", en: "The fallback channel {dropped} has been dropped: the two channels are now an either-or choice, so it no longer takes part in routing and is never switched to on failure. If your deployment has actually been minting keys through it, you will now mint none at all — to keep using it, change the channel above to it.", ja: "フォールバックチャネル {dropped} は破棄されました。2 つのチャネルはいずれか一方を選ぶ方式になったため、経路選択には関与せず、失敗しても自動的に切り替わりません。もし実際にこのチャネルでキーを発行していた場合、これからは 1 つも発行されません。使い続けるには上のチャネルをこれに変更してください。", ko: "대체 채널 {dropped}은(는) 폐기되었습니다. 이제 두 채널은 둘 중 하나만 고르는 방식이라 경로 선택에 관여하지 않으며 실패해도 자동으로 전환되지 않습니다. 실제로 이 채널로 key를 발급해 왔다면 이제 하나도 발급되지 않습니다. 계속 쓰려면 위의 채널을 이것으로 바꾸세요." },
-  "set.err.delay_min_gt_max": { "zh-CN": "最小间隔 {min} 不能大于最大间隔 {max}", "zh-TW": "最小間隔 {min} 不能大於最大間隔 {max}", en: "The minimum delay {min} cannot exceed the maximum {max}", ja: "最小間隔 {min} は最大間隔 {max} を超えられません", ko: "최소 간격 {min}은 최대 간격 {max}보다 클 수 없습니다" },
-  "set.err.channel_credentials_missing": { "zh-CN": "{channel} 这条通道还差凭据，注册机开着时它必须配全", "zh-TW": "{channel} 這條通道還差憑據，註冊機開著時它必須配全", en: "The {channel} channel is missing credentials, which are required while the registrar is on", ja: "{channel} チャネルの資格情報が不足しています。レジストラーが有効な間は必須です", ko: "{channel} 채널의 자격 증명이 없습니다. 등록기가 켜져 있는 동안에는 필수입니다" },
-  "set.err.gateway_token_required": { "zh-CN": "网关口令不能两边都没有：环境变量里没有，存储里也清空了，下一次冷启动会起不来", "zh-TW": "網關口令不能兩邊都沒有：環境變數裡沒有，儲存裡也清空了，下一次冷啟動會起不來", en: "The gateway token cannot be missing from both sides: it is absent from the environment and cleared in storage, so the next cold start will fail", ja: "ゲートウェイトークンが両方にない状態にはできません。環境変数になく、ストレージでもクリアされているため、次のコールドスタートで起動できなくなります", ko: "게이트웨이 토큰이 양쪽 모두에 없을 수는 없습니다. 환경 변수에도 없고 저장소에서도 지워져 다음 콜드 스타트에 기동이 실패합니다" },
-  "set.err.whitespace_padded": { "zh-CN": "首尾不能有空白：HTTP 请求头的值在传输层会被去掉首尾空白，带空白的口令客户端永远送不出来", "zh-TW": "首尾不能有空白：HTTP 請求標頭的值在傳輸層會被去掉首尾空白，帶空白的口令客戶端永遠送不出來", en: "No leading or trailing whitespace: header values are trimmed in transport, so a padded token can never be sent by any client", ja: "先頭・末尾に空白を含められません。HTTP ヘッダー値は転送時に前後の空白が取り除かれるため、空白付きのトークンはどのクライアントからも送信できません", ko: "앞뒤에 공백을 넣을 수 없습니다. HTTP 헤더 값은 전송 단계에서 앞뒤 공백이 제거되므로 공백이 붙은 토큰은 어떤 클라이언트도 보낼 수 없습니다" },
-  "set.err.not_sendable": { "zh-CN": "只能用可打印 ASCII（0x20–0x7E）：汉字 / emoji / 零宽空格这类字符浏览器根本发不出去", "zh-TW": "只能用可列印 ASCII（0x20–0x7E）：漢字 / emoji / 零寬空格這類字元瀏覽器根本送不出去", en: "Printable ASCII only (0x20–0x7E): CJK characters, emoji and zero-width spaces simply cannot be sent by the browser", ja: "印字可能な ASCII（0x20–0x7E）のみ使用できます。漢字・emoji・ゼロ幅スペースはブラウザーがそもそも送信できません", ko: "출력 가능한 ASCII(0x20–0x7E)만 쓸 수 있습니다. 한자 / 이모지 / 폭 없는 공백은 브라우저가 아예 보낼 수 없습니다" },
-  "set.err.too_short": { "zh-CN": "至少 {min} 位：这条路没有分布式限速，口令熵是唯一的防线", "zh-TW": "至少 {min} 位：這條路沒有分散式限速，口令熵是唯一的防線", en: "At least {min} characters: there is no distributed rate limiting on this path, so token entropy is the only defence", ja: "{min} 文字以上にしてください。この経路には分散レート制限がないため、トークンのエントロピーが唯一の防御です", ko: "최소 {min}자 이상이어야 합니다. 이 경로에는 분산 속도 제한이 없어 토큰 엔트로피가 유일한 방어선입니다" },
-  "set.err.same_as_admin_token": { "zh-CN": "网关口令不能与管理口令相同：中转口令是发给每一个下游用户的，设成相同之后管理接口会立刻停用，连改回去都做不到", "zh-TW": "網關口令不能與管理口令相同：中轉口令是發給每一個下游使用者的，設成相同之後管理介面會立刻停用，連改回去都做不到", en: "The gateway token must differ from the admin token: the gateway token is handed to every downstream user, and making them equal disables the admin API immediately — you could not even change it back", ja: "ゲートウェイトークンは管理トークンと同じにできません。ゲートウェイトークンはすべての下流ユーザーに配るものであり、同じにすると管理 API が即座に無効化され、元に戻すことすらできなくなります", ko: "게이트웨이 토큰은 관리 토큰과 같을 수 없습니다. 게이트웨이 토큰은 모든 하위 사용자에게 배포하는 값이며, 같게 만들면 관리 API가 즉시 중단되어 되돌리는 것조차 불가능합니다" },
-  "set.err.config_unloadable": { "zh-CN": "这份配置构造不出来，而逐字段判据说不出是哪一格（多半是某个数值字段被写成了非数字）。具体原因在事件板块的 config.unloadable 里。", "zh-TW": "這份設定建構不出來，而逐欄位判據說不出是哪一格（多半是某個數值欄位被寫成了非數字）。具體原因在事件板塊的 config.unloadable 裡。", en: "This configuration cannot be constructed, and the per-field checks cannot say which field is at fault (most likely a numeric field was written as a non-number). The concrete reason is in the events board under config.unloadable.", ja: "この設定は構築できませんが、項目ごとの判定ではどの項目が原因かを特定できません（数値項目が数値以外で書かれている可能性が高いです）。具体的な理由はイベント一覧の config.unloadable にあります。", ko: "이 설정을 구성할 수 없으며, 항목별 판정으로는 어느 항목이 원인인지 알 수 없습니다(숫자 항목이 숫자가 아닌 값으로 기록되었을 가능성이 큽니다). 구체적인 이유는 이벤트 보드의 config.unloadable에 있습니다." },
-  "set.err.unknown": { "zh-CN": "后端返回了这个面板版本不认识的错误码：{code}", "zh-TW": "後端回傳了這個面板版本不認識的錯誤碼：{code}", en: "The backend returned an error code this panel build does not know: {code}", ja: "このパネルのビルドが認識しないエラーコードが返されました: {code}", ko: "이 패널 빌드가 알지 못하는 오류 코드가 반환되었습니다: {code}" },
-  "set.field.gatewayToken": { "zh-CN": "网关口令", "zh-TW": "網關口令", en: "Gateway token", ja: "ゲートウェイトークン", ko: "게이트웨이 토큰" },
-  "set.field.agnesBaseUrl": { "zh-CN": "上游地址", "zh-TW": "上游位址", en: "Upstream base URL", ja: "上流ベース URL", ko: "업스트림 기본 URL" },
-  "set.field.upstreamTimeoutMs": { "zh-CN": "上游超时（毫秒）", "zh-TW": "上游逾時（毫秒）", en: "Upstream timeout (ms)", ja: "上流タイムアウト（ミリ秒）", ko: "업스트림 타임아웃(ms)" },
-  "set.field.upstreamSyncTimeoutMs": { "zh-CN": "同步端点超时（毫秒）", "zh-TW": "同步端點逾時（毫秒）", en: "Sync endpoint timeout (ms)", ja: "同期エンドポイントのタイムアウト（ミリ秒）", ko: "동기 엔드포인트 타임아웃(ms)" },
-  "set.field.maxStrikes": { "zh-CN": "连续失败上限", "zh-TW": "連續失敗上限", en: "Max consecutive failures", ja: "連続失敗の上限", ko: "연속 실패 상한" },
-  "set.field.cooldownRateLimitMs": { "zh-CN": "限流冷却（毫秒）", "zh-TW": "限流冷卻（毫秒）", en: "Rate-limit cooldown (ms)", ja: "レート制限クールダウン（ミリ秒）", ko: "속도 제한 쿨다운(ms)" },
-  "set.field.cooldownPaymentMs": { "zh-CN": "欠费冷却（毫秒）", "zh-TW": "欠費冷卻（毫秒）", en: "Payment-required cooldown (ms)", ja: "支払い必要時のクールダウン（ミリ秒）", ko: "결제 필요 쿨다운(ms)" },
-  "set.field.cooldownStrikeMs": { "zh-CN": "失败冷却（毫秒）", "zh-TW": "失敗冷卻（毫秒）", en: "Strike cooldown (ms)", ja: "失敗クールダウン（ミリ秒）", ko: "실패 쿨다운(ms)" },
-  "set.field.poolCacheTtlMs": { "zh-CN": "池快照缓存（毫秒，0 = 关闭）", "zh-TW": "池快照快取（毫秒，0 = 關閉）", en: "Pool snapshot cache (ms, 0 = off)", ja: "プールスナップショットのキャッシュ（ミリ秒、0 = 無効）", ko: "풀 스냅숏 캐시(ms, 0 = 끔)" },
-  "set.field.poolTouchIntervalMs": { "zh-CN": "写消除间隔（毫秒，0 = 关闭）", "zh-TW": "寫入消除間隔（毫秒，0 = 關閉）", en: "Write-elision interval (ms, 0 = off)", ja: "書き込み省略の間隔（ミリ秒、0 = 無効）", ko: "쓰기 생략 간격(ms, 0 = 끔)" },
-  "set.field.registrar.enabled": { "zh-CN": "启用注册机", "zh-TW": "啟用註冊機", en: "Enable the registrar", ja: "レジストラーを有効にする", ko: "등록기 사용" },
-  "set.field.registrar.channel": { "zh-CN": "使用的通道", "zh-TW": "使用的通道", en: "Channel in use", ja: "使用するチャネル", ko: "사용 중인 채널" },
-  "set.field.registrar.targetKeys": { "zh-CN": "目标 key 数", "zh-TW": "目標 key 數", en: "Target key count", ja: "目標キー数", ko: "목표 key 수" },
-  "set.field.registrar.mintBatch": { "zh-CN": "单轮最多铸几把", "zh-TW": "單輪最多鑄幾把", en: "Max keys minted per round", ja: "1 ラウンドあたりの最大発行数", ko: "라운드당 최대 발급 수" },
-  "set.field.registrar.tendIntervalMs": { "zh-CN": "补池间隔（毫秒）", "zh-TW": "補池間隔（毫秒）", en: "Refill interval (ms)", ja: "補充間隔（ミリ秒）", ko: "보충 간격(ms)" },
-  "set.field.registrar.codeTimeoutMs": { "zh-CN": "等验证码超时（毫秒）", "zh-TW": "等驗證碼逾時（毫秒）", en: "Verification-code timeout (ms)", ja: "認証コード待機のタイムアウト（ミリ秒）", ko: "인증 코드 대기 타임아웃(ms)" },
-  "set.field.registrar.mintDelayMinMs": { "zh-CN": "两次铸 key 的最小间隔（毫秒）", "zh-TW": "兩次鑄 key 的最小間隔（毫秒）", en: "Minimum delay between mints (ms)", ja: "発行間の最小間隔（ミリ秒）", ko: "발급 간 최소 간격(ms)" },
-  "set.field.registrar.mintDelayMaxMs": { "zh-CN": "两次铸 key 的最大间隔（毫秒）", "zh-TW": "兩次鑄 key 的最大間隔（毫秒）", en: "Maximum delay between mints (ms)", ja: "発行間の最大間隔（ミリ秒）", ko: "발급 간 최대 간격(ms)" },
-  "set.field.registrar.maxDomainAttempts": { "zh-CN": "换域名重试次数上限", "zh-TW": "換網域重試次數上限", en: "Max domain retries", ja: "ドメイン再試行の上限", ko: "도메인 재시도 상한" },
-  "set.field.registrar.tokenName": { "zh-CN": "铸出的 key 在上游后台的显示名", "zh-TW": "鑄出的 key 在上游後台的顯示名", en: "Display name for minted keys upstream", ja: "発行したキーの上流での表示名", ko: "발급된 key의 업스트림 표시 이름" },
-  "set.field.registrar.agnesPlatformUrl": { "zh-CN": "注册后端地址", "zh-TW": "註冊後端位址", en: "Registration backend URL", ja: "登録バックエンドの URL", ko: "가입 백엔드 URL" },
-  "set.field.channel.baseUrl": { "zh-CN": "服务地址", "zh-TW": "服務位址", en: "Service URL", ja: "サービス URL", ko: "서비스 URL" },
-  "set.field.channel.apiKey": { "zh-CN": "API Key", "zh-TW": "API Key", en: "API key", ja: "API キー", ko: "API 키" },
-  // 一句事实，不是一次猜测：这里刻意不去判断「你填的地址像不像接口地址」——
-  // 一个自建实例完全可能就住在 /v1 底下，猜别人家的 URL 布局正是本仓禁止的启发式。
-  // 它把结构性的混淆点直接说破：网关自己那个地址是带前缀的，这一格不是。
-  "set.field.channel.baseUrl.fact": { "zh-CN": "这一格填服务的根地址，不要带 /v1 这类接口路径前缀。网关自己对外的 AGNES_BASE_URL 是带 /v1 的，两者不是一回事。", "zh-TW": "這一格填服務的根位址，不要帶 /v1 這類介面路徑前綴。網關自己對外的 AGNES_BASE_URL 是帶 /v1 的，兩者不是一回事。", en: "Give the service root address here, without an API path prefix such as /v1. The gateway's own AGNES_BASE_URL does carry /v1 — the two are not the same thing.", ja: "ここにはサービスのルートアドレスを入力します。/v1 のような API パスのプレフィックスは付けません。ゲートウェイ自身が公開する AGNES_BASE_URL には /v1 が付きますが、両者は別物です。", ko: "여기에는 서비스의 루트 주소를 입력합니다. /v1 같은 API 경로 접두사는 붙이지 마세요. 게이트웨이가 외부에 제공하는 AGNES_BASE_URL에는 /v1이 붙지만, 이 둘은 서로 다른 것입니다." },
-
-  // ── 用量板块（设计 §10.6）──────────────────────────────────────────────────
-  //
-  // ⚠️ **这一段的每一条文案都在回答「这个数字为什么长这样」，而不是给一个数配一个名字。**
-  // 这个板块的全部难点是「今天真的是 0 次请求」「Tier-2 没开」「读不出来」
-  // 「读到的分片全坏了」在面板上长得一模一样，而它们是四件事。
-  //
-  // ⚠️ **`{占位符}` 的那几条一律只经 `t(key, {…})` 用**（门禁第 ⑧ 条）：
-  // 交给 `elI18n(tag, key)` 会让裸的 `{count}` 直接展示给运维看
-  //（`sec-overview.js` 的 `ov.config.envLocked` 上方记着那次真实事故）。
-  "usage.title":      { "zh-CN": "用量", "zh-TW": "用量", en: "Usage", ja: "使用量", ko: "사용량" },
-  "usage.rangeLabel": { "zh-CN": "时间范围", "zh-TW": "時間範圍", en: "Time range", ja: "期間", ko: "기간" },
-  "usage.range.24h":  { "zh-CN": "今天（UTC）", "zh-TW": "今天（UTC）", en: "Today (UTC)", ja: "今日（UTC）", ko: "오늘(UTC)" },
-  "usage.range.3d":   { "zh-CN": "3 天", "zh-TW": "3 天", en: "3d", ja: "3 日", ko: "3일" },
-  "usage.range.7d":   { "zh-CN": "7 天", "zh-TW": "7 天", en: "7d", ja: "7 日", ko: "7일" },
-  "usage.range.30d":  { "zh-CN": "30 天", "zh-TW": "30 天", en: "30d", ja: "30 日", ko: "30일" },
-  // 覆盖区间**渲染服务端回读的那一对**，不是前端自己算的显示区间。
-  "usage.covered":    { "zh-CN": "覆盖区间：{from} — {to}", "zh-TW": "涵蓋區間：{from} — {to}", en: "Covered range: {from} — {to}", ja: "対象期間: {from} — {to}", ko: "대상 구간: {from} — {to}" },
-  // ⚠️ **30 天那一档的说明。写「更早的已过期」是事实（保留期 30 天）；
-  //    而它一次要读满 30 天的分片这件事在 Cloudflare Worker 上还没有真机结论
-  //    ——**这里刻意不写「这些子请求是安全的」**，也不写它一定会失败。
-  "usage.range.retention": { "zh-CN": "最多保留 30 天，更早的数据已经过期。30 天这一档一次要把整段区间的分片全部读回来；它在 Cloudflare Worker 上是否总能完成，尚未在真机上验证过——失败时这里会如实显示为读取失败，不会给出一份看起来完整的数字。", "zh-TW": "最多保留 30 天，更早的資料已經過期。30 天這一檔一次要把整段區間的分片全部讀回來；它在 Cloudflare Worker 上是否總能完成，尚未在真機上驗證過——失敗時這裡會如實顯示為讀取失敗，不會給出一份看起來完整的數字。", en: "At most 30 days are retained; anything older has expired. The 30-day option reads every shard in the whole range in one go; whether that always completes on Cloudflare Workers has not been verified on real infrastructure yet. If it fails, this page reports a read failure rather than showing numbers that look complete.", ja: "保持期間は最長 30 日で、それより古いデータは失効しています。30 日の選択肢は区間全体のシャードを一度に読み出します。これが Cloudflare Workers 上で常に完了するかどうかは実機で未検証です。失敗した場合は、完全に見える数字を出すのではなく読み取り失敗として表示します。", ko: "최대 30일까지만 보관하며 그보다 오래된 데이터는 만료되었습니다. 30일 옵션은 구간 전체의 샤드를 한 번에 읽습니다. 이것이 Cloudflare Workers에서 항상 완료되는지는 실제 환경에서 아직 검증되지 않았습니다. 실패하면 완전해 보이는 숫자를 보여주는 대신 읽기 실패로 표시합니다." },
-
-  // ── 六张汇总卡（设计 §10.6）────────────────────────────────────────────────
-  "usage.card.requests":  { "zh-CN": "总请求数", "zh-TW": "總請求數", en: "Requests", ja: "リクエスト数", ko: "요청 수" },
-  "usage.card.successRate": { "zh-CN": "成功率", "zh-TW": "成功率", en: "Success rate", ja: "成功率", ko: "성공률" },
-  // ⚠️ **单位写进标题，值那一格只放数字**：`format.mjs` 的 `fmtDuration` 只到
-  //    「秒 / 分」两档精度（那是给运行时长设计的），拿它渲染 300 毫秒会写出
-  //    「0秒」——而本模块不许再写第三个格式化函数（评审点名）。
-  "usage.card.latency":   { "zh-CN": "平均延迟（毫秒）", "zh-TW": "平均延遲（毫秒）", en: "Avg latency (ms)", ja: "平均レイテンシ（ミリ秒）", ko: "평균 지연(밀리초)" },
-  "usage.card.errorRate": { "zh-CN": "错误率", "zh-TW": "錯誤率", en: "Error rate", ja: "エラー率", ko: "오류율" },
-  // 标题里**直接写「仅非流式」**：流式请求的 token 网关根本看不到，
-  // 一个不带这三个字的「Token」会被读成全量。
-  "usage.card.tokens":    { "zh-CN": "Token（仅非流式）", "zh-TW": "Token（僅非串流）", en: "Tokens (non-streaming only)", ja: "トークン（非ストリーミングのみ）", ko: "토큰(비스트리밍만)" },
-  "usage.card.streaming": { "zh-CN": "流式请求数", "zh-TW": "串流請求數", en: "Streaming requests", ja: "ストリーミングリクエスト数", ko: "스트리밍 요청 수" },
-  // 协议名来自 `GET /admin/api/models` 的 `protocols[].label`，**不在前端硬编码**。
-  "usage.card.tokensTip": { "zh-CN": "只统计得到这几条协议的非流式响应：{protocols}。流式响应与其余协议的 token 网关看不到，所以这个数只会偏小。", "zh-TW": "只統計得到這幾條協定的非串流回應：{protocols}。串流回應與其餘協定的 token 網關看不到，所以這個數只會偏小。", en: "Only non-streaming responses of these protocols are counted: {protocols}. Streaming responses and the remaining protocols are invisible to the gateway, so this number can only be an undercount.", ja: "次のプロトコルの非ストリーミング応答のみを集計しています: {protocols}。ストリーミング応答とその他のプロトコルはゲートウェイからは見えないため、この数値は過小になります。", ko: "다음 프로토콜의 비스트리밍 응답만 집계합니다: {protocols}. 스트리밍 응답과 나머지 프로토콜은 게이트웨이에서 볼 수 없으므로 이 값은 실제보다 적게 나옵니다." },
-  "usage.card.tokensTipUnknown": { "zh-CN": "覆盖了哪几条协议这一次没读出来。这个数只统计非流式响应，流式的 token 网关看不到。", "zh-TW": "涵蓋了哪幾條協定這一次沒讀出來。這個數只統計非串流回應，串流的 token 網關看不到。", en: "Could not read which protocols are covered this time. This number counts non-streaming responses only; streaming tokens are invisible to the gateway.", ja: "どのプロトコルが対象かを今回は取得できませんでした。この数値は非ストリーミング応答のみを集計しており、ストリーミングのトークンはゲートウェイからは見えません。", ko: "이번에는 어떤 프로토콜이 포함되는지 읽지 못했습니다. 이 값은 비스트리밍 응답만 집계하며 스트리밍 토큰은 게이트웨이에서 볼 수 없습니다." },
-  "usage.card.streamingTip": { "zh-CN": "单列一栏，好让 Token 那一格缺掉的正是这些请求这件事看得见。", "zh-TW": "單列一欄，好讓 Token 那一格缺掉的正是這些請求這件事看得見。", en: "Listed separately so that the gap in the token count is visible: these are exactly the requests it cannot see.", ja: "トークン数に欠けているのがまさにこれらのリクエストであることが分かるよう、独立した項目にしています。", ko: "토큰 수에서 빠진 것이 바로 이 요청들이라는 사실이 보이도록 별도 항목으로 둡니다." },
-
-  // ── 单元格的两根破折号 + 三句 tooltip（一条评审裁定 + 一处终检回填）────────
-  // ⚠️ **`–`（EN DASH）与 `—`（EM DASH）说的是两件事，视觉上必须分得开。**
-  // 前者：这一次读成功了，只是这一格没有样本 / 没有分母；
-  // 后者：整块就没读出来，我们不知道。
-  // ⚠️⚠️ **EN DASH 那一根底下有两句话，不是一句**（终检点名的第三处）：
-  //   `no-shards`（开着、这段区间一条分片都还没落盘）上一版也挂 `usage.cell.noneTip`，
-  //   而那句「没有可用的样本」与同一屏横幅的「还有 N 条计数没有落盘」互相打脸
-  //   ——样本是有的，只是没落盘。分档在 `admin-ui/js/pure/usage.mjs` 的 `cellKind`。
-  "usage.cell.noneTip":    { "zh-CN": "这一次读成功了，只是这段时间没有可用的样本。", "zh-TW": "這一次讀成功了，只是這段時間沒有可用的樣本。", en: "The read succeeded; there simply were no samples in this period.", ja: "取得には成功しましたが、この期間にサンプルがありませんでした。", ko: "읽기는 성공했지만 이 기간에 사용할 샘플이 없습니다." },
-  // ⚠️ **这一句两个方向都不许说死**：不许说「没有样本」（可能只是还没写进去），
-  //    也不许说「数据丢了」（可能真的没人用）。它要表达的正是**分不出来**。
-  //    五种语言由 `tests/ui/usage.test.ts` 的
-  //    「no-shards 那一格的 tooltip 里，五种语言都不许说这段时间没有样本」那一格钉着。
-  "usage.cell.noneNoShardsTip": { "zh-CN": "这一次读成功了，但这段区间一条分片都还没落盘：是真的没人用，还是刚发生的还没写进去，现在分不出来。", "zh-TW": "這一次讀成功了，但這段區間一條分片都還沒落盤：是真的沒人用，還是剛發生的還沒寫進去，現在分不出來。", en: "The read succeeded, but not one shard has landed in storage for this period: we cannot yet tell whether nothing was used or the traffic simply has not been written down.", ja: "取得には成功しましたが、この期間はシャードがまだ 1 件も書き込まれていません。実際に使われていないのか、まだ書き込まれていないだけなのかは、現時点では区別できません。", ko: "읽기는 성공했지만 이 구간에는 아직 샤드가 하나도 기록되지 않았습니다. 실제로 사용되지 않은 것인지, 아직 기록되지 않은 것인지 지금은 구분할 수 없습니다." },
-  "usage.cell.unknownTip": { "zh-CN": "这一格读不出来。显示的不是 0——我们不知道它是多少。", "zh-TW": "這一格讀不出來。顯示的不是 0——我們不知道它是多少。", en: "This value could not be read. It is not zero — we do not know what it is.", ja: "この値は取得できませんでした。0 ではなく、値が分からないという意味です。", ko: "이 값을 읽지 못했습니다. 0이 아니라 값을 알 수 없다는 뜻입니다." },
-  // `≈` 的 tooltip。落盘间隔那个数**从 capabilities 取，不在前端算死**。
-  // ⚠️ **「那一段会丢」这半句是补上去的，别再删**：Tier-1 那一侧（`keys.approxTip`）
-  //    一直明写着「isolate 在此之前被回收时这一段会丢」，而 Tier-2 这一侧上一版只说
-  //    「还有一段未落盘窗口」——读起来像「等一会儿就补上」，而它可能永远补不上。
-  //    同一件事在同一页上两种诚实度，低的那一种就是这一页的实际诚实度。
-  "usage.approxTip":        { "zh-CN": "近似值：Tier-1 在并发下会少计；Tier-2 还有一段最长 {flush} 的未落盘窗口，isolate 在此之前被回收时这一段会丢。", "zh-TW": "近似值：Tier-1 在並行下會少計；Tier-2 還有一段最長 {flush} 的未落盤窗口，isolate 在此之前被回收時這一段會遺失。", en: "Approximate: Tier-1 undercounts under concurrency, and Tier-2 has an unflushed window of up to {flush} — whatever is in that window is lost if the isolate is recycled first.", ja: "概算値: Tier-1 は並行時に少なく数え、Tier-2 には最大 {flush} の未書き込み時間があります。その前に isolate が回収されるとその分は失われます。", ko: "근사값: Tier-1은 동시 요청에서 적게 세며, Tier-2에는 최대 {flush}의 미기록 구간이 있습니다. 그 전에 isolate가 회수되면 그 구간은 사라집니다." },
-  "usage.approxTipUnknown": { "zh-CN": "近似值：Tier-1 在并发下会少计；Tier-2 还有一段未落盘窗口，它有多长这一次没读出来；isolate 在此之前被回收时这一段会丢。", "zh-TW": "近似值：Tier-1 在並行下會少計；Tier-2 還有一段未落盤窗口，它有多長這一次沒讀出來；isolate 在此之前被回收時這一段會遺失。", en: "Approximate: Tier-1 undercounts under concurrency, and Tier-2 has an unflushed window whose length could not be read this time — whatever is in that window is lost if the isolate is recycled first.", ja: "概算値: Tier-1 は並行時に少なく数え、Tier-2 には未書き込み時間がありますが、その長さは今回取得できませんでした。その前に isolate が回収されるとその分は失われます。", ko: "근사값: Tier-1은 동시 요청에서 적게 세며, Tier-2에는 미기록 구간이 있으나 그 길이를 이번에는 읽지 못했습니다. 그 전에 isolate가 회수되면 그 구간은 사라집니다." },
-  // ⚠️ **「不完整」这个标记本身就是全局约束 9 的一半**：伪造的不只是 `0`，
-  //    还有「这份数据是全的」这个印象。
-  "usage.incomplete":    { "zh-CN": "不完整", "zh-TW": "不完整", en: "Incomplete", ja: "不完全", ko: "불완전" },
-  "usage.incompleteTip": { "zh-CN": "这段区间里有 {malformed} 个分片是畸形的，读不回来。下面这些数字缺了那几块，不是完整的用量。", "zh-TW": "這段區間裡有 {malformed} 個分片是畸形的，讀不回來。下面這些數字缺了那幾塊，不是完整的用量。", en: "{malformed} shard(s) in this range are malformed and could not be read. The numbers below are missing those parts — this is not the complete usage.", ja: "この期間には不正なシャードが {malformed} 件あり、読み取れませんでした。以下の数値はその分が欠けており、完全な使用量ではありません。", ko: "이 구간에 손상된 샤드가 {malformed}개 있어 읽지 못했습니다. 아래 수치는 그만큼 빠져 있어 완전한 사용량이 아닙니다." },
-
-  // ── 九条 note code，各自一句（`src/http/admin/handlers/usage.ts` 的 `USAGE_NOTES`）──
-  // ⚠️ **后端加第十条时这里不会有任何东西红**（那张表的穷举用例证明的是
-  //    「已列出的八种互不相同」，不是「没有第九种」）⇒ 表外的 code 走
-  //    `usage.note.unknown`，把原码照实显示出来。
-  "usage.note.tier2Off":          { "zh-CN": "时间序列统计没有开启，这个部署没有在记账。", "zh-TW": "時間序列統計沒有開啟，這個部署沒有在記帳。", en: "Time-series stats are off; this deployment is not recording usage.", ja: "時系列統計が無効のため、このデプロイでは使用量を記録していません。", ko: "시계열 통계가 꺼져 있어 이 배포는 사용량을 기록하지 않습니다." },
-  "usage.note.clockUnavailable":  { "zh-CN": "服务端时钟给不出有限数字，区间与保留期都算不出来。这不是「没有数据」。", "zh-TW": "伺服器時鐘給不出有限數字，區間與保留期都算不出來。這不是「沒有資料」。", en: "The server clock did not return a finite value, so neither the range nor the retention window can be computed. This is not “no data”.", ja: "サーバー時計が有限の値を返さないため、期間も保持期間も計算できません。これは「データがない」という意味ではありません。", ko: "서버 시계가 유한한 값을 주지 않아 구간과 보관 기간을 계산할 수 없습니다. 이것은 “데이터 없음”이 아닙니다." },
-  "usage.note.readFailed":        { "zh-CN": "读取存储时出错，这段时间的数字整块拿不到。显示的破折号不是 0。", "zh-TW": "讀取儲存時出錯，這段時間的數字整塊拿不到。顯示的破折號不是 0。", en: "Reading storage failed, so none of the numbers for this period are available. The dashes are not zeros.", ja: "ストレージの読み取りに失敗したため、この期間の数値は取得できません。表示のダッシュは 0 ではありません。", ko: "스토리지 읽기에 실패하여 이 기간의 수치를 가져오지 못했습니다. 표시된 대시는 0이 아닙니다." },
-  "usage.note.rangeClamped":      { "zh-CN": "要的区间被夹到了保留期之内，只显示了能拿到的那一段。上面的覆盖区间是服务端真正查过的那一对。", "zh-TW": "要的區間被夾到了保留期之內，只顯示了能拿到的那一段。上面的涵蓋區間是伺服器真正查過的那一對。", en: "The requested range was clamped into the retention window; only the part that could be fetched is shown. The covered range above is what the server actually queried.", ja: "要求した期間は保持期間内に丸められ、取得できた部分のみを表示しています。上の対象期間がサーバーが実際に照会した範囲です。", ko: "요청한 구간이 보관 기간 안으로 조정되어 가져올 수 있는 부분만 표시합니다. 위의 대상 구간이 서버가 실제로 조회한 범위입니다." },
-  "usage.note.dateOutOfRetention": { "zh-CN": "这一天整个落在保留期之外。不是那天没有请求，是那天的记录已经不在了。", "zh-TW": "這一天整個落在保留期之外。不是那天沒有請求，是那天的記錄已經不在了。", en: "This day lies entirely outside the retention window. It is not that there were no requests — that day's records are gone.", ja: "この日は保持期間の外です。リクエストがなかったのではなく、その日の記録がもう残っていません。", ko: "이 날짜는 보관 기간을 완전히 벗어났습니다. 요청이 없었던 것이 아니라 그날의 기록이 남아 있지 않습니다." },
-  // ⚠️⚠️ **这一句上一版逐字写着「这个部署确实没有记下任何用量」，那是假话，线上实测过**：
-  //    统计开着、打了几次请求之后，同一屏上它与「还有 N 条计数没有落盘」并排出现
-  //    ——它确实记下了，只是还在内存里。**不许再往回改成宣称「没有记下任何用量」**，
-  //    两个方向的谎都不许：也不许反过来把「真的没人用」说成「数据丢了」。
-  //    这一句今天有两个渲染入口（`note` code 与 `usageState()` 的 `no-shards` 那一档），
-  //    判据与理由在 `admin-ui/js/pure/usage.mjs` 的 `usageState` 上方，这里不复述。
-  "usage.note.noShards":          { "zh-CN": "读成功了，这段区间里一个分片都还没落盘。Tier-2 是攒够一个落盘间隔才写一次的，已经发生的请求可能还没写进去——这一页分不出「没人用」和「还没落盘」。", "zh-TW": "讀成功了，這段區間裡一個分片都還沒落盤。Tier-2 是攢夠一個落盤間隔才寫一次的，已經發生的請求可能還沒寫進去——這一頁分不出「沒人用」和「還沒落盤」。", en: "The read succeeded, and not a single shard has been flushed for this range yet. Tier-2 writes only once per flush interval, so requests that already happened may not have been written yet — this page cannot tell “nobody used it” from “not written yet”.", ja: "読み取りには成功しましたが、この期間のシャードはまだ 1 件も書き込まれていません。Tier-2 はフラッシュ間隔ごとにまとめて書き込むため、すでに発生したリクエストがまだ書き込まれていない可能性があります。この画面では「誰も使っていない」と「まだ書き込まれていない」を区別できません。", ko: "읽기는 성공했지만 이 구간에는 아직 샤드가 하나도 기록되지 않았습니다. Tier-2는 플러시 간격마다 한 번씩 기록하므로 이미 발생한 요청이 아직 기록되지 않았을 수 있습니다. 이 화면에서는 “아무도 쓰지 않음”과 “아직 기록되지 않음”을 구분할 수 없습니다." },
-  "usage.note.allMalformed":      { "zh-CN": "读到了分片，但每一个都是畸形的——这段时间的用量我们一无所知。请去查存储里是谁写的。", "zh-TW": "讀到了分片，但每一個都是畸形的——這段時間的用量我們一無所知。請去查儲存裡是誰寫的。", en: "Shards were found but every one of them is malformed — we know nothing about usage in this period. Check what wrote them in storage.", ja: "シャードは見つかりましたが、すべて不正な形式です。この期間の使用量は一切分かりません。ストレージに何が書き込まれたか確認してください。", ko: "샤드를 찾았지만 모두 손상되어 있습니다. 이 기간의 사용량을 전혀 알 수 없습니다. 스토리지에 무엇이 기록되었는지 확인하세요." },
-  "usage.note.partialMalformed":  { "zh-CN": "一部分分片是畸形的，下面这些数字缺了那几块。请去查存储里是谁写的。", "zh-TW": "一部分分片是畸形的，下面這些數字缺了那幾塊。請去查儲存裡是誰寫的。", en: "Some shards are malformed, so the numbers below are missing those parts. Check what wrote them in storage.", ja: "一部のシャードが不正な形式のため、以下の数値はその分が欠けています。ストレージに何が書き込まれたか確認してください。", ko: "일부 샤드가 손상되어 아래 수치에서 그만큼 빠져 있습니다. 스토리지에 무엇이 기록되었는지 확인하세요." },
-  "usage.note.noRequestDetail":   { "zh-CN": "这里没有逐请求流水，只有按小时 / 模型 / 协议 / 密钥的分解。需要逐请求粒度请看容器 stdout 或 Cloudflare Workers Logs。", "zh-TW": "這裡沒有逐請求流水，只有按小時 / 模型 / 協定 / 密鑰的分解。需要逐請求粒度請看容器 stdout 或 Cloudflare Workers Logs。", en: "There is no per-request log here, only breakdowns by hour, model, protocol and API key. For per-request detail see the container stdout or Cloudflare Workers Logs.", ja: "ここにはリクエスト単位のログはなく、時間 / モデル / プロトコル / APIキー別の内訳のみです。リクエスト単位が必要な場合はコンテナの stdout または Cloudflare Workers Logs を参照してください。", ko: "여기에는 요청별 로그가 없고 시간 / 모델 / 프로토콜 / API 키별 분해만 있습니다. 요청 단위가 필요하면 컨테이너 stdout 또는 Cloudflare Workers Logs를 확인하세요." },
-  // ⚠️ **「这段时间真的是 0」必须有自己的一句话**：后端第 ④ 种状态
-  //（有分片、只是请求数是 0）的 `note` 是 `null`，那一档没有任何 code 可读，
-  //    而它与「读不出来」在数字上都是「什么都没有」——不说出来就是三态混一。
-  "usage.empty":                  { "zh-CN": "这段区间里一次请求都没有。这不是读取失败——我们确实读到了，答案就是零。", "zh-TW": "這段區間裡一次請求都沒有。這不是讀取失敗——我們確實讀到了，答案就是零。", en: "There were no requests at all in this range. This is not a read failure — the read succeeded and the answer is zero.", ja: "この期間にリクエストは 1 件もありませんでした。読み取り失敗ではなく、取得に成功したうえで答えが 0 です。", ko: "이 구간에는 요청이 한 건도 없었습니다. 읽기 실패가 아니라, 읽기에 성공했고 답이 0입니다." },
-  "usage.note.unknown":           { "zh-CN": "服务端给了一个这个面板还不认识的状态码：{code}。原样显示在这里，好让你拿它去查后端。", "zh-TW": "伺服器給了一個這個面板還不認識的狀態碼：{code}。原樣顯示在這裡，好讓你拿它去查後端。", en: "The server returned a status code this panel does not recognise yet: {code}. It is shown verbatim so you can look it up in the backend.", ja: "この画面がまだ認識していないステータスコードがサーバーから返されました: {code}。バックエンドで調べられるよう、そのまま表示しています。", ko: "이 화면이 아직 인식하지 못하는 상태 코드를 서버가 반환했습니다: {code}. 백엔드에서 찾아볼 수 있도록 그대로 표시합니다." },
-
-  // ── Tier-2 关闭时的说明卡（设计 §10.6：不渲染空图表）──────────────────────
-  // ⚠️⚠️ **设计 §10.6 写的是「『开启时间序列统计』按钮（跳设置页）」，本任务
-  //    刻意没有做那颗按钮，理由写在 `admin-ui/js/sec-usage.js` 的说明卡那一段：
-  //    `usageStatsEnabled` 今天不在 `EDITABLE` 里、设置页上没有它的入口
-  //    （`src/core/config.ts` 的 `usageStatsEnabled` 上方逐字写着这一条），
-  //    跳过去只会让运维在一个没有这个开关的页面上找一圈。这里改成写清怎么开。
-  "usage.off.title": { "zh-CN": "时间序列统计没有开启", "zh-TW": "時間序列統計沒有開啟", en: "Time-series stats are off", ja: "時系列統計が無効です", ko: "시계열 통계가 꺼져 있습니다" },
-  "usage.off.body":  { "zh-CN": "这个部署没有在按天记账，所以这里没有可以显示的数字。不画空图表是刻意的——一张全是 0 的图会被读成「这段时间没人用」。", "zh-TW": "這個部署沒有在按天記帳，所以這裡沒有可以顯示的數字。不畫空圖表是刻意的——一張全是 0 的圖會被讀成「這段時間沒人用」。", en: "This deployment is not recording daily usage, so there are no numbers to show. Deliberately no empty chart is drawn: a chart of zeros reads as “nobody used it”.", ja: "このデプロイは日次の使用量を記録していないため、表示できる数値がありません。空のグラフを描かないのは意図的です。0 ばかりのグラフは「誰も使っていない」と読まれてしまいます。", ko: "이 배포는 일별 사용량을 기록하지 않으므로 표시할 수치가 없습니다. 빈 차트를 그리지 않는 것은 의도적입니다. 0으로 채워진 차트는 “아무도 쓰지 않았다”로 읽힙니다." },
-  "usage.off.howto": { "zh-CN": "要开启：把环境变量 USAGE_STATS_ENABLED 设成 true，然后重启容器（Cloudflare Worker 上是等 isolate 回收）。这个开关是建应用时读一次的，设置页上没有它的入口。", "zh-TW": "要開啟：把環境變數 USAGE_STATS_ENABLED 設成 true，然後重啟容器（Cloudflare Worker 上是等 isolate 回收）。這個開關是建應用時讀一次的，設定頁上沒有它的入口。", en: "To enable it: set the environment variable USAGE_STATS_ENABLED to true, then restart the container (on Cloudflare Workers, wait for the isolate to recycle). This switch is read once when the app is built, so the settings page has no control for it.", ja: "有効にするには: 環境変数 USAGE_STATS_ENABLED を true に設定し、コンテナを再起動してください（Cloudflare Workers では isolate の再生成を待ちます）。このスイッチはアプリ構築時に一度だけ読まれるため、設定ページには項目がありません。", ko: "켜려면: 환경 변수 USAGE_STATS_ENABLED를 true로 설정한 뒤 컨테이너를 재시작하세요(Cloudflare Workers에서는 isolate 재생성을 기다립니다). 이 스위치는 앱을 만들 때 한 번만 읽으므로 설정 페이지에는 항목이 없습니다." },
-  "usage.off.cost":  { "zh-CN": "开启的代价：每个实例最长每 {flush} 往存储写一次分片。在 Cloudflare KV 上那是写配额，请对着部署文档里的配额账估一下再开。", "zh-TW": "開啟的代價：每個實例最長每 {flush} 往儲存寫一次分片。在 Cloudflare KV 上那是寫配額，請對著部署文件裡的配額帳估一下再開。", en: "What it costs: each instance writes a shard to storage at most once every {flush}. On Cloudflare KV that is write quota — check the quota budget in the deployment docs before turning it on.", ja: "コスト: 各インスタンスは最短で {flush} ごとにシャードをストレージへ書き込みます。Cloudflare KV では書き込みクォータを消費するため、デプロイ文書のクォータ計算を確認してから有効にしてください。", ko: "비용: 각 인스턴스가 최소 {flush}마다 스토리지에 샤드를 한 번 기록합니다. Cloudflare KV에서는 쓰기 쿼터를 소모하므로 배포 문서의 쿼터 계산을 확인한 뒤 켜세요." },
-  "usage.off.costUnknown": { "zh-CN": "开启的代价：每个实例会定期往存储写一次分片。间隔有多长这一次没读出来（capabilities 没拿到）。", "zh-TW": "開啟的代價：每個實例會定期往儲存寫一次分片。間隔有多長這一次沒讀出來（capabilities 沒拿到）。", en: "What it costs: each instance periodically writes a shard to storage. The interval could not be read this time (capabilities were not available).", ja: "コスト: 各インスタンスは定期的にシャードをストレージへ書き込みます。その間隔は今回取得できませんでした（capabilities を取得できていません）。", ko: "비용: 각 인스턴스가 주기적으로 스토리지에 샤드를 기록합니다. 그 간격은 이번에 읽지 못했습니다(capabilities를 가져오지 못함)." },
-  "usage.off.tier1": { "zh-CN": "顺带一提：Key 池板块里逐把 key 的累计计数与这个开关无关，它在这里关着的时候照样可用。", "zh-TW": "順帶一提：Key 池板塊裡逐把 key 的累計計數與這個開關無關，它在這裡關著的時候照樣可用。", en: "Note: the per-key counters in the key pool section are unrelated to this switch and remain available while it is off.", ja: "補足: キープール画面のキーごとの累計カウントはこのスイッチとは無関係で、無効のままでも利用できます。", ko: "참고: 키 풀 화면의 키별 누적 카운트는 이 스위치와 무관하며, 꺼져 있어도 계속 사용할 수 있습니다." },
-
-  // ── 日汇总表与单日下钻 ─────────────────────────────────────────────────────
-  "usage.table.title":     { "zh-CN": "按天", "zh-TW": "按天", en: "By day", ja: "日別", ko: "일별" },
-  "usage.table.date":      { "zh-CN": "日期（UTC）", "zh-TW": "日期（UTC）", en: "Date (UTC)", ja: "日付（UTC）", ko: "날짜(UTC)" },
-  "usage.table.requests":  { "zh-CN": "请求", "zh-TW": "請求", en: "Requests", ja: "リクエスト", ko: "요청" },
-  "usage.table.success":   { "zh-CN": "成功", "zh-TW": "成功", en: "Success", ja: "成功", ko: "성공" },
-  "usage.table.errors":    { "zh-CN": "错误", "zh-TW": "錯誤", en: "Errors", ja: "エラー", ko: "오류" },
-  "usage.table.tokens":    { "zh-CN": "Token 入 / 出", "zh-TW": "Token 入 / 出", en: "Tokens in / out", ja: "トークン 入 / 出", ko: "토큰 입력 / 출력" },
-  "usage.table.streaming": { "zh-CN": "流式", "zh-TW": "串流", en: "Streaming", ja: "ストリーミング", ko: "스트리밍" },
-  "usage.table.latency":   { "zh-CN": "平均延迟（毫秒）", "zh-TW": "平均延遲（毫秒）", en: "Avg latency (ms)", ja: "平均レイテンシ（ミリ秒）", ko: "평균 지연(밀리초)" },
-  "usage.table.empty":     { "zh-CN": "这段区间里没有可以列出的日子。", "zh-TW": "這段區間裡沒有可以列出的日子。", en: "There are no days to list in this range.", ja: "この期間に一覧できる日はありません。", ko: "이 구간에 나열할 날짜가 없습니다." },
-  // ⚠️ **「读不出来」与「没有可以列出的日子」是两句话**（评审点名）：
-  //    `read_failed` 那一档 `days` 是 null ⇒ 行数也是 0，照上面那句渲染
-  //    等于把一次读取失败说成「这段时间本来就没有日子」。
-  "usage.table.unavailable": { "zh-CN": "这段区间的按天数据读不出来，所以这里是空的——不是这段时间没有日子。", "zh-TW": "這段區間的按天資料讀不出來，所以這裡是空的——不是這段時間沒有日子。", en: "The per-day data for this range could not be read, so this is empty — it is not that the range has no days.", ja: "この期間の日次データを取得できなかったため空になっています。期間に日がないという意味ではありません。", ko: "이 구간의 일별 데이터를 읽지 못해 비어 있습니다. 구간에 날짜가 없다는 뜻이 아닙니다." },
-  "usage.table.drill":     { "zh-CN": "下钻", "zh-TW": "下鑽", en: "Drill down", ja: "詳細", ko: "자세히" },
-  "usage.detail.title":    { "zh-CN": "{date} 的分解", "zh-TW": "{date} 的分解", en: "Breakdown for {date}", ja: "{date} の内訳", ko: "{date} 분해" },
-  "usage.detail.hours":    { "zh-CN": "按小时（UTC）", "zh-TW": "按小時（UTC）", en: "By hour (UTC)", ja: "時間別（UTC）", ko: "시간별(UTC)" },
-  "usage.detail.models":   { "zh-CN": "按模型", "zh-TW": "按模型", en: "By model", ja: "モデル別", ko: "모델별" },
-  "usage.detail.protocols": { "zh-CN": "按协议", "zh-TW": "按協定", en: "By protocol", ja: "プロトコル別", ko: "프로토콜별" },
-  "usage.detail.hour":     { "zh-CN": "小时", "zh-TW": "小時", en: "Hour", ja: "時", ko: "시" },
-  "usage.detail.model":    { "zh-CN": "模型", "zh-TW": "模型", en: "Model", ja: "モデル", ko: "모델" },
-  "usage.detail.protocol": { "zh-CN": "协议", "zh-TW": "協定", en: "Protocol", ja: "プロトコル", ko: "프로토콜" },
-  "usage.detail.apiKeys": { "zh-CN": "按密钥", "zh-TW": "按密鑰", en: "By API key", ja: "APIキー別", ko: "API 키별" },
-  "usage.detail.apiKey":  { "zh-CN": "密钥", "zh-TW": "密鑰", en: "API key", ja: "APIキー", ko: "API 키" },
-  // ⚠️⚠️ **这一句正面回答「密钥删了之后，历史里那个 id 怎么显示」。**
-  //    答案是「原样显示，不标成『已删除』」：日桶按天存，那个 id 就是签发时的事实；
-  //    而要判「已删除」必须与当前那张表联表，联表拿到的只是「当前表里查不到」，
-  //    **那有两种成因（真的删了 / 这一刻表读不出来）**，把它渲染成「已删除」
-  //    就是把一个未知说成结论。id 不是凭据（它本来就会进事件日志与 URL）。
-  "usage.detail.apiKeyNote": { "zh-CN": "这一列是签发时的密钥 id。已经删掉的密钥仍然以原始 id 留在历史里 —— 面板不会把它标成「已删除」：当前表里查不到有两种成因（真的删了，或者这一刻那张表读不出来），分不开就不下结论。", "zh-TW": "這一列是簽發時的密鑰 id。已經刪掉的密鑰仍然以原始 id 留在歷史裡 —— 面板不會把它標成「已刪除」：目前表裡查不到有兩種成因（真的刪了，或者這一刻那張表讀不出來），分不開就不下結論。", en: "This column holds the key id as issued. Deleted keys stay in history under their original id — the panel does not label them “deleted”: “not in the current table” has two possible causes (really deleted, or the table cannot be read right now), and we do not state a conclusion we cannot tell apart.", ja: "この列は発行時のキー id です。削除済みのキーも元の id のまま履歴に残ります。パネルはそれを「削除済み」とは表示しません: 「現在の一覧に無い」には二つの原因（本当に削除された／今この瞬間その一覧が読めない）があり、区別できないものを結論として書かないためです。", ko: "이 열은 발급 당시의 키 id입니다. 삭제된 키도 원래 id 그대로 이력에 남습니다. 패널은 이를 「삭제됨」으로 표시하지 않습니다: 「현재 목록에 없음」에는 두 가지 원인(정말 삭제됨 / 지금 이 순간 목록을 읽지 못함)이 있고, 구분할 수 없는 것을 결론으로 적지 않기 때문입니다." },
-  // ── 三个保留伪 id 的展示名 ────────────────────────────────────────────────
-  // ⚠️ **只有这一维做 id → 名的映射，模型那一维刻意不做**：这三个字面量是**我们自己发的**，
-  //    客户端选不了自己落进哪一格（真 id 是 12 位十六进制，与这三个串不相交）。
-  //    而 `byModel` 那一维的 `__other__` **客户端可以直接填**（那条边界逐字记在
-  //    `src/core/admin/usage-stats.ts` 的 `boundUsageKey` 上方）—— 在那里做映射
-  //    等于让任何一个客户端把自己的流量显示成「其它」。
-  "usage.key.master":  { "zh-CN": "主口令", "zh-TW": "主口令", en: "Master token", ja: "マスタートークン", ko: "마스터 토큰" },
-  "usage.key.other":   { "zh-CN": "其它（超出上限的密钥合计）", "zh-TW": "其它（超出上限的密鑰合計）", en: "Other (keys beyond the cap, combined)", ja: "その他（上限を超えたキーの合計）", ko: "기타(상한을 넘은 키 합계)" },
-  "usage.key.unattributed": { "zh-CN": "未归属（有请求绕过了鉴权中间件，要去查）", "zh-TW": "未歸屬（有請求繞過了鑑權中介層，要去查）", en: "Unattributed (a request bypassed the auth middleware — worth investigating)", ja: "未帰属（認証ミドルウェアを迂回したリクエストがあります。要調査）", ko: "미귀속(인증 미들웨어를 우회한 요청이 있습니다 — 확인 필요)" },
-  "usage.detail.close":    { "zh-CN": "收起", "zh-TW": "收起", en: "Collapse", ja: "閉じる", ko: "접기" },
-  "usage.detail.empty":    { "zh-CN": "这一天没有可以分解的记录。", "zh-TW": "這一天沒有可以分解的記錄。", en: "There is nothing to break down for this day.", ja: "この日は内訳を表示できる記録がありません。", ko: "이 날짜에는 분해할 기록이 없습니다." },
-  // ⚠️ 与 `usage.table.unavailable` 同一条理由，同一条评审点名的「第三屏」：分片全坏 /
-  //    读取失败 / 落在保留期外时三个 map 合出来都是空的，照上面那句渲染就是
-  //    把「我们什么都不知道」说成「这一天没有记录」。
-  // ⚠️ **单日口径，不能拿 `usage.incompleteTip` 顶替**（定向复评）：
-  //    后者逐字写着「这段区间里」，而下钻说的是**一天**。
-  "usage.detail.incomplete": { "zh-CN": "这一天有 {malformed} 个分片是畸形的，读不回来。下面这些数字缺了那几块，不是这一天完整的用量。", "zh-TW": "這一天有 {malformed} 個分片是畸形的，讀不回來。下面這些數字缺了那幾塊，不是這一天完整的用量。", en: "{malformed} shard(s) for this day are malformed and could not be read. The numbers below are missing those parts — this is not the complete usage for the day.", ja: "この日は不正なシャードが {malformed} 件あり、読み取れませんでした。以下の数値はその分が欠けており、この日の完全な使用量ではありません。", ko: "이 날짜에 손상된 샤드가 {malformed}개 있어 읽지 못했습니다. 아래 수치는 그만큼 빠져 있어 이 날짜의 완전한 사용량이 아닙니다." },
-  "usage.detail.unavailable": { "zh-CN": "这一天的分解读不出来，所以这里是空的——不是这一天没有记录。", "zh-TW": "這一天的分解讀不出來，所以這裡是空的——不是這一天沒有記錄。", en: "The breakdown for this day could not be read, so this is empty — it is not that the day has no records.", ja: "この日の内訳を取得できなかったため空になっています。この日に記録がないという意味ではありません。", ko: "이 날짜의 분해를 읽지 못해 비어 있습니다. 이 날짜에 기록이 없다는 뜻이 아닙니다." },
-
-  // ── 未落盘的尾巴（`pending` 块）───────────────────────────────────────────
-  // ⚠️ 判据是 `count`，**不是 `ms`**：`ms` 数的是「距上一次落盘*尝试*多久」，
-  //    `count > 0 && ms ≈ 0` 要读作「刚试过、没写成」。
-  "usage.pending":          { "zh-CN": "还有 {count} 条计数没有落盘，上面的数字少了这一截。", "zh-TW": "還有 {count} 條計數沒有落盤，上面的數字少了這一截。", en: "{count} counter(s) have not been flushed yet; the numbers above are short by that much.", ja: "未書き込みのカウントが {count} 件あります。上の数値はその分少なくなっています。", ko: "아직 기록되지 않은 카운트가 {count}건 있습니다. 위 수치는 그만큼 적습니다." },
-  "usage.pendingExhausted": { "zh-CN": "写配额已经耗尽，还有 {count} 条计数暂时写不进存储。这不是「没有尾巴」，是写不进去。", "zh-TW": "寫配額已經耗盡，還有 {count} 條計數暫時寫不進儲存。這不是「沒有尾巴」，是寫不進去。", en: "The write budget is exhausted; {count} counter(s) cannot be written to storage for now. This is not “nothing pending” — the writes are failing.", ja: "書き込み予算を使い切ったため、{count} 件のカウントを当面ストレージへ書き込めません。「未書き込みがない」のではなく、書き込めていません。", ko: "쓰기 예산이 소진되어 {count}건의 카운트를 당분간 스토리지에 기록할 수 없습니다. “대기 중인 것이 없음”이 아니라 기록에 실패하고 있습니다." },
-
-  // ── 模型板块（设计 §10.7 / §11）────────────────────────────────────────────
-  // ⚠️⚠️ **这一段里一个端点路径、一个协议 id 都没有，是刻意的**（全局约束 15）：
-  //    协议的展示名是**专名**，由 `GET /admin/api/models` 的 `protocols[].label` 直接
-  //    给出，翻译它只会制造歧义；端点由响应的 `endpoints[]` 原样渲染。
-  //    ⇒ 字典里只放**要翻译的东西**：列名、三个形态名、两句 tooltip、三句空态说明。
-  // ⚠️ 「类型」是那一列的**显示名**，代码里那个字段一律叫 `modality`（评审 Minor 9）。
-  "models.title":            { "zh-CN": "模型", "zh-TW": "模型", en: "Models", ja: "モデル", ko: "모델" },
-  "models.desc":             { "zh-CN": "本网关认得的模型，以及每个模型在哪几条协议上真的可用。", "zh-TW": "本閘道認得的模型，以及每個模型在哪幾條協定上真的可用。", en: "The models this gateway knows about, and which protocols each one is actually available on.", ja: "このゲートウェイが認識しているモデルと、各モデルが実際に利用できるプロトコルです。", ko: "이 게이트웨이가 인식하는 모델과, 각 모델이 실제로 사용 가능한 프로토콜입니다." },
-  "models.table.title":      { "zh-CN": "模型目录", "zh-TW": "模型目錄", en: "Model catalog", ja: "モデルカタログ", ko: "모델 카탈로그" },
-  "models.filter.label":     { "zh-CN": "按协议筛选", "zh-TW": "依協定篩選", en: "Filter by protocol", ja: "プロトコルで絞り込み", ko: "프로토콜로 필터" },
-  "models.filter.all":       { "zh-CN": "全部", "zh-TW": "全部", en: "All", ja: "すべて", ko: "전체" },
-  "models.col.id":           { "zh-CN": "模型 ID", "zh-TW": "模型 ID", en: "Model ID", ja: "モデル ID", ko: "모델 ID" },
-  "models.col.modality":     { "zh-CN": "类型", "zh-TW": "類型", en: "Type", ja: "種類", ko: "유형" },
-  "models.col.protocols":    { "zh-CN": "协议可用性", "zh-TW": "協定可用性", en: "Protocol availability", ja: "プロトコル対応", ko: "프로토콜 지원" },
-  "models.col.endpoints":    { "zh-CN": "端点", "zh-TW": "端點", en: "Endpoints", ja: "エンドポイント", ko: "엔드포인트" },
-  "models.modality.chat":    { "zh-CN": "对话", "zh-TW": "對話", en: "Chat", ja: "チャット", ko: "대화" },
-  "models.modality.image":   { "zh-CN": "图片", "zh-TW": "圖片", en: "Image", ja: "画像", ko: "이미지" },
-  "models.modality.video":   { "zh-CN": "视频", "zh-TW": "影片", en: "Video", ja: "動画", ko: "동영상" },
-  // ⚠️ 灰徽章那一句必须说「不可用」，**不许说「未知」**：矩阵里的每一格都是从目录里
-  //    读出来的确定答案，把它说成「未知」就把一句确定的话降级成了含糊话。
-  "models.badge.yes":        { "zh-CN": "这个模型在这条协议上可用", "zh-TW": "這個模型在這條協定上可用", en: "This model is available on this protocol", ja: "このモデルはこのプロトコルで利用できます", ko: "이 모델은 이 프로토콜에서 사용할 수 있습니다" },
-  "models.badge.no":         { "zh-CN": "这个模型在这条协议上不可用", "zh-TW": "這個模型在這條協定上不可用", en: "This model is not available on this protocol", ja: "このモデルはこのプロトコルでは利用できません", ko: "이 모델은 이 프로토콜에서 사용할 수 없습니다" },
-  // ⚠️ 三句空态说明**互不重叠**，理由与用量板块那三态是同一条（全局约束 9）：
-  //    「一个模型都没有」「这条协议上没有」「读不出来」在屏幕上必须分得开。
-  "models.empty":            { "zh-CN": "这份目录里一个模型都没有。", "zh-TW": "這份目錄裡一個模型都沒有。", en: "This catalog contains no models.", ja: "このカタログにはモデルが 1 つもありません。", ko: "이 카탈로그에는 모델이 하나도 없습니다." },
-  "models.filterEmpty":      { "zh-CN": "这条协议上没有可用的模型。", "zh-TW": "這條協定上沒有可用的模型。", en: "No models are available on this protocol.", ja: "このプロトコルで利用できるモデルはありません。", ko: "이 프로토콜에서 사용할 수 있는 모델이 없습니다." },
-  "models.unavailable":      { "zh-CN": "模型目录读不出来，所以这里是一根破折号——不是这个网关一个模型都没有。", "zh-TW": "模型目錄讀不出來，所以這裡是一根破折號——不是這個閘道一個模型都沒有。", en: "The model catalog could not be read, so this shows a dash — it is not that the gateway has no models.", ja: "モデルカタログを取得できなかったためダッシュを表示しています。ゲートウェイにモデルがないという意味ではありません。", ko: "모델 카탈로그를 읽지 못해 대시를 표시합니다. 게이트웨이에 모델이 없다는 뜻이 아닙니다." },
-
-  // ── 上游模型那张卡 ────────────────────────────────────────────────────────
-  // ⚠️ 整族措辞守一条：**上游那份清单说的是「上游账号此刻回了什么」，
-  //    目录说的是「本网关支持什么」**。任何一句都不许把两者说成同一件事。
-  "models.up.title":         { "zh-CN": "上游模型", "zh-TW": "上游模型", en: "Upstream models", ja: "上流のモデル", ko: "업스트림 모델" },
-  "models.up.desc":          { "zh-CN": "拿 Key 池里的一把 key 去问上游此刻有哪些模型；按一下会真的向上游发一次请求。它不替代上面那份目录：目录说本网关支持什么，这里说上游账号此刻回了什么。", "zh-TW": "拿 Key 池裡的一把 key 去問上游此刻有哪些模型；按一下會真的向上游發一次請求。它不取代上面那份目錄：目錄說本閘道支援什麼，這裡說上游帳號此刻回了什麼。", en: "Ask upstream which models it has right now, using one key from the pool; each click really does send a request upstream. It does not replace the catalog above: the catalog says what this gateway supports, this says what the upstream account returns right now.", ja: "キープールの key を 1 本使って、上流に現在どのモデルがあるかを問い合わせます。押すたびに上流へ実際にリクエストを送ります。上のカタログの代わりではありません: カタログはこのゲートウェイが対応している内容、ここは上流アカウントが今返した内容です。", ko: "키 풀의 key 하나로 업스트림에 지금 어떤 모델이 있는지 물어봅니다. 누를 때마다 업스트림으로 실제 요청을 보냅니다. 위 카탈로그를 대체하지 않습니다: 카탈로그는 이 게이트웨이가 지원하는 것, 여기는 업스트림 계정이 지금 반환한 것입니다." },
-  "models.up.load":          { "zh-CN": "向上游查一次", "zh-TW": "向上游查一次", en: "Ask upstream once", ja: "上流に 1 回問い合わせる", ko: "업스트림에 한 번 조회" },
-  "models.up.loading":       { "zh-CN": "正在问上游……", "zh-TW": "正在問上游……", en: "Asking upstream…", ja: "上流に問い合わせています…", ko: "업스트림에 조회하는 중…" },
-  // ⚠️ 「还没查过」与「查过了、上游一个都没回」是两句话，**这一句只说前者**。
-  "models.up.idle":          { "zh-CN": "还没有问过上游，所以这里是一根破折号——不是上游一个模型都没有。", "zh-TW": "還沒有問過上游，所以這裡是一根破折號——不是上游一個模型都沒有。", en: "Upstream has not been asked yet, so this shows a dash — it is not that upstream has no models.", ja: "まだ上流に問い合わせていないためダッシュを表示しています。上流にモデルがないという意味ではありません。", ko: "아직 업스트림에 조회하지 않아 대시를 표시합니다. 업스트림에 모델이 없다는 뜻이 아닙니다." },
-  "models.up.ok":            { "zh-CN": "问到了：下面是上游账号此刻回的那份清单。", "zh-TW": "問到了：下面是上游帳號此刻回的那份清單。", en: "Answered: below is what the upstream account returns right now.", ja: "取得できました: 以下は上流アカウントが現時点で返した内容です。", ko: "응답을 받았습니다: 아래는 업스트림 계정이 지금 반환한 내용입니다." },
-  "models.up.listLabel":     { "zh-CN": "上游这次回的模型 id（{n} 个）", "zh-TW": "上游這次回的模型 id（{n} 個）", en: "Model ids upstream returned this time ({n})", ja: "今回上流が返したモデル id（{n} 件）", ko: "이번에 업스트림이 반환한 모델 id({n}개)" },
-  "models.up.truncated":     { "zh-CN": "上游回的条数超过了本网关认的上限，这里只列出前 {n} 条，后面还有没列出来的。", "zh-TW": "上游回的條數超過了本閘道認的上限，這裡只列出前 {n} 條，後面還有沒列出來的。", en: "Upstream returned more entries than this gateway accepts; only the first {n} are listed and there are more beyond them.", ja: "上流が返した件数がこのゲートウェイの上限を超えました。ここに出ているのは先頭 {n} 件だけで、この先にもまだあります。", ko: "업스트림이 반환한 항목 수가 이 게이트웨이의 상한을 넘었습니다. 여기에는 앞의 {n}개만 나오며 그 뒤에도 더 있습니다." },
-  "models.up.onlyUpstream":  { "zh-CN": "上游有、本网关目录里没有的（{n} 个）", "zh-TW": "上游有、本閘道目錄裡沒有的（{n} 個）", en: "On upstream but not in this gateway's catalog ({n})", ja: "上流にあってこのゲートウェイのカタログにないもの（{n} 件）", ko: "업스트림에는 있고 이 게이트웨이 카탈로그에는 없는 것({n}개)" },
-  // ⚠️ **这一句不许写成「上游没有这个模型」**：上游按账号发模型，权限较窄的一把 key
-  //    拉回来的清单本来就短。措辞只能说「这次上游没回」。
-  "models.up.onlyCatalog":   { "zh-CN": "目录里有、这次上游没回的（{n} 个）。上游按账号发模型，权限较窄的一把 key 清单本来就短——这不等于上游没有这些模型。", "zh-TW": "目錄裡有、這次上游沒回的（{n} 個）。上游按帳號發模型，權限較窄的一把 key 清單本來就短——這不等於上游沒有這些模型。", en: "In the catalog but not returned upstream this time ({n}). Upstream hands out models per account, so a narrow key sees a shorter list — it does not mean upstream lacks them.", ja: "カタログにあって今回上流が返さなかったもの（{n} 件）。上流はアカウント単位でモデルを出すため権限の狭い key ではリストが短くなります。上流にないという意味ではありません。", ko: "카탈로그에는 있지만 이번에 업스트림이 반환하지 않은 것({n}개). 업스트림은 계정별로 모델을 주므로 권한이 좁은 key는 목록이 짧습니다. 업스트림에 없다는 뜻은 아닙니다." },
-  "models.up.diffNone":      { "zh-CN": "两份清单完全一致：目录里的每一个上游这次都回了，也没有多出目录之外的。", "zh-TW": "兩份清單完全一致：目錄裡的每一個上游這次都回了，也沒有多出目錄之外的。", en: "The two lists match exactly: upstream returned every catalog model, and nothing beyond it.", ja: "2 つのリストは完全に一致しています: カタログのすべてが返り、カタログ外のものもありません。", ko: "두 목록이 완전히 일치합니다: 카탈로그의 모든 항목이 반환되었고 그 밖의 것도 없습니다." },
-  "models.up.status":        { "zh-CN": "上游这次回的 HTTP 状态码：{status}", "zh-TW": "上游這次回的 HTTP 狀態碼：{status}", en: "HTTP status upstream returned this time: {status}", ja: "今回上流が返した HTTP ステータス: {status}", ko: "이번에 업스트림이 반환한 HTTP 상태 코드: {status}" },
-  "models.up.noKey":         { "zh-CN": "Key 池里没有一把现在能用的 key，这次一个上游请求都没发出去。先去 Key 池加一把，或等冷却过去。", "zh-TW": "Key 池裡沒有一把現在能用的 key，這次一個上游請求都沒發出去。先去 Key 池加一把，或等冷卻過去。", en: "No usable key in the pool right now, so no upstream request was sent. Add one in the key pool, or wait for the cooldown.", ja: "現在使えるキーがプールにないため、上流へのリクエストは送信されていません。キープールに追加するか、クールダウンをお待ちください。", ko: "지금 사용할 수 있는 key가 풀에 없어 업스트림 요청을 보내지 않았습니다. 키 풀에 추가하거나 쿨다운을 기다리세요." },
-  // ⚠️ 「正文不回给面板」这一句不是客套：各家 API 的 401 错误体最爱回显 key 片段。
-  "models.up.upstreamError": { "zh-CN": "上游没有正常返回。它的错误正文刻意不显示在这里——那正是各家 API 最容易回显 key 片段的地方。", "zh-TW": "上游沒有正常返回。它的錯誤正文刻意不顯示在這裡——那正是各家 API 最容易回顯 key 片段的地方。", en: "Upstream did not answer normally. Its error body is deliberately not shown here — that is exactly where APIs tend to echo fragments of the key.", ja: "上流が正常に応答しませんでした。エラー本文は意図的に表示していません。各社の API が key の断片を書き戻しがちなのがまさにそこだからです。", ko: "업스트림이 정상적으로 응답하지 않았습니다. 오류 본문은 의도적으로 표시하지 않습니다. 각 API가 key 조각을 그대로 내보내기 쉬운 곳이 바로 거기이기 때문입니다." },
-  "models.up.badPayload":    { "zh-CN": "上游回了，但那份内容本网关看不懂，一个模型 id 都没读出来。这是关于我们的话，不是「上游没有模型」。", "zh-TW": "上游回了，但那份內容本閘道看不懂，一個模型 id 都沒讀出來。這是關於我們的話，不是「上游沒有模型」。", en: "Upstream answered, but this gateway could not read the payload and got no model id out of it. That is about us, not about upstream having no models.", ja: "上流は応答しましたが、その内容を解釈できずモデル id を 1 つも取り出せませんでした。これは私たち側の話で、上流にモデルがないという意味ではありません。", ko: "업스트림이 응답했지만 그 내용을 읽지 못해 모델 id를 하나도 얻지 못했습니다. 이는 우리 쪽 이야기이지 업스트림에 모델이 없다는 뜻이 아닙니다." },
-  "models.up.timeout":       { "zh-CN": "问上游超时了：在超时档内没有拿到响应头。", "zh-TW": "問上游逾時了：在逾時檔內沒有拿到回應標頭。", en: "The upstream request timed out: no response headers arrived within the timeout budget.", ja: "上流への問い合わせがタイムアウトしました: タイムアウト時間内にレスポンスヘッダーが届きませんでした。", ko: "업스트림 조회가 시간 초과되었습니다: 제한 시간 안에 응답 헤더가 오지 않았습니다." },
-  "models.up.networkError":  { "zh-CN": "连不上上游：这次请求没有拿到任何响应。", "zh-TW": "連不上上游：這次請求沒有拿到任何回應。", en: "Cannot reach upstream: this request got no response at all.", ja: "上流に到達できません: 今回のリクエストは応答をまったく受け取れませんでした。", ko: "업스트림에 연결할 수 없습니다: 이번 요청은 어떤 응답도 받지 못했습니다." },
-  "models.up.bodyIncomplete": { "zh-CN": "上游的响应头回了，正文却没有完整落地（超时或中途断流）。这不是「那份内容看不懂」。", "zh-TW": "上游的回應標頭回了，內文卻沒有完整落地（逾時或中途斷流）。這不是「那份內容看不懂」。", en: "Upstream response headers arrived, but the body never landed in full (timed out or the stream broke). That is not the same as a payload we could not read.", ja: "上流のレスポンスヘッダーは届きましたが、本文が最後まで届きませんでした (タイムアウトまたは途中で切断)。これは内容を解釈できなかったという意味ではありません。", ko: "업스트림 응답 헤더는 도착했지만 본문이 끝까지 도착하지 않았습니다 (시간 초과 또는 중간 끊김). 이는 내용을 읽지 못했다는 뜻이 아닙니다." },
-  "models.up.mismatch":      { "zh-CN": "后端这次给的东西面板读不懂：一个还不认识的结果码，或一份形状不认识的清单。请核对两边的版本。", "zh-TW": "後端這次給的東西面板讀不懂：一個還不認識的結果碼，或一份形狀不認識的清單。請核對兩邊的版本。", en: "The panel does not understand what the backend returned: an outcome code it does not know yet, or a list in an unfamiliar shape. Check that both sides are on the same version.", ja: "今回バックエンドが返した内容をこの画面が解釈できません: 未知の結果コード、または形の違うリストです。両者のバージョンを確認してください。", ko: "이번에 백엔드가 반환한 내용을 콘솔이 이해하지 못합니다: 아직 모르는 결과 코드이거나 형태가 낯선 목록입니다. 양쪽 버전을 확인하세요." },
-  "models.up.probeInFlight": { "zh-CN": "上一次上游探测还没有返回，等它结束再试。", "zh-TW": "上一次上游探測還沒有回來，等它結束再試。", en: "The previous upstream probe has not returned yet; wait for it to finish before retrying.", ja: "前回の上流プローブがまだ返っていません。終了してから再試行してください。", ko: "이전 업스트림 탐지가 아직 반환되지 않았습니다. 끝난 뒤에 다시 시도하세요." },
-  "models.up.probeCooldown": { "zh-CN": "两次上游探测之间至少要隔一小段时间，请稍后再试。这不是上游的故障。", "zh-TW": "兩次上游探測之間至少要隔一小段時間，請稍後再試。這不是上游的故障。", en: "There is a minimum interval between two upstream probes; please retry shortly. This is not an upstream fault.", ja: "上流プローブとプローブの間には最小間隔があります。少し待ってから再試行してください。上流の障害ではありません。", ko: "업스트림 탐지 사이에는 최소 간격이 있습니다. 잠시 후 다시 시도하세요. 업스트림의 장애가 아닙니다." },
-  "models.up.unauthorizedAdmin": { "zh-CN": "管理会话已失效，请重新输入管理口令。", "zh-TW": "管理工作階段已失效，請重新輸入管理口令。", en: "The admin session has expired; enter the admin token again.", ja: "管理セッションの有効期限が切れました。管理トークンを入力し直してください。", ko: "관리 세션이 만료되었습니다. 관리 토큰을 다시 입력하세요." },
-  "models.up.transportError":{ "zh-CN": "这次请求没有发到上游：管理接口这一段就失败了，与上游状态无关。", "zh-TW": "這次請求沒有發到上游：管理介面這一段就失敗了，與上游狀態無關。", en: "This request never reached upstream: it failed on the admin hop, which says nothing about upstream.", ja: "今回のリクエストは上流に届いていません: 管理 API の区間で失敗しており、上流の状態とは無関係です。", ko: "이번 요청은 업스트림에 도달하지 못했습니다: 관리 API 구간에서 실패한 것이며 업스트림 상태와는 무관합니다." },
-
-  // ── 模型测试那张卡（逐模型连通性矩阵）─────────────────────────
-  // ⚠️ 整族措辞守两条：
-  //    ① **这张卡说的是「这一刻这个模型通不通」**，与目录卡（本网关支持什么）、
-  //       上游卡（上游账号此刻回了什么）是三个问题，任何一句都不许把它们说成同一件事
-  //       ——一个模型出现在上游清单里、与它此刻真的能出话，是两码事；
-  //    ② **「还没测」「正在测」「测过了、没通」是三句话**，一句都不许合并：
-  //       把没测过的说成没通，运维会去查一条根本没发生过的故障。
-  "models.test.title":       { "zh-CN": "模型测试", "zh-TW": "模型測試", en: "Model connectivity test", ja: "モデル疎通テスト", ko: "모델 연결 테스트" },
-  "models.test.desc":        { "zh-CN": "逐个模型向上游真发一次最小请求，只看它通不通、多快。每一行都会真的打一次上游，所以整轮是串行跑的：上一条回来了才发下一条。只测对话模型——测一次图片模型会真的生成一张图，测一次视频模型会建一个任务并反复轮询，那两样都会真的花掉这个账号的生成额度。", "zh-TW": "逐個模型向上游真發一次最小請求，只看它通不通、多快。每一行都會真的打一次上游，所以整輪是串列跑的：上一條回來了才發下一條。只測對話模型——測一次圖片模型會真的生成一張圖，測一次影片模型會建一個任務並反覆輪詢，那兩樣都會真的花掉這個帳號的生成額度。", en: "Send one minimal request upstream per model, just to see whether it answers and how fast. Every row really does hit upstream, so the run is serial: the next request goes out only after the previous one comes back. Chat models only — testing an image model really generates an image, and testing a video model creates a job and polls it repeatedly; both really do spend this account's generation quota.", ja: "モデルごとに最小のリクエストを上流へ実際に 1 回送り、応答するかどうかと速さだけを見ます。各行が本当に上流へ届くため、1 周は直列で実行します: 前の 1 件が返ってから次を送ります。対象はチャットモデルのみです。画像モデルを試すと実際に画像が 1 枚生成され、動画モデルを試すとジョブを作成して繰り返しポーリングします。どちらもこのアカウントの生成枠を実際に消費します。", ko: "모델마다 최소 요청을 업스트림으로 실제로 한 번 보내 응답 여부와 속도만 확인합니다. 각 행이 실제로 업스트림을 호출하므로 한 바퀴는 순차로 실행됩니다: 앞의 요청이 돌아온 뒤에 다음을 보냅니다. 대화 모델만 대상입니다 — 이미지 모델을 테스트하면 실제로 이미지가 한 장 생성되고, 동영상 모델을 테스트하면 작업을 만들어 반복 폴링합니다. 둘 다 이 계정의 생성 할당량을 실제로 소모합니다." },
-  "models.test.run":         { "zh-CN": "全部测一遍", "zh-TW": "全部測一遍", en: "Test them all once", ja: "すべて 1 回テストする", ko: "전부 한 번 테스트" },
-  "models.test.progress":    { "zh-CN": "正在逐个测：{done}/{total}", "zh-TW": "正在逐個測：{done}/{total}", en: "Testing one by one: {done}/{total}", ja: "順番にテスト中: {done}/{total}", ko: "하나씩 테스트 중: {done}/{total}" },
-  // ⚠️ `models.test.progressWaiting` 与上面那句**必须是两句话**：两条请求之间要隔满
-  // 后端探测护栏的最小间隔，那几秒里一条请求都没在飞、一行状态都不会变。还写着
-  // 「正在逐个测」的话，那句话在那几秒里是假的，而屏幕上是一个停住不动的进度
-  // ——与挂死不可区分。
-  "models.test.progressWaiting": { "zh-CN": "在等节流：{done}/{total}，隔一会儿才发下一条", "zh-TW": "在等節流：{done}/{total}，隔一會兒才發下一條", en: "Waiting out the throttle: {done}/{total}, next request goes out shortly", ja: "スロットリング待ち: {done}/{total}、次のリクエストはしばらくしてから送ります", ko: "스로틀 대기 중: {done}/{total}, 다음 요청은 잠시 후에 보냅니다" },
-  "models.test.eta":         { "zh-CN": "两条请求之间要隔满上游探测护栏的最小间隔，所以这 {n} 个模型整轮至少要 {sec} 秒——中途按钮上会一直显示进度。", "zh-TW": "兩條請求之間要隔滿上游探測護欄的最小間隔，所以這 {n} 個模型整輪至少要 {sec} 秒——中途按鈕上會一直顯示進度。", en: "Consecutive requests must be spaced by the probe guard's minimum interval, so a full round over these {n} models takes at least {sec} seconds — the button keeps showing progress meanwhile.", ja: "リクエストとリクエストの間はプローブガードの最小間隔を空ける必要があるため、この {n} 個のモデルの 1 周には少なくとも {sec} 秒かかります。その間ボタンには進捗が表示され続けます。", ko: "연속된 요청 사이에는 탐지 가드의 최소 간격을 두어야 하므로 이 {n} 개 모델을 한 바퀴 도는 데 최소 {sec}초가 걸립니다 — 그동안 버튼에 진행 상황이 계속 표시됩니다." },
-  "models.test.col.model":   { "zh-CN": "模型", "zh-TW": "模型", en: "Model", ja: "モデル", ko: "모델" },
-  "models.test.col.result":  { "zh-CN": "结果", "zh-TW": "結果", en: "Result", ja: "結果", ko: "결과" },
-  "models.test.col.latency": { "zh-CN": "延迟（毫秒）", "zh-TW": "延遲（毫秒）", en: "Latency (ms)", ja: "レイテンシ（ミリ秒）", ko: "지연 시간(ms)" },
-  // ⚠️ 「目录里一个模型都没有」与「目录里没有能这么测的模型」是两句话：
-  //    图片与视频模型确实在目录里，只是这颗按钮不许碰它们。
-  "models.test.empty":       { "zh-CN": "这份目录里没有可以这样测的模型：连通性测试只发对话请求，而图片与视频模型得真的生成一次才知道结果。", "zh-TW": "這份目錄裡沒有可以這樣測的模型：連通性測試只發對話請求，而圖片與影片模型得真的生成一次才知道結果。", en: "This catalog has no model that can be tested this way: the connectivity test only sends chat requests, while image and video models would have to actually generate something to answer.", ja: "このカタログにはこの方法でテストできるモデルがありません: 疎通テストはチャットリクエストしか送らず、画像・動画モデルは実際に生成しないと結果が分からないためです。", ko: "이 카탈로그에는 이 방식으로 테스트할 수 있는 모델이 없습니다: 연결 테스트는 대화 요청만 보내며, 이미지와 동영상 모델은 실제로 생성해야 결과를 알 수 있습니다." },
-  "models.test.idle":        { "zh-CN": "还没测过，所以这里是一根破折号——不是这些模型都不通。", "zh-TW": "還沒測過，所以這裡是一根破折號——不是這些模型都不通。", en: "Nothing has been tested yet, so this shows a dash — it is not that these models are unreachable.", ja: "まだ何もテストしていないためダッシュを表示しています。これらのモデルが通じないという意味ではありません。", ko: "아직 아무것도 테스트하지 않아 대시를 표시합니다. 이 모델들이 통하지 않는다는 뜻이 아닙니다." },
-  "models.test.pending":     { "zh-CN": "待测", "zh-TW": "待測", en: "Not tested yet", ja: "未テスト", ko: "미테스트" },
-  "models.test.active":      { "zh-CN": "正在测……", "zh-TW": "正在測……", en: "Testing…", ja: "テスト中…", ko: "테스트 중…" },
-  "models.test.ok":          { "zh-CN": "通了：上游用这个模型正常回了一次。", "zh-TW": "通了：上游用這個模型正常回了一次。", en: "Reachable: upstream answered normally with this model.", ja: "疎通しました: 上流がこのモデルで正常に応答しました。", ko: "연결됨: 업스트림이 이 모델로 정상 응답했습니다." },
-  "models.test.noKey":       { "zh-CN": "Key 池里没有一把现在能用的 key，这一行一个上游请求都没发出去。先去 Key 池加一把，或等冷却过去。", "zh-TW": "Key 池裡沒有一把現在能用的 key，這一行一個上游請求都沒發出去。先去 Key 池加一把，或等冷卻過去。", en: "No usable key in the pool right now, so this row sent no upstream request at all. Add one in the key pool, or wait for the cooldown.", ja: "現在使えるキーがプールにないため、この行は上流へのリクエストを 1 件も送っていません。キープールに追加するか、クールダウンをお待ちください。", ko: "지금 사용할 수 있는 key가 풀에 없어 이 행은 업스트림 요청을 하나도 보내지 않았습니다. 키 풀에 추가하거나 쿨다운을 기다리세요." },
-  // ⚠️ 「正文不回给面板」这一句不是客套：各家 API 的 401 错误体最爱回显 key 片段。
-  "models.test.upstreamError": { "zh-CN": "上游没有正常返回这个模型。它的错误正文刻意不显示在这里——那正是各家 API 最容易回显 key 片段的地方。", "zh-TW": "上游沒有正常返回這個模型。它的錯誤正文刻意不顯示在這裡——那正是各家 API 最容易回顯 key 片段的地方。", en: "Upstream did not answer normally for this model. Its error body is deliberately not shown here — that is exactly where APIs tend to echo fragments of the key.", ja: "上流はこのモデルで正常に応答しませんでした。エラー本文は意図的に表示していません。各社の API が key の断片を書き戻しがちなのがまさにそこだからです。", ko: "업스트림이 이 모델에 대해 정상적으로 응답하지 않았습니다. 오류 본문은 의도적으로 표시하지 않습니다. 각 API가 key 조각을 그대로 내보내기 쉬운 곳이 바로 거기이기 때문입니다." },
-  "models.test.timeout":     { "zh-CN": "这个模型超时了：在超时档内没有拿到响应头。", "zh-TW": "這個模型逾時了：在逾時檔內沒有拿到回應標頭。", en: "This model timed out: no response headers arrived within the timeout budget.", ja: "このモデルはタイムアウトしました: タイムアウト時間内にレスポンスヘッダーが届きませんでした。", ko: "이 모델은 시간이 초과되었습니다: 제한 시간 안에 응답 헤더가 오지 않았습니다." },
-  "models.test.networkError": { "zh-CN": "连不上上游：这一次请求没有拿到任何响应。", "zh-TW": "連不上上游：這一次請求沒有拿到任何回應。", en: "Cannot reach upstream: this request got no response at all.", ja: "上流に到達できません: 今回のリクエストは応答をまったく受け取れませんでした。", ko: "업스트림에 연결할 수 없습니다: 이번 요청은 어떤 응답도 받지 못했습니다." },
-  // ⚠️ 护栏那两条与验活、上游模型两张卡共用同一把护栏，措辞口径必须一致：
-  //    「等它回来」与「稍后再试」是两种处置，只给状态码分不开。
-  "models.test.probeInFlight": { "zh-CN": "上一次上游探测还没有返回，等它结束再试。", "zh-TW": "上一次上游探測還沒有回來，等它結束再試。", en: "The previous upstream probe has not returned yet; wait for it to finish before retrying.", ja: "前回の上流プローブがまだ返っていません。終了してから再試行してください。", ko: "이전 업스트림 탐지가 아직 반환되지 않았습니다. 끝난 뒤에 다시 시도하세요." },
-  "models.test.probeCooldown": { "zh-CN": "两次上游探测之间至少要隔一小段时间，这一行被节流挡下了，请稍后再测。这不是这个模型的故障。", "zh-TW": "兩次上游探測之間至少要隔一小段時間，這一行被節流擋下了，請稍後再測。這不是這個模型的故障。", en: "There is a minimum interval between two upstream probes; this row was throttled, so retry shortly. This is not a fault of the model.", ja: "上流プローブとプローブの間には最小間隔があります。この行はスロットリングで弾かれました。少し待ってから再試行してください。モデルの障害ではありません。", ko: "업스트림 탐지 사이에는 최소 간격이 있습니다. 이 행은 스로틀링에 막혔으니 잠시 후 다시 시도하세요. 이 모델의 장애가 아닙니다." },
-  "models.test.modalityNotTestable": { "zh-CN": "这个模型不能这样测：连通性测试只发对话请求，而图片与视频模型得真的生成一次才知道结果，那会花掉这个账号的生成额度。", "zh-TW": "這個模型不能這樣測：連通性測試只發對話請求，而圖片與影片模型得真的生成一次才知道結果，那會花掉這個帳號的生成額度。", en: "This model cannot be tested this way: the connectivity test only sends chat requests, while image and video models would have to actually generate something, which spends this account's generation quota.", ja: "このモデルはこの方法ではテストできません: 疎通テストはチャットリクエストしか送らず、画像・動画モデルは実際に生成する必要があり、このアカウントの生成枠を消費します。", ko: "이 모델은 이 방식으로 테스트할 수 없습니다: 연결 테스트는 대화 요청만 보내며, 이미지와 동영상 모델은 실제로 생성해야 하므로 이 계정의 생성 할당량을 소모합니다." },
-  "models.test.modelNotFound": { "zh-CN": "这个网关的模型目录里没有这个模型，这一行一个上游请求都没发出去。多半是面板与后端的版本对不上。", "zh-TW": "這個閘道的模型目錄裡沒有這個模型，這一行一個上游請求都沒發出去。多半是面板與後端的版本對不上。", en: "This gateway's model catalog does not contain this model, so this row sent no upstream request at all. Most likely the panel and the backend are on different versions.", ja: "このゲートウェイのモデルカタログにこのモデルがないため、この行は上流へのリクエストを 1 件も送っていません。画面とバックエンドのバージョンが揃っていない可能性が高いです。", ko: "이 게이트웨이의 모델 카탈로그에 이 모델이 없어 이 행은 업스트림 요청을 하나도 보내지 않았습니다. 콘솔과 백엔드의 버전이 맞지 않을 가능성이 큽니다." },
-  "models.test.unauthorizedAdmin": { "zh-CN": "管理会话已失效，请重新输入管理口令。", "zh-TW": "管理工作階段已失效，請重新輸入管理口令。", en: "The admin session has expired; enter the admin token again.", ja: "管理セッションの有効期限が切れました。管理トークンを入力し直してください。", ko: "관리 세션이 만료되었습니다. 관리 토큰을 다시 입력하세요." },
-  "models.test.transportError": { "zh-CN": "这一行没有发到上游：管理接口这一段就失败了，与上游状态无关。", "zh-TW": "這一行沒有發到上游：管理介面這一段就失敗了，與上游狀態無關。", en: "This row never reached upstream: it failed on the admin hop, which says nothing about upstream.", ja: "この行は上流に届いていません: 管理 API の区間で失敗しており、上流の状態とは無関係です。", ko: "이 행은 업스트림에 도달하지 못했습니다: 관리 API 구간에서 실패한 것이며 업스트림 상태와는 무관합니다." },
-  "models.test.mismatch":    { "zh-CN": "后端这次给的东西面板读不懂：一个还不认识的结果码，或一个还不认识的行状态。请核对两边的版本。", "zh-TW": "後端這次給的東西面板讀不懂：一個還不認識的結果碼，或一個還不認識的行狀態。請核對兩邊的版本。", en: "The panel does not understand what the backend returned: an outcome code or a row state it does not know yet. Check that both sides are on the same version.", ja: "今回バックエンドが返した内容をこの画面が解釈できません: 未知の結果コード、または未知の行の状態です。両者のバージョンを確認してください。", ko: "이번에 백엔드가 반환한 내용을 콘솔이 이해하지 못합니다: 아직 모르는 결과 코드이거나 아직 모르는 행 상태입니다. 양쪽 버전을 확인하세요." },
-  "models.test.status":      { "zh-CN": "上游这次回的 HTTP 状态码：{status}", "zh-TW": "上游這次回的 HTTP 狀態碼：{status}", en: "HTTP status upstream returned this time: {status}", ja: "今回上流が返した HTTP ステータス: {status}", ko: "이번에 업스트림이 반환한 HTTP 상태 코드: {status}" },
-
-  // ── Playground 板块 ──────────────────────────────────────────────────────
-  // ⚠️ **这一段一个 `{占位符}` 都没有，是刻意的**：`scripts/check-i18n.mjs` 的第 ⑧ 条
-  //    要求带占位符的 key 每一次以字面量出现时后面都紧跟一个 `,`，而本板块把大量
-  //    key 交给 `elI18n(tag, key)`（第二个参数后面确实是 `,` 或 `)`），
-  //    形态一旦掺进占位符就要逐处核对。这里用不上参数，那就一个都不写。
-  // ⚠️ **协议名与模型 id 一律不进字典**：它们是专名 / 标识符，来自协议目录的响应。
-  "pg.title":                { "zh-CN": "调试台", "zh-TW": "偵錯台", en: "Playground", ja: "プレイグラウンド", ko: "플레이그라운드" },
-  "pg.desc":                 { "zh-CN": "在面板里直接向这个网关发一次真实请求，用来确认四条协议以及图片、视频两条媒体端点各自是不是通的。", "zh-TW": "在面板裡直接向這個閘道發一次真實請求，用來確認四條協定以及圖片、影片兩條媒體端點各自是不是通的。", en: "Send a real request to this gateway from the panel to confirm each of the four protocols, plus the image and video endpoints, works.", ja: "この画面からゲートウェイへ実際にリクエストを送り、4 つのプロトコルと画像・動画の各エンドポイントが通るかを確認します。", ko: "콘솔에서 이 게이트웨이로 실제 요청을 보내 네 가지 프로토콜과 이미지·동영상 엔드포인트가 각각 동작하는지 확인합니다." },
-  // ⚠️ **这一句是「没有平台承诺」那条裁定的落点，措辞不许放松成「两种形态一样」**：官方文档说 HTTP 触发的
-  //    Worker 没有墙钟上限、单条子请求也没有时间上限，但**没有**说 CDN 那条回源读超时
-  //    适不适用于 Worker 自己发出的子请求 ⇒ 按「没有平台承诺」处理。
-  "pg.runtimeNote":          { "zh-CN": "一次非流式请求要等上游把整段回答生成完才返回，可能很慢。Worker 与 Docker 两种部署形态在超长请求上的表现不一定相同，这里不对「多久之内一定不会被中断」做任何承诺。", "zh-TW": "一次非串流請求要等上游把整段回答產生完才返回，可能很慢。Worker 與 Docker 兩種部署形態在超長請求上的表現不一定相同，這裡不對「多久之內一定不會被中斷」做任何承諾。", en: "A non-streaming request only returns once upstream has finished generating the whole answer, so it can be slow. The Worker and Docker deployments may behave differently on very long requests; nothing here promises how long a request is guaranteed to survive.", ja: "非ストリーミングのリクエストは上流が回答全体を生成し終えるまで返りません。非常に長いリクエストでは Worker と Docker の挙動が同じとは限らず、「何秒までは必ず中断されない」といった保証はここでは一切行いません。", ko: "비스트리밍 요청은 업스트림이 답변 전체를 만들어야 반환되므로 느릴 수 있습니다. 아주 긴 요청에서는 Worker와 Docker의 동작이 같다고 볼 수 없으며, 여기서는 「몇 초까지는 반드시 끊기지 않는다」는 약속을 하지 않습니다." },
-  "pg.req.title":            { "zh-CN": "请求配置", "zh-TW": "請求設定", en: "Request", ja: "リクエスト設定", ko: "요청 설정" },
-  "pg.mode.label":           { "zh-CN": "模式", "zh-TW": "模式", en: "Mode", ja: "モード", ko: "모드" },
-  "pg.mode.chat":            { "zh-CN": "对话", "zh-TW": "對話", en: "Chat", ja: "チャット", ko: "대화" },
-  "pg.mode.image":           { "zh-CN": "图片", "zh-TW": "圖片", en: "Image", ja: "画像", ko: "이미지" },
-  "pg.mode.video":           { "zh-CN": "视频", "zh-TW": "影片", en: "Video", ja: "動画", ko: "동영상" },
-  "pg.proto.label":          { "zh-CN": "协议", "zh-TW": "協定", en: "Protocol", ja: "プロトコル", ko: "프로토콜" },
-  "pg.model.label":          { "zh-CN": "模型", "zh-TW": "模型", en: "Model", ja: "モデル", ko: "모델" },
-  "pg.model.noneMedia":      { "zh-CN": "这个形态下没有可用的模型。", "zh-TW": "這個形態下沒有可用的模型。", en: "No model is available for this modality.", ja: "この種類で利用できるモデルがありません。", ko: "이 형태에서 사용할 수 있는 모델이 없습니다." },
-  "pg.model.none":           { "zh-CN": "这条协议上没有可用的模型，换一条协议试试。", "zh-TW": "這條協定上沒有可用的模型，換一條協定試試。", en: "No model is available on this protocol; try another one.", ja: "このプロトコルで利用できるモデルがありません。別のプロトコルをお試しください。", ko: "이 프로토콜에서 사용할 수 있는 모델이 없습니다. 다른 프로토콜을 사용해 보세요." },
-  "pg.stream.label":         { "zh-CN": "流式", "zh-TW": "串流", en: "Streaming", ja: "ストリーミング", ko: "스트리밍" },
-  "pg.stream.tip":           { "zh-CN": "打开后回答会一块一块地到，右栏边收边显示；这一档不统计 token。", "zh-TW": "打開後回答會一塊一塊地到，右欄邊收邊顯示；這一檔不統計 token。", en: "When on, the answer arrives in chunks and the right column fills in as it goes; this mode reports no token counts.", ja: "オンにすると回答が少しずつ届き、右側に順次表示されます。このモードでは token 数は表示されません。", ko: "켜면 답변이 조각으로 도착해 오른쪽에 차례로 표시됩니다. 이 모드에서는 token 수를 집계하지 않습니다." },
-  "pg.token.label":          { "zh-CN": "网关口令", "zh-TW": "閘道口令", en: "Gateway token", ja: "ゲートウェイトークン", ko: "게이트웨이 토큰" },
-  "pg.token.placeholder":    { "zh-CN": "粘贴 GATEWAY_TOKEN", "zh-TW": "貼上 GATEWAY_TOKEN", en: "Paste GATEWAY_TOKEN", ja: "GATEWAY_TOKEN を貼り付け", ko: "GATEWAY_TOKEN 붙여넣기" },
-  // ⚠️ 这句话必须说清「面板拿不到它」，否则运维会一直找那颗并不存在的「填入我的口令」按钮。
-  "pg.token.note":           { "zh-CN": "这把口令由你手动粘贴，只存在这台浏览器里。面板读不到它的明文（凭据只写不读），所以没有「一键填入」。", "zh-TW": "這把口令由你手動貼上，只存在這台瀏覽器裡。面板讀不到它的明文（憑據只寫不讀），所以沒有「一鍵填入」。", en: "You paste this token yourself and it stays in this browser. The panel cannot read its plaintext (credentials are write-only), so there is no auto-fill.", ja: "このトークンはご自身で貼り付け、このブラウザーにのみ保存されます。画面側は平文を読み取れない（資格情報は書き込み専用）ため、自動入力はありません。", ko: "이 토큰은 직접 붙여넣으며 이 브라우저에만 저장됩니다. 콘솔은 평문을 읽을 수 없으므로(자격 증명은 쓰기 전용) 자동 채우기는 없습니다." },
-  "pg.token.stateEmpty":     { "zh-CN": "还没粘口令", "zh-TW": "還沒貼口令", en: "No token pasted yet", ja: "トークン未入力", ko: "토큰이 아직 없습니다" },
-  // ⚠️ 「比不了」与「对不上」是两句话，**不许折叠成一档**：折叠之后运维会去改一把其实没错的口令。
-  "pg.token.stateUnknown":   { "zh-CN": "读不到设置页里的末位提示，这次比不了", "zh-TW": "讀不到設定頁裡的末位提示，這次比不了", en: "Cannot read the stored token hint, so no comparison was made", ja: "設定側の末尾ヒントを取得できないため、照合できません", ko: "설정의 끝자리 힌트를 읽을 수 없어 대조하지 못했습니다" },
-  "pg.token.stateMatch":     { "zh-CN": "末位与设置页里配的那把一致", "zh-TW": "末位與設定頁裡配的那把一致", en: "Last characters match the configured token", ja: "末尾が設定済みのトークンと一致します", ko: "끝자리가 설정된 토큰과 일치합니다" },
-  "pg.token.stateMismatch":  { "zh-CN": "末位与设置页里配的那把对不上", "zh-TW": "末位與設定頁裡配的那把對不上", en: "Last characters do not match the configured token", ja: "末尾が設定済みのトークンと一致しません", ko: "끝자리가 설정된 토큰과 일치하지 않습니다" },
-  "pg.prompt.label":         { "zh-CN": "提示词", "zh-TW": "提示詞", en: "Prompt", ja: "プロンプト", ko: "프롬프트" },
-  "pg.prompt.placeholder":   { "zh-CN": "输入要发给模型的一句话", "zh-TW": "輸入要發給模型的一句話", en: "Type a message to send to the model", ja: "モデルに送る文章を入力", ko: "모델에 보낼 문장을 입력" },
-  "pg.send":                 { "zh-CN": "发送", "zh-TW": "發送", en: "Send", ja: "送信", ko: "보내기" },
-  "pg.cancel":               { "zh-CN": "取消这一次", "zh-TW": "取消這一次", en: "Cancel this request", ja: "このリクエストを中止", ko: "이 요청 취소" },
-  "pg.sending":              { "zh-CN": "正在等上游返回…", "zh-TW": "正在等上游返回…", en: "Waiting for upstream…", ja: "上流からの応答を待っています…", ko: "업스트림 응답을 기다리는 중…" },
-  "pg.send.ready":           { "zh-CN": "按一下会真的向上游发一次请求。", "zh-TW": "按一下會真的向上游發一次請求。", en: "Each click really does send one request upstream.", ja: "クリックするたびに上流へ実際にリクエストを 1 回送ります。", ko: "누를 때마다 업스트림으로 실제 요청을 한 번 보냅니다." },
-  "pg.send.readyVideo":      { "zh-CN": "按一下会真的向上游发请求：一次视频任务是 1 次建任务 + 最多 {count} 次轮询查询。", "zh-TW": "按一下會真的向上游發請求：一次影片任務是 1 次建任務 + 最多 {count} 次輪詢查詢。", en: "Each click really does hit upstream: one video job is 1 create request plus up to {count} polling requests.", ja: "クリックすると上流へ実際にリクエストを送ります。動画タスク 1 件はタスク作成 1 回 + 最大 {count} 回のポーリングです。", ko: "누르면 업스트림으로 실제 요청을 보냅니다. 동영상 작업 1건은 생성 요청 1회와 최대 {count}회의 폴링으로 이루어집니다." },
-  "pg.send.blockedInFlight": { "zh-CN": "上一次请求还在飞，等它回来或者取消它。", "zh-TW": "上一次請求還在飛，等它回來或者取消它。", en: "The previous request is still in flight; wait for it or cancel it.", ja: "前回のリクエストがまだ実行中です。完了を待つか中止してください。", ko: "이전 요청이 아직 진행 중입니다. 완료를 기다리거나 취소하세요." },
-  "pg.send.blockedNoProto":  { "zh-CN": "先选一条协议。", "zh-TW": "先選一條協定。", en: "Pick a protocol first.", ja: "先にプロトコルを選んでください。", ko: "먼저 프로토콜을 선택하세요." },
-  "pg.send.blockedNoEndpoint": { "zh-CN": "协议目录里没有这个形态的端点，这一档发不出请求。", "zh-TW": "協定目錄裡沒有這個形態的端點，這一檔發不出請求。", en: "The protocol catalog has no endpoint for this modality, so nothing can be sent from this mode.", ja: "プロトコルカタログにこの種類のエンドポイントがないため、このモードからは送信できません。", ko: "프로토콜 카탈로그에 이 형태의 엔드포인트가 없어 이 모드에서는 요청을 보낼 수 없습니다." },
-  "pg.send.blockedNoModel":  { "zh-CN": "先选一个模型。", "zh-TW": "先選一個模型。", en: "Pick a model first.", ja: "先にモデルを選んでください。", ko: "먼저 모델을 선택하세요." },
-  "pg.send.blockedNoToken":  { "zh-CN": "先粘贴网关口令。", "zh-TW": "先貼上閘道口令。", en: "Paste the gateway token first.", ja: "先にゲートウェイトークンを貼り付けてください。", ko: "먼저 게이트웨이 토큰을 붙여넣으세요." },
-  "pg.send.blockedNoPrompt": { "zh-CN": "先写一句提示词。", "zh-TW": "先寫一句提示詞。", en: "Type a prompt first.", ja: "先にプロンプトを入力してください。", ko: "먼저 프롬프트를 입력하세요." },
-  "pg.conv.title":           { "zh-CN": "对话", "zh-TW": "對話", en: "Conversation", ja: "やり取り", ko: "대화" },
-  "pg.conv.empty":           { "zh-CN": "还没有发过请求。左栏配好之后按「发送」。", "zh-TW": "還沒有發過請求。左欄配好之後按「發送」。", en: "No request has been sent yet. Configure the left column, then press Send.", ja: "まだリクエストを送っていません。左側を設定してから「送信」を押してください。", ko: "아직 요청을 보내지 않았습니다. 왼쪽을 설정한 뒤 「보내기」를 누르세요." },
-  "pg.conv.clear":           { "zh-CN": "清空对话", "zh-TW": "清空對話", en: "Clear conversation", ja: "やり取りを消去", ko: "대화 지우기" },
-  "pg.conv.trimmed":         { "zh-CN": "屏幕上最多保留 {max} 轮，最旧的 {count} 轮已经从这里移除。", "zh-TW": "畫面上最多保留 {max} 輪，最舊的 {count} 輪已經從這裡移除。", en: "At most {max} turns are kept on screen; the oldest {count} have been removed from here.", ja: "画面に残すのは最大 {max} 往復までで、古い方の {count} 往復はここから削除されました。", ko: "화면에는 최대 {max}턴까지만 남기며, 가장 오래된 {count}턴은 여기에서 삭제되었습니다." },
-  "pg.turn.you":             { "zh-CN": "你发出的", "zh-TW": "你發出的", en: "Sent", ja: "送信内容", ko: "보낸 내용" },
-  // ⚠️ 「网关回的」而不是「模型回的」：中间隔着这个网关的协议转换，说成后者会把
-  //    一次网关侧的错误归到模型头上。
-  "pg.turn.gateway":         { "zh-CN": "网关回的", "zh-TW": "閘道回的", en: "Gateway replied", ja: "ゲートウェイの応答", ko: "게이트웨이 응답" },
-  "pg.turn.streamEmpty":     { "zh-CN": "这条流读完了，但里面一个字的正文都没有。", "zh-TW": "這條串流讀完了，但裡面一個字的正文都沒有。", en: "This stream finished without carrying a single character of answer text.", ja: "このストリームは完了しましたが、本文が 1 文字も含まれていませんでした。", ko: "이 스트림은 끝났지만 본문이 한 글자도 들어 있지 않았습니다." },
-  "pg.turn.cancelled":       { "zh-CN": "这一次被你取消了，上面那段是取消之前真的收到的内容。", "zh-TW": "這一次被你取消了，上面那段是取消之前真的收到的內容。", en: "You cancelled this request; the text above is what really arrived before it stopped.", ja: "このリクエストは中止されました。上の本文は中止前に実際に届いた内容です。", ko: "이 요청은 취소되었습니다. 위 본문은 중단되기 전에 실제로 도착한 내용입니다." },
-  "pg.turn.malformed":       { "zh-CN": "这条流里有 {count} 块数据读不出来，已跳过——上面这段回答可能是缺字的。", "zh-TW": "這條串流裡有 {count} 塊資料讀不出來，已跳過——上面這段回答可能是缺字的。", en: "{count} chunk(s) in this stream could not be read and were skipped — the answer above may be missing characters.", ja: "このストリームでは {count} 個のチャンクを読み取れず、スキップしました。上の回答は文字が欠けている可能性があります。", ko: "이 스트림에서 {count}개의 청크를 읽지 못해 건너뛰었습니다. 위 답변은 글자가 빠졌을 수 있습니다." },
-  // ⚠️ **这一句被降过一级，别改回去**：原文是「流式响应不带 token 用量」
-  // ——那是一句关于**上游**的全称句，而四条协议里 openai 那条是上游字节原样透传，
-  // 上游会不会在流末发一块 usage **本仓从没量过**。改成「**本面板**不读」之后，
-  // 它说的是本面板自己的行为，**与上游无关、恒为真**。论证与那条未定案的边界见
-  // `admin-ui/js/sec-playground.js` 的文件头「流式那一轮为什么不显示 token 用量」那段。
-  "pg.turn.noTokens":        { "zh-CN": "本面板在流式这一档不读 token 用量，所以这里不显示数字——显示 0 会是假的。", "zh-TW": "本面板在串流這一檔不讀 token 用量，所以這裡不顯示數字——顯示 0 會是假的。", en: "This panel does not read token usage in streaming mode, so no number is shown here — showing 0 would be a lie.", ja: "このパネルはストリーミングでは token 使用量を読み取らないため、ここには数値を表示しません。0 と表示するのは嘘になります。", ko: "이 패널은 스트리밍 모드에서 token 사용량을 읽지 않으므로 여기에 숫자를 표시하지 않습니다. 0으로 표시하면 거짓이 됩니다." },
-  "pg.turn.unreadable":      { "zh-CN": "这次的响应体读不出来（不是空响应，是解析不了）。", "zh-TW": "這次的回應內容讀不出來（不是空回應，是解析不了）。", en: "This response body could not be read — it is not empty, it could not be parsed.", ja: "今回のレスポンス本文を読み取れませんでした（空ではなく、解析できませんでした）。", ko: "이번 응답 본문을 읽지 못했습니다(비어 있는 것이 아니라 파싱하지 못했습니다)." },
-  "pg.err.buildFailed":      { "zh-CN": "这次请求没能构造出来：协议目录里的样例形状与面板对不上，请核对两边的版本。", "zh-TW": "這次請求沒能構造出來：協定目錄裡的樣例形狀與面板對不上，請核對兩邊的版本。", en: "The request could not be built: the sample shape in the protocol catalog does not match what this panel expects — check that both sides are on the same version.", ja: "リクエストを組み立てられませんでした。プロトコルカタログのサンプル形状がこの画面の想定と合いません。両者のバージョンを確認してください。", ko: "요청을 만들지 못했습니다. 프로토콜 카탈로그의 샘플 형태가 이 콘솔의 기대와 다릅니다. 양쪽 버전을 확인하세요." },
-  "pg.err.crossOrigin":      { "zh-CN": "这次请求一个字节都没发出去：拼出来的地址不在本面板所在的源上。口令不会被送去别处。", "zh-TW": "這次請求一個位元組都沒發出去：拼出來的位址不在本面板所在的來源上。口令不會被送去別處。", en: "Nothing was sent: the assembled address is not on this panel's own origin. The token was not sent anywhere.", ja: "今回は 1 バイトも送信していません。組み立てたアドレスがこの画面のオリジンではありません。トークンはどこにも送られていません。", ko: "이번에는 한 바이트도 보내지 않았습니다. 조립된 주소가 이 콘솔의 출처가 아닙니다. 토큰은 어디로도 전송되지 않았습니다." },
-  "pg.err.transport":        { "zh-CN": "这次请求没有拿到任何响应：可能是断网、被取消，或者请求本身失败了。这与上游的状态无关。", "zh-TW": "這次請求沒有拿到任何回應：可能是斷網、被取消，或者請求本身失敗了。這與上游的狀態無關。", en: "This request got no response at all: the network may be down, it may have been cancelled, or the request itself failed. This says nothing about upstream.", ja: "今回のリクエストは応答をまったく受け取れませんでした。ネットワーク断、中止、あるいはリクエスト自体の失敗が考えられます。上流の状態とは無関係です。", ko: "이번 요청은 아무 응답도 받지 못했습니다. 네트워크 문제, 취소, 또는 요청 자체의 실패일 수 있습니다. 업스트림 상태와는 무관합니다." },
-  "pg.err.stream":           { "zh-CN": "这条流没读完就断了。上面那段正文是真的收到过的，后面还有多少不知道。", "zh-TW": "這條串流沒讀完就斷了。上面那段正文是真的收到過的，後面還有多少不知道。", en: "This stream broke off before it finished. The text above really did arrive; how much was still to come is unknown.", ja: "このストリームは完了前に切断されました。上の本文は実際に届いたものですが、残りがどれだけあったかは分かりません。", ko: "이 스트림은 끝나기 전에 끊겼습니다. 위 본문은 실제로 도착한 내용이며, 남은 분량은 알 수 없습니다." },
-  "pg.media.endpoint":       { "zh-CN": "这一档打的端点", "zh-TW": "這一檔打的端點", en: "Endpoint for this mode", ja: "このモードのエンドポイント", ko: "이 모드가 호출하는 엔드포인트" },
-  "pg.media.copy":           { "zh-CN": "复制", "zh-TW": "複製", en: "Copy", ja: "コピー", ko: "복사" },
-  "pg.media.open":           { "zh-CN": "在新标签页打开", "zh-TW": "在新分頁開啟", en: "Open in a new tab", ja: "新しいタブで開く", ko: "새 탭에서 열기" },
-  "pg.media.alt":            { "zh-CN": "上游返回的图片。内嵌的是 data 形式的内容，没有向任何远端发起请求。", "zh-TW": "上游返回的圖片。內嵌的是 data 形式的內容，沒有向任何遠端發起請求。", en: "Image returned by upstream. It is embedded as inline data, so no request was made to any remote host.", ja: "上流が返した画像です。data 形式で埋め込んでいるため、外部のホストへのリクエストは発生していません。", ko: "업스트림이 반환한 이미지입니다. data 형식으로 삽입되므로 어떤 원격 호스트에도 요청하지 않습니다." },
-  "pg.media.bytes":          { "zh-CN": "上游这次直接回的是一段字节流（{type}），不是一份带地址的结果。面板不内嵌媒体，所以这里只报告它的类型。", "zh-TW": "上游這次直接回的是一段位元組流（{type}），不是一份帶位址的結果。面板不內嵌媒體，所以這裡只報告它的類型。", en: "Upstream returned raw bytes this time ({type}), not a result carrying a URL. The panel never embeds media, so only the type is reported here.", ja: "今回、上流はアドレス付きの結果ではなくバイト列（{type}）をそのまま返しました。この画面はメディアを埋め込まないため、種類のみを表示します。", ko: "이번에 업스트림은 주소가 담긴 결과가 아니라 바이트 스트림({type})을 그대로 반환했습니다. 콘솔은 미디어를 삽입하지 않으므로 여기서는 형식만 알려 줍니다." },
-  "pg.media.none":           { "zh-CN": "这次的响应里没有出现任何一条媒体地址。下面是网关原样返回的内容。", "zh-TW": "這次的回應裡沒有出現任何一條媒體位址。下面是閘道原樣返回的內容。", en: "No media address appeared in this response. Below is exactly what the gateway returned.", ja: "今回の応答にはメディアのアドレスが 1 件も含まれていません。以下はゲートウェイがそのまま返した内容です。", ko: "이번 응답에는 미디어 주소가 하나도 없습니다. 아래는 게이트웨이가 그대로 반환한 내용입니다." },
-  "pg.media.taskId":         { "zh-CN": "任务标识", "zh-TW": "任務識別碼", en: "Task ID", ja: "タスク ID", ko: "작업 ID" },
-  "pg.media.polling":        { "zh-CN": "正在轮询这个任务的结果，已经查过 {count} 次。", "zh-TW": "正在輪詢這個任務的結果，已經查過 {count} 次。", en: "Polling this task for its result; {count} check(s) so far.", ja: "このタスクの結果を確認中です。これまでに {count} 回問い合わせました。", ko: "이 작업의 결과를 폴링하는 중입니다. 지금까지 {count}회 조회했습니다." },
-  "pg.media.pollGaveUp":     { "zh-CN": "轮询已经到上限，先停下了——任务本身可能仍在进行。请稍后拿上面这个任务标识再查一次。", "zh-TW": "輪詢已經到上限，先停下了——任務本身可能仍在進行。請稍後拿上面這個任務識別碼再查一次。", en: "Polling hit its limit and stopped — the task itself may still be running. Check again later using the task ID above.", ja: "ポーリングが上限に達したため停止しました。タスク自体はまだ実行中の可能性があります。後ほど上のタスク ID で再度確認してください。", ko: "폴링이 상한에 도달해 중단했습니다. 작업 자체는 아직 진행 중일 수 있습니다. 잠시 후 위의 작업 ID로 다시 조회하세요." },
-  "pg.media.noTaskId":       { "zh-CN": "本面板只把这几格当任务标识来读：{slots}。这次建任务的响应里，它们都没有能用的标识，面板不替你猜，所以没有自动轮询。响应原文见下面。", "zh-TW": "本面板只把這幾格當任務識別碼來讀：{slots}。這次建任務的回應裡，它們都沒有能用的識別碼，面板不替你猜，所以沒有自動輪詢。回應原文見下面。", en: "This panel reads only these fields as a task ID: {slots}. None of them carried a usable ID in this create-task response, and the panel will not guess one, so nothing was polled. The raw response is below.", ja: "この画面がタスク ID として読むのは次の項目だけです：{slots}。今回のタスク作成の応答では、いずれにも使える識別子がありませんでした。画面側で推測はしないため、ポーリングは行っていません。応答の原文は下にあります。", ko: "이 콘솔이 작업 ID로 읽는 항목은 다음뿐입니다: {slots}. 이번 작업 생성 응답에서는 어느 항목에도 쓸 수 있는 식별자가 없었고, 콘솔은 추측하지 않으므로 폴링하지 않았습니다. 응답 원문은 아래에 있습니다." },
-  "pg.unavailable":          { "zh-CN": "协议目录读不出来，所以这里什么都配不了——不是这个网关一条协议都没有。", "zh-TW": "協定目錄讀不出來，所以這裡什麼都配不了——不是這個閘道一條協定都沒有。", en: "The protocol catalog could not be read, so nothing can be configured here — it is not that the gateway has no protocols.", ja: "プロトコルカタログを取得できなかったため、ここでは何も設定できません。ゲートウェイにプロトコルがないという意味ではありません。", ko: "프로토콜 카탈로그를 읽지 못해 여기서는 아무것도 설정할 수 없습니다. 게이트웨이에 프로토콜이 없다는 뜻이 아닙니다." },
+export const I18N =
+{
+  "nav.dashboard": {
+    "zh-CN": "仪表盘",
+    "zh-TW": "儀表板",
+    "en": "Dashboard",
+    "ja": "ダッシュボード",
+    "ko": "대시보드"
+  },
+  "nav.accounts": {
+    "zh-CN": "账号管理",
+    "zh-TW": "帳號管理",
+    "en": "Accounts",
+    "ja": "アカウント管理",
+    "ko": "계정 관리"
+  },
+  "nav.models": {
+    "zh-CN": "支持模型",
+    "zh-TW": "支援模型",
+    "en": "Models",
+    "ja": "対応モデル",
+    "ko": "지원 모델"
+  },
+  "nav.apikeys": {
+    "zh-CN": "API 管理",
+    "zh-TW": "API 管理",
+    "en": "API Keys",
+    "ja": "API キー管理",
+    "ko": "API 키 관리"
+  },
+  "nav.playground": {
+    "zh-CN": "调试台",
+    "zh-TW": "除錯台",
+    "en": "Playground",
+    "ja": "デバッグ台",
+    "ko": "디버그 콘솔"
+  },
+  "nav.usage": {
+    "zh-CN": "使用统计",
+    "zh-TW": "使用統計",
+    "en": "Usage",
+    "ja": "利用統計",
+    "ko": "사용 통계"
+  },
+  "nav.logs": {
+    "zh-CN": "实时日志",
+    "zh-TW": "即時日誌",
+    "en": "Live Logs",
+    "ja": "リアルタイムログ",
+    "ko": "실시간 로그"
+  },
+  "nav.registrar": {
+    "zh-CN": "注册机",
+    "zh-TW": "註冊機",
+    "en": "Registrar",
+    "ja": "自動登録",
+    "ko": "자동 등록기"
+  },
+  "nav.settings": {
+    "zh-CN": "设置",
+    "zh-TW": "設定",
+    "en": "Settings",
+    "ja": "設定",
+    "ko": "설정"
+  },
+  "nav.logout": {
+    "zh-CN": "退出登录",
+    "zh-TW": "登出",
+    "en": "Sign out",
+    "ja": "ログアウト",
+    "ko": "로그아웃"
+  },
+  "nav.menu": {
+    "zh-CN": "菜单",
+    "zh-TW": "選單",
+    "en": "Menu",
+    "ja": "メニュー",
+    "ko": "메뉴"
+  },
+  "header.statusHint": {
+    "zh-CN": "最近一次探测的结果，点一下重新探",
+    "zh-TW": "最近一次探測的結果，點一下重新探",
+    "en": "Result of the last probe — click to probe again",
+    "ja": "直近の確認結果です。クリックで再確認します",
+    "ko": "마지막 확인 결과입니다. 클릭하면 다시 확인합니다"
+  },
+  "header.statusUnknown": {
+    "zh-CN": "状态未知",
+    "zh-TW": "狀態未知",
+    "en": "Status unknown",
+    "ja": "状態不明",
+    "ko": "상태 알 수 없음"
+  },
+  "header.statusRunning": {
+    "zh-CN": "运行中",
+    "zh-TW": "運行中",
+    "en": "Running",
+    "ja": "稼働中",
+    "ko": "실행 중"
+  },
+  "header.statusDegraded": {
+    "zh-CN": "降级运行",
+    "zh-TW": "降級運行",
+    "en": "Degraded",
+    "ja": "機能低下",
+    "ko": "성능 저하"
+  },
+  "header.statusOffline": {
+    "zh-CN": "探测失败",
+    "zh-TW": "探測失敗",
+    "en": "Probe failed",
+    "ja": "確認できません",
+    "ko": "확인 실패"
+  },
+  "header.repo": {
+    "zh-CN": "打开代码仓库",
+    "zh-TW": "開啟程式碼倉庫",
+    "en": "Open the source repository",
+    "ja": "ソースリポジトリを開く",
+    "ko": "소스 저장소 열기"
+  },
+  "header.language": {
+    "zh-CN": "切换界面语言",
+    "zh-TW": "切換介面語言",
+    "en": "Change language",
+    "ja": "表示言語を切り替える",
+    "ko": "표시 언어 변경"
+  },
+  "header.theme": {
+    "zh-CN": "切换深色 / 浅色",
+    "zh-TW": "切換深色 / 淺色",
+    "en": "Toggle dark / light",
+    "ja": "ダーク / ライトを切り替える",
+    "ko": "다크 / 라이트 전환"
+  },
+  "login.title": {
+    "zh-CN": "请输入管理口令",
+    "zh-TW": "請輸入管理口令",
+    "en": "Enter the admin token",
+    "ja": "管理トークンを入力してください",
+    "ko": "관리 토큰을 입력하세요"
+  },
+  "login.label": {
+    "zh-CN": "管理口令（ADMIN_TOKEN）",
+    "zh-TW": "管理口令（ADMIN_TOKEN）",
+    "en": "Admin token (ADMIN_TOKEN)",
+    "ja": "管理トークン（ADMIN_TOKEN）",
+    "ko": "관리 토큰(ADMIN_TOKEN)"
+  },
+  "login.keyPlaceholder": {
+    "zh-CN": "粘贴部署时配置的口令",
+    "zh-TW": "貼上部署時配置的口令",
+    "en": "Paste the token configured at deploy time",
+    "ja": "デプロイ時に設定したトークンを貼り付けます",
+    "ko": "배포 시 설정한 토큰을 붙여 넣으세요"
+  },
+  "login.submit": {
+    "zh-CN": "进入",
+    "zh-TW": "進入",
+    "en": "Enter",
+    "ja": "入る",
+    "ko": "들어가기"
+  },
+  "login.hint": {
+    "zh-CN": "口令来自部署时配置的环境变量 ADMIN_TOKEN",
+    "zh-TW": "口令來自部署時配置的環境變數 ADMIN_TOKEN",
+    "en": "The token comes from the ADMIN_TOKEN environment variable",
+    "ja": "トークンは環境変数 ADMIN_TOKEN から来ます",
+    "ko": "토큰은 환경 변수 ADMIN_TOKEN 에서 옵니다"
+  },
+  "login.empty": {
+    "zh-CN": "口令不能为空",
+    "zh-TW": "口令不能為空",
+    "en": "The token cannot be empty",
+    "ja": "トークンを空にはできません",
+    "ko": "토큰은 비워 둘 수 없습니다"
+  },
+  "login.badShape": {
+    "zh-CN": "口令里有送不出去的字符（只允许可打印 ASCII）",
+    "zh-TW": "口令裡有送不出去的字元（只允許可列印 ASCII）",
+    "en": "The token contains characters that cannot be sent (printable ASCII only)",
+    "ja": "送信できない文字が含まれています（印字可能な ASCII のみ）",
+    "ko": "보낼 수 없는 문자가 있습니다(인쇄 가능한 ASCII 만 허용)"
+  },
+  "login.invalid": {
+    "zh-CN": "口令不对",
+    "zh-TW": "口令不對",
+    "en": "Wrong token",
+    "ja": "トークンが違います",
+    "ko": "토큰이 올바르지 않습니다"
+  },
+  "login.httpError": {
+    "zh-CN": "服务端返回了 {status}，这一次没能登录",
+    "zh-TW": "伺服器回傳了 {status}，這一次沒能登入",
+    "en": "The server answered {status}; this attempt did not sign in",
+    "ja": "サーバーが {status} を返しました。今回はログインできていません",
+    "ko": "서버가 {status} 을(를) 반환했습니다. 이번에는 로그인되지 않았습니다"
+  },
+  "login.network": {
+    "zh-CN": "连不上服务端",
+    "zh-TW": "連不上伺服器",
+    "en": "Cannot reach the server",
+    "ja": "サーバーに接続できません",
+    "ko": "서버에 연결할 수 없습니다"
+  },
+  "common.sessionExpired": {
+    "zh-CN": "会话已到期，请重新输入口令",
+    "zh-TW": "工作階段已到期，請重新輸入口令",
+    "en": "The session has expired; please enter the token again",
+    "ja": "セッションが期限切れです。トークンを入力し直してください",
+    "ko": "세션이 만료되었습니다. 토큰을 다시 입력하세요"
+  },
+  "common.cancel": {
+    "zh-CN": "取消",
+    "zh-TW": "取消",
+    "en": "Cancel",
+    "ja": "キャンセル",
+    "ko": "취소"
+  },
+  "common.confirm": {
+    "zh-CN": "确认",
+    "zh-TW": "確認",
+    "en": "Confirm",
+    "ja": "確認する",
+    "ko": "확인"
+  },
+  "common.close": {
+    "zh-CN": "关闭",
+    "zh-TW": "關閉",
+    "en": "Close",
+    "ja": "閉じる",
+    "ko": "닫기"
+  },
+  "common.dismiss": {
+    "zh-CN": "知道了",
+    "zh-TW": "知道了",
+    "en": "Dismiss",
+    "ja": "了解",
+    "ko": "확인했습니다"
+  },
+  "common.copy": {
+    "zh-CN": "复制",
+    "zh-TW": "複製",
+    "en": "Copy",
+    "ja": "コピー",
+    "ko": "복사"
+  },
+  "common.copied": {
+    "zh-CN": "已复制到剪贴板",
+    "zh-TW": "已複製到剪貼簿",
+    "en": "Copied to the clipboard",
+    "ja": "クリップボードにコピーしました",
+    "ko": "클립보드에 복사했습니다"
+  },
+  "common.copyFailed": {
+    "zh-CN": "复制没成功，剪贴板在非 TLS 页面上不可用",
+    "zh-TW": "複製沒成功，剪貼簿在非 TLS 頁面上不可用",
+    "en": "Copy failed — the clipboard is unavailable on a non-TLS page",
+    "ja": "コピーできませんでした。TLS でないページではクリップボードを使えません",
+    "ko": "복사하지 못했습니다. TLS 가 아닌 페이지에서는 클립보드를 쓸 수 없습니다"
+  },
+  "reveal.show": {
+    "zh-CN": "显示明文",
+    "zh-TW": "顯示明文",
+    "en": "Reveal",
+    "ja": "平文を表示",
+    "ko": "평문 보기"
+  },
+  "reveal.hide": {
+    "zh-CN": "收起明文",
+    "zh-TW": "收起明文",
+    "en": "Hide",
+    "ja": "平文を隠す",
+    "ko": "평문 숨기기"
+  },
+  "dash.approxHint": {
+    "zh-CN": "近似值：池级累计在并发下会少计，最后一段也可能还没落盘。",
+    "zh-TW": "近似值：池級累計在並發下會少計，最後一段也可能還沒落盤。",
+    "en": "Approximate: the pool-wide totals undercount under concurrency, and the latest slice may not be persisted yet.",
+    "ja": "概算値：プール全体の累計は同時実行下で少なく数えられ、直近の分はまだ保存されていない可能性があります。",
+    "ko": "근사값: 풀 전체 누적은 동시 실행에서 적게 집계되며, 가장 최근 구간은 아직 저장되지 않았을 수 있습니다."
+  },
+  "dash.cardModels": {
+    "zh-CN": "可用模型",
+    "zh-TW": "可用模型",
+    "en": "Models available",
+    "ja": "利用できるモデル",
+    "ko": "사용 가능한 모델"
+  },
+  "dash.cardPool": {
+    "zh-CN": "账号池（可用 / 总数）",
+    "zh-TW": "帳號池（可用 / 總數）",
+    "en": "Account pool (usable / total)",
+    "ja": "アカウントプール（利用可能 / 総数）",
+    "ko": "계정 풀(사용 가능 / 전체)"
+  },
+  "dash.cardRequests": {
+    "zh-CN": "今日请求",
+    "zh-TW": "今日請求",
+    "en": "Requests today",
+    "ja": "本日のリクエスト",
+    "ko": "오늘 요청"
+  },
+  "dash.cardSuccessRate": {
+    "zh-CN": "今日成功率",
+    "zh-TW": "今日成功率",
+    "en": "Success rate today",
+    "ja": "本日の成功率",
+    "ko": "오늘 성공률"
+  },
+  "dash.cardTokens": {
+    "zh-CN": "今日 token",
+    "zh-TW": "今日 token",
+    "en": "Tokens today",
+    "ja": "本日のトークン",
+    "ko": "오늘 토큰"
+  },
+  "dash.degraded": {
+    "zh-CN": "这一次配置装载发生了降级：有字段没读出来或回落到了默认值，你在设置页保存过的值可能没有生效。",
+    "zh-TW": "這一次設定載入發生了降級：有欄位沒讀出來或回落到了預設值，你在設定頁儲存過的值可能沒有生效。",
+    "en": "This config load was degraded: some fields could not be read or fell back to defaults, so values you saved under Settings may not be in effect.",
+    "ja": "今回の設定読み込みは劣化しています：読み取れなかった項目や既定値に戻った項目があり、設定ページで保存した値が反映されていない可能性があります。",
+    "ko": "이번 설정 로드는 저하되었습니다: 읽지 못했거나 기본값으로 되돌아간 항목이 있어 설정 페이지에서 저장한 값이 적용되지 않았을 수 있습니다."
+  },
+  "dash.docs": {
+    "zh-CN": "部署文档",
+    "zh-TW": "部署文件",
+    "en": "Deployment docs",
+    "ja": "デプロイ手順",
+    "ko": "배포 문서"
+  },
+  "dash.docsDesc": {
+    "zh-CN": "怎么部署、怎么配置，都写在仓库的 docs 里",
+    "zh-TW": "怎麼部署、怎麼設定，都寫在倉庫的 docs 裡",
+    "en": "How to deploy and how to configure it are both in docs/ in the repository",
+    "ja": "デプロイ方法と設定方法はリポジトリの docs にあります",
+    "ko": "배포 방법과 설정 방법은 저장소의 docs 에 있습니다"
+  },
+  "dash.docsHint": {
+    "zh-CN": "docs/ 目录",
+    "zh-TW": "docs/ 目錄",
+    "en": "docs/ folder",
+    "ja": "docs/ ディレクトリ",
+    "ko": "docs/ 디렉터리"
+  },
+  "dash.durationDays": {
+    "zh-CN": "{d} 天 {h} 小时",
+    "zh-TW": "{d} 天 {h} 小時",
+    "en": "{d}d {h}h",
+    "ja": "{d}日{h}時間",
+    "ko": "{d}일 {h}시간"
+  },
+  "dash.durationHours": {
+    "zh-CN": "{h} 小时 {m} 分",
+    "zh-TW": "{h} 小時 {m} 分",
+    "en": "{h}h {m}m",
+    "ja": "{h}時間{m}分",
+    "ko": "{h}시간 {m}분"
+  },
+  "dash.durationMinutes": {
+    "zh-CN": "{m} 分 {s} 秒",
+    "zh-TW": "{m} 分 {s} 秒",
+    "en": "{m}m {s}s",
+    "ja": "{m}分{s}秒",
+    "ko": "{m}분 {s}초"
+  },
+  "dash.envLocked": {
+    "zh-CN": "被环境变量锁住的字段",
+    "zh-TW": "被環境變數鎖住的欄位",
+    "en": "Fields locked by the environment",
+    "ja": "環境変数で固定された項目",
+    "ko": "환경 변수로 고정된 항목"
+  },
+  "dash.envLockedNone": {
+    "zh-CN": "没有字段被环境变量锁住，设置页改什么都会生效。",
+    "zh-TW": "沒有欄位被環境變數鎖住，設定頁改什麼都會生效。",
+    "en": "No field is locked by an environment variable — everything you change under Settings takes effect.",
+    "ja": "環境変数で固定されている項目はありません。設定ページでの変更はすべて反映されます。",
+    "ko": "환경 변수로 고정된 항목이 없습니다. 설정 페이지에서 바꾼 내용은 모두 적용됩니다."
+  },
+  "dash.envLockedValue": {
+    "zh-CN": "{n} 个字段 · 去设置页",
+    "zh-TW": "{n} 個欄位 · 去設定頁",
+    "en": "{n} field(s) · open Settings",
+    "ja": "{n} 項目 · 設定ページへ",
+    "ko": "{n}개 항목 · 설정 페이지로"
+  },
+  "dash.freshConfig": {
+    "zh-CN": "配置保存之后，最多还要 {sec} 秒才会在每个实例上生效 —— 不是「立即生效」。",
+    "zh-TW": "設定儲存之後，最多還要 {sec} 秒才會在每個實例上生效 —— 不是「立即生效」。",
+    "en": "After a config is saved it takes up to {sec} s to take effect on every instance — not “immediately”.",
+    "ja": "設定を保存してから、すべてのインスタンスに反映されるまで最大 {sec} 秒かかります。「即時反映」ではありません。",
+    "ko": "설정을 저장한 뒤 모든 인스턴스에 반영되기까지 최대 {sec}초 걸립니다 — “즉시 반영”이 아닙니다."
+  },
+  "dash.freshPool": {
+    "zh-CN": "别的实例判定的冷却 / 剔除，这里最多晚 {sec} 秒才看得到。",
+    "zh-TW": "別的實例判定的冷卻 / 剔除，這裡最多晚 {sec} 秒才看得到。",
+    "en": "Cooldowns and evictions decided by another instance show up here up to {sec} s late.",
+    "ja": "他のインスタンスが判定したクールダウン／除外は、ここに最大 {sec} 秒遅れて現れます。",
+    "ko": "다른 인스턴스가 판정한 쿨다운/제외는 여기에 최대 {sec}초 늦게 나타납니다."
+  },
+  "dash.incompleteHint": {
+    "zh-CN": "这段数据不完整：有分片没读到，这个数偏小。",
+    "zh-TW": "這段資料不完整：有分片沒讀到，這個數偏小。",
+    "en": "This window is incomplete: some shards were not read, so the number is an undercount.",
+    "ja": "この期間のデータは不完全です：読み取れなかった断片があり、この数値は少なめに出ています。",
+    "ko": "이 구간의 데이터는 불완전합니다: 읽지 못한 조각이 있어 값이 실제보다 적습니다."
+  },
+  "dash.memory": {
+    "zh-CN": "常驻内存",
+    "zh-TW": "常駐記憶體",
+    "en": "Resident memory",
+    "ja": "常駐メモリ",
+    "ko": "상주 메모리"
+  },
+  "dash.noneHint": {
+    "zh-CN": "这一次读成功了，只是这一段没有样本。",
+    "zh-TW": "這一次讀成功了，只是這一段沒有樣本。",
+    "en": "The read succeeded; this window simply has no sample.",
+    "ja": "読み取りは成功しましたが、この期間にはサンプルがありません。",
+    "ko": "읽기는 성공했지만 이 구간에는 표본이 없습니다."
+  },
+  "dash.pid": {
+    "zh-CN": "进程号",
+    "zh-TW": "行程號",
+    "en": "Process id",
+    "ja": "プロセス ID",
+    "ko": "프로세스 ID"
+  },
+  "dash.poolShape": {
+    "zh-CN": "池子形态",
+    "zh-TW": "池子形態",
+    "en": "Pool breakdown",
+    "ja": "プールの内訳",
+    "ko": "풀 구성"
+  },
+  "dash.poolShapeValue": {
+    "zh-CN": "冷却 {cooling} · 剔除 {evicted} · 停用 {disabled}",
+    "zh-TW": "冷卻 {cooling} · 剔除 {evicted} · 停用 {disabled}",
+    "en": "{cooling} cooling · {evicted} evicted · {disabled} disabled",
+    "ja": "クールダウン {cooling} · 除外 {evicted} · 無効 {disabled}",
+    "ko": "쿨다운 {cooling} · 제외 {evicted} · 정지 {disabled}"
+  },
+  "dash.poolStats": {
+    "zh-CN": "池级累计",
+    "zh-TW": "池級累計",
+    "en": "Pool totals",
+    "ja": "プール累計",
+    "ko": "풀 누적"
+  },
+  "dash.poolStatsValue": {
+    "zh-CN": "请求 {requests} · 失败 {failed}",
+    "zh-TW": "請求 {requests} · 失敗 {failed}",
+    "en": "{requests} requests · {failed} failed",
+    "ja": "リクエスト {requests} · 失敗 {failed}",
+    "ko": "요청 {requests} · 실패 {failed}"
+  },
+  "dash.refresh": {
+    "zh-CN": "刷新",
+    "zh-TW": "重新整理",
+    "en": "Refresh",
+    "ja": "更新",
+    "ko": "새로 고침"
+  },
+  "dash.registrar": {
+    "zh-CN": "注册机",
+    "zh-TW": "註冊機",
+    "en": "Registrar",
+    "ja": "自動登録",
+    "ko": "자동 등록기"
+  },
+  "dash.registrarBlocked": {
+    "zh-CN": "开着，但这一轮没跑起来",
+    "zh-TW": "開著，但這一輪沒跑起來",
+    "en": "On, but it never started this round",
+    "ja": "オンですが、今回は起動していません",
+    "ko": "켜져 있지만 이번에는 시작되지 않았습니다"
+  },
+  "dash.registrarOff": {
+    "zh-CN": "已关闭",
+    "zh-TW": "已關閉",
+    "en": "Off",
+    "ja": "無効",
+    "ko": "꺼짐"
+  },
+  "dash.registrarOn": {
+    "zh-CN": "运行中",
+    "zh-TW": "運行中",
+    "en": "Running",
+    "ja": "稼働中",
+    "ko": "실행 중"
+  },
+  "dash.repo": {
+    "zh-CN": "代码仓库",
+    "zh-TW": "程式碼倉庫",
+    "en": "Source repository",
+    "ja": "ソースリポジトリ",
+    "ko": "소스 저장소"
+  },
+  "dash.repoDesc": {
+    "zh-CN": "源码、问题与发版都在 GitHub 上",
+    "zh-TW": "原始碼、問題與發版都在 GitHub 上",
+    "en": "Source, issues and releases all live on GitHub",
+    "ja": "ソース・課題・リリースはすべて GitHub にあります",
+    "ko": "소스와 이슈, 릴리스는 모두 GitHub 에 있습니다"
+  },
+  "dash.repoHint": {
+    "zh-CN": "GitHub 仓库",
+    "zh-TW": "GitHub 倉庫",
+    "en": "GitHub repo",
+    "ja": "GitHub リポジトリ",
+    "ko": "GitHub 저장소"
+  },
+  "dash.runtime": {
+    "zh-CN": "运行时",
+    "zh-TW": "執行時",
+    "en": "Runtime",
+    "ja": "ランタイム",
+    "ko": "런타임"
+  },
+  "dash.serverTime": {
+    "zh-CN": "服务器时间",
+    "zh-TW": "伺服器時間",
+    "en": "Server time",
+    "ja": "サーバー時刻",
+    "ko": "서버 시각"
+  },
+  "dash.storage": {
+    "zh-CN": "存储后端",
+    "zh-TW": "儲存後端",
+    "en": "Storage backend",
+    "ja": "ストレージバックエンド",
+    "ko": "스토리지 백엔드"
+  },
+  "dash.storageReadonly": {
+    "zh-CN": "只读",
+    "zh-TW": "唯讀",
+    "en": "read-only",
+    "ja": "読み取り専用",
+    "ko": "읽기 전용"
+  },
+  "dash.storageWritable": {
+    "zh-CN": "可写",
+    "zh-TW": "可寫",
+    "en": "writable",
+    "ja": "書き込み可能",
+    "ko": "쓰기 가능"
+  },
+  "dash.systemInfo": {
+    "zh-CN": "系统信息",
+    "zh-TW": "系統資訊",
+    "en": "System info",
+    "ja": "システム情報",
+    "ko": "시스템 정보"
+  },
+  "dash.title": {
+    "zh-CN": "仪表盘",
+    "zh-TW": "儀表板",
+    "en": "Dashboard",
+    "ja": "ダッシュボード",
+    "ko": "대시보드"
+  },
+  "dash.unknownHint": {
+    "zh-CN": "这一格压根没读出来 —— 这是「不知道」，不是 0。",
+    "zh-TW": "這一格壓根沒讀出來 —— 這是「不知道」，不是 0。",
+    "en": "This value could not be read at all — it means “unknown”, not zero.",
+    "ja": "この値はまったく読み取れませんでした —— 「不明」であって 0 ではありません。",
+    "ko": "이 값은 전혀 읽지 못했습니다 — “알 수 없음”이지 0이 아닙니다."
+  },
+  "dash.uptime": {
+    "zh-CN": "进程已运行",
+    "zh-TW": "行程已運行",
+    "en": "Process uptime",
+    "ja": "プロセス稼働時間",
+    "ko": "프로세스 가동 시간"
+  },
+  "dash.usageOffHint": {
+    "zh-CN": "这个部署没在记时间序列统计，去设置页打开之后才会有数。",
+    "zh-TW": "這個部署沒在記時間序列統計，去設定頁打開之後才會有數。",
+    "en": "This deployment is not recording time-series usage; turn it on under Settings and numbers will appear.",
+    "ja": "このデプロイは時系列の使用量を記録していません。設定ページで有効にすると数値が出ます。",
+    "ko": "이 배포는 시계열 사용량을 기록하지 않습니다. 설정 페이지에서 켜야 수치가 나옵니다."
+  },
+  "dash.version": {
+    "zh-CN": "版本号",
+    "zh-TW": "版本號",
+    "en": "Version",
+    "ja": "バージョン",
+    "ko": "버전"
+  },
+  "keys.action.clearCooldown": {
+    "zh-CN": "清冷却",
+    "zh-TW": "清冷卻",
+    "en": "Clear cooldown",
+    "ja": "クールダウン解除",
+    "ko": "쿨다운 해제"
+  },
+  "keys.action.clearStrikes": {
+    "zh-CN": "清连续失败",
+    "zh-TW": "清連續失敗",
+    "en": "Clear strikes",
+    "ja": "連続失敗をクリア",
+    "ko": "연속 실패 초기화"
+  },
+  "keys.action.delete": {
+    "zh-CN": "删除这把",
+    "zh-TW": "刪除這把",
+    "en": "Delete this account",
+    "ja": "このアカウントを削除",
+    "ko": "이 계정 삭제"
+  },
+  "keys.action.disable": {
+    "zh-CN": "停用",
+    "zh-TW": "停用",
+    "en": "Disable",
+    "ja": "無効化",
+    "ko": "정지"
+  },
+  "keys.action.enable": {
+    "zh-CN": "启用",
+    "zh-TW": "啟用",
+    "en": "Enable",
+    "ja": "有効化",
+    "ko": "활성화"
+  },
+  "keys.action.note": {
+    "zh-CN": "备注",
+    "zh-TW": "備註",
+    "en": "Note",
+    "ja": "備考",
+    "ko": "비고"
+  },
+  "keys.action.unevict": {
+    "zh-CN": "解除剔除",
+    "zh-TW": "解除剔除",
+    "en": "Unevict",
+    "ja": "除外解除",
+    "ko": "제외 해제"
+  },
+  "keys.actionFailed": {
+    "zh-CN": "操作失败：{message}",
+    "zh-TW": "操作失敗：{message}",
+    "en": "The action failed: {message}",
+    "ja": "操作に失敗しました：{message}",
+    "ko": "작업에 실패했습니다: {message}"
+  },
+  "keys.actionFailedGeneric": {
+    "zh-CN": "操作失败，过一会儿再试一次。",
+    "zh-TW": "操作失敗，過一會兒再試一次。",
+    "en": "The action failed; try again in a moment.",
+    "ja": "操作に失敗しました。少し待ってから再試行してください。",
+    "ko": "작업에 실패했습니다. 잠시 후 다시 시도하세요."
+  },
+  "keys.actionOk": {
+    "zh-CN": "操作成功",
+    "zh-TW": "操作成功",
+    "en": "Done",
+    "ja": "操作が完了しました",
+    "ko": "작업 완료"
+  },
+  "keys.add": {
+    "zh-CN": "添加账号",
+    "zh-TW": "新增帳號",
+    "en": "Add account",
+    "ja": "アカウントを追加",
+    "ko": "계정 추가"
+  },
+  "keys.add.autoGroup": {
+    "zh-CN": "自动注册",
+    "zh-TW": "自動註冊",
+    "en": "Auto-register",
+    "ja": "自動登録",
+    "ko": "자동 등록"
+  },
+  "keys.add.goRegistrar": {
+    "zh-CN": "去注册机板块",
+    "zh-TW": "去註冊機板塊",
+    "en": "Open the Registrar section",
+    "ja": "自動登録の画面へ",
+    "ko": "자동 등록기 화면으로"
+  },
+  "keys.add.goRegistrarSub": {
+    "zh-CN": "「立即补池」与通道设置都在那里",
+    "zh-TW": "「立即補池」與通道設定都在那裡",
+    "en": "Replenish-now and the channel settings both live there",
+    "ja": "「今すぐ補充」とチャネル設定はそちらにあります",
+    "ko": "‘즉시 보충’과 채널 설정은 거기에 있습니다"
+  },
+  "keys.add.import": {
+    "zh-CN": "粘贴导入",
+    "zh-TW": "貼上匯入",
+    "en": "Paste and import",
+    "ja": "貼り付けてインポート",
+    "ko": "붙여넣어 가져오기"
+  },
+  "keys.add.importSub": {
+    "zh-CN": "每行一把，支持多行粘贴",
+    "zh-TW": "每行一把，支援多行貼上",
+    "en": "One per line; multi-line paste works",
+    "ja": "1 行に 1 つ。複数行の貼り付けに対応",
+    "ko": "한 줄에 하나. 여러 줄 붙여넣기 가능"
+  },
+  "keys.add.manualGroup": {
+    "zh-CN": "手动",
+    "zh-TW": "手動",
+    "en": "Manual",
+    "ja": "手動",
+    "ko": "수동"
+  },
+  "keys.auto.off": {
+    "zh-CN": "不自动刷新",
+    "zh-TW": "不自動重新整理",
+    "en": "Auto refresh off",
+    "ja": "自動更新オフ",
+    "ko": "자동 새로고침 끔"
+  },
+  "keys.auto.sec": {
+    "zh-CN": "每 {sec} 秒刷新",
+    "zh-TW": "每 {sec} 秒重新整理",
+    "en": "Refresh every {sec} s",
+    "ja": "{sec} 秒ごとに更新",
+    "ko": "{sec}초마다 새로 고침"
+  },
+  "keys.autoTitle": {
+    "zh-CN": "自动刷新间隔",
+    "zh-TW": "自動重新整理間隔",
+    "en": "Auto refresh interval",
+    "ja": "自動更新の間隔",
+    "ko": "자동 새로고침 간격"
+  },
+  "keys.bucket.all": {
+    "zh-CN": "全部",
+    "zh-TW": "全部",
+    "en": "All",
+    "ja": "すべて",
+    "ko": "전체"
+  },
+  "keys.bucket.cooling": {
+    "zh-CN": "冷却中",
+    "zh-TW": "冷卻中",
+    "en": "Cooling down",
+    "ja": "クールダウン中",
+    "ko": "쿨다운 중"
+  },
+  "keys.bucket.disabled": {
+    "zh-CN": "已停用",
+    "zh-TW": "已停用",
+    "en": "Disabled",
+    "ja": "無効化済み",
+    "ko": "비활성화됨"
+  },
+  "keys.bucket.evicted": {
+    "zh-CN": "已剔除",
+    "zh-TW": "已剔除",
+    "en": "Evicted",
+    "ja": "除外済み",
+    "ko": "제외됨"
+  },
+  "keys.bucket.fresh": {
+    "zh-CN": "可用",
+    "zh-TW": "可用",
+    "en": "Available",
+    "ja": "利用可能",
+    "ko": "사용 가능"
+  },
+  "keys.bulk.allOk": {
+    "zh-CN": "批量操作全部成功。",
+    "zh-TW": "批次操作全部成功。",
+    "en": "The bulk action fully succeeded.",
+    "ja": "一括操作はすべて成功しました。",
+    "ko": "일괄 작업이 모두 성공했습니다."
+  },
+  "keys.bulk.clear": {
+    "zh-CN": "取消选择",
+    "zh-TW": "取消選擇",
+    "en": "Clear selection",
+    "ja": "選択を解除",
+    "ko": "선택 해제"
+  },
+  "keys.bulk.clearCooldown": {
+    "zh-CN": "批量清冷却",
+    "zh-TW": "批量清冷卻",
+    "en": "Bulk clear cooldown",
+    "ja": "一括クールダウン解除",
+    "ko": "일괄 쿨다운 해제"
+  },
+  "keys.bulk.confirmDelete": {
+    "zh-CN": "确定删掉选中的 {count} 把？这一步不可撤销，而且没停用的那几把后端会直接拒。",
+    "zh-TW": "確定刪掉選中的 {count} 把？這一步不可復原，而且沒停用的那幾把後端會直接拒。",
+    "en": "Delete the {count} selected account(s)? This cannot be undone, and the backend will refuse any of them that are not disabled yet.",
+    "ja": "選択した {count} 件を削除しますか？この操作は取り消せず、無効化していないものはバックエンドが拒否します。",
+    "ko": "선택한 {count}개를 삭제할까요? 이 작업은 되돌릴 수 없고, 아직 정지하지 않은 항목은 백엔드가 거부합니다."
+  },
+  "keys.bulk.confirmTitle": {
+    "zh-CN": "确认批量删除",
+    "zh-TW": "確認批次刪除",
+    "en": "Confirm bulk delete",
+    "ja": "一括削除の確認",
+    "ko": "일괄 삭제 확인"
+  },
+  "keys.bulk.count": {
+    "zh-CN": "已选中 {n} 把",
+    "zh-TW": "已選中 {n} 把",
+    "en": "{n} selected",
+    "ja": "{n} 件を選択中",
+    "ko": "{n}개 선택됨"
+  },
+  "keys.bulk.countsSuffix": {
+    "zh-CN": "（{ok}/{total} 把成功）",
+    "zh-TW": "（{ok}/{total} 把成功）",
+    "en": " ({ok}/{total} succeeded)",
+    "ja": "（{ok}/{total} 件が成功）",
+    "ko": " ({ok}/{total}개 성공)"
+  },
+  "keys.bulk.delete": {
+    "zh-CN": "批量删除",
+    "zh-TW": "批量刪除",
+    "en": "Bulk delete",
+    "ja": "一括削除",
+    "ko": "일괄 삭제"
+  },
+  "keys.bulk.disable": {
+    "zh-CN": "批量停用",
+    "zh-TW": "批量停用",
+    "en": "Bulk disable",
+    "ja": "一括無効化",
+    "ko": "일괄 정지"
+  },
+  "keys.bulk.mustDisableFirstSuffix": {
+    "zh-CN": "；其中 {mustDisableFirst} 把还没停用，删除前得先停用。",
+    "zh-TW": "；其中 {mustDisableFirst} 把還沒停用，刪除前得先停用。",
+    "en": " {mustDisableFirst} of them are not disabled yet and must be disabled before deletion.",
+    "ja": "；うち {mustDisableFirst} 件は無効化されていないため、削除の前に無効化が必要です。",
+    "ko": " 그중 {mustDisableFirst}개는 아직 정지되지 않아 삭제 전에 먼저 정지해야 합니다."
+  },
+  "keys.bulk.notFoundSuffix": {
+    "zh-CN": "；另有 {notFound} 把已经不在池子里了。",
+    "zh-TW": "；另有 {notFound} 把已經不在池子裡了。",
+    "en": " Another {notFound} are no longer in the pool.",
+    "ja": "；ほかに {notFound} 件はすでにプールにありません。",
+    "ko": " 다른 {notFound}개는 이미 풀에 없습니다."
+  },
+  "keys.bulk.partial": {
+    "zh-CN": "批量操作跑完了，但不是每一把都成功。",
+    "zh-TW": "批次操作跑完了，但不是每一把都成功。",
+    "en": "The bulk action finished, but not every item succeeded.",
+    "ja": "一括操作は完了しましたが、すべてが成功したわけではありません。",
+    "ko": "일괄 작업은 끝났지만 전부 성공하지는 않았습니다."
+  },
+  "keys.card.cooling": {
+    "zh-CN": "冷却中",
+    "zh-TW": "冷卻中",
+    "en": "Cooling down",
+    "ja": "クールダウン中",
+    "ko": "쿨다운 중"
+  },
+  "keys.card.disabled": {
+    "zh-CN": "已停用",
+    "zh-TW": "已停用",
+    "en": "Disabled",
+    "ja": "無効化済み",
+    "ko": "비활성화됨"
+  },
+  "keys.card.evictedSub": {
+    "zh-CN": "另有 {n} 把已剔除",
+    "zh-TW": "另有 {n} 把已剔除",
+    "en": "{n} more are evicted",
+    "ja": "ほかに {n} 件が除外済み",
+    "ko": "그 밖에 {n}개가 제외됨"
+  },
+  "keys.card.fresh": {
+    "zh-CN": "可用",
+    "zh-TW": "可用",
+    "en": "Available",
+    "ja": "利用可能",
+    "ko": "사용 가능"
+  },
+  "keys.card.total": {
+    "zh-CN": "总数",
+    "zh-TW": "總數",
+    "en": "Total",
+    "ja": "総数",
+    "ko": "전체"
+  },
+  "keys.clearStrikesConfirmMsg": {
+    "zh-CN": "这与「清冷却」不是一回事：清冷却只让这把现在能用，它离下一次被剔除仍然只差一次失败；清连续失败才会把那个计数真正清零。",
+    "zh-TW": "這與「清冷卻」不是一回事：清冷卻只讓這把現在能用，它離下一次被剔除仍然只差一次失敗；清連續失敗才會把那個計數真正清零。",
+    "en": "This is not the same as clearing the cooldown: that only makes the account usable right now, and it is still one failure away from being evicted. Clearing the strikes is what actually resets that counter.",
+    "ja": "「クールダウン解除」とは別のことです：クールダウン解除は今すぐ使えるようにするだけで、あと 1 回失敗すれば除外されます。連続失敗をクリアして初めてそのカウンターがゼロに戻ります。",
+    "ko": "‘쿨다운 해제’와는 다른 일입니다: 쿨다운 해제는 지금 당장 쓸 수 있게 할 뿐, 한 번만 더 실패하면 제외됩니다. 연속 실패를 지워야 그 카운터가 실제로 0이 됩니다."
+  },
+  "keys.clearStrikesConfirmTitle": {
+    "zh-CN": "清空连续失败计数？",
+    "zh-TW": "清空連續失敗計數？",
+    "en": "Clear the strike count?",
+    "ja": "連続失敗回数をクリアしますか？",
+    "ko": "연속 실패 횟수를 지울까요?"
+  },
+  "keys.deleteConfirmMsg": {
+    "zh-CN": "这一步不可撤销。删之前先确认这把已经停用或已被剔除 —— 没停用的后端会直接拒。",
+    "zh-TW": "這一步不可復原。刪之前先確認這把已經停用或已被剔除 —— 沒停用的後端會直接拒。",
+    "en": "This cannot be undone. Make sure the account is already disabled or evicted — the backend refuses to delete one that is still live.",
+    "ja": "この操作は取り消せません。削除する前に、無効化済みまたは除外済みであることを確認してください。有効なままのものはバックエンドが拒否します。",
+    "ko": "이 작업은 되돌릴 수 없습니다. 삭제하기 전에 이미 정지되었거나 제외되었는지 확인하세요 — 아직 살아 있는 항목은 백엔드가 거부합니다."
+  },
+  "keys.deleteConfirmTitle": {
+    "zh-CN": "删除这个账号？",
+    "zh-TW": "刪除這個帳號？",
+    "en": "Delete this account?",
+    "ja": "このアカウントを削除しますか？",
+    "ko": "이 계정을 삭제할까요?"
+  },
+  "keys.durationDays": {
+    "zh-CN": "{d} 天 {h} 小时",
+    "zh-TW": "{d} 天 {h} 小時",
+    "en": "{d}d {h}h",
+    "ja": "{d}日{h}時間",
+    "ko": "{d}일 {h}시간"
+  },
+  "keys.durationHours": {
+    "zh-CN": "{h} 小时 {m} 分",
+    "zh-TW": "{h} 小時 {m} 分",
+    "en": "{h}h {m}m",
+    "ja": "{h}時間{m}分",
+    "ko": "{h}시간 {m}분"
+  },
+  "keys.durationMinutes": {
+    "zh-CN": "{m} 分 {s} 秒",
+    "zh-TW": "{m} 分 {s} 秒",
+    "en": "{m}m {s}s",
+    "ja": "{m}分{s}秒",
+    "ko": "{m}분 {s}초"
+  },
+  "keys.empty": {
+    "zh-CN": "池子里还没有账号，先去导入一批。",
+    "zh-TW": "池子裡還沒有帳號，先去匯入一批。",
+    "en": "There is no account in the pool yet — import a batch first.",
+    "ja": "プールにはまだアカウントがありません。まずまとめてインポートしてください。",
+    "ko": "풀에 아직 계정이 없습니다. 먼저 한 묶음 가져오세요."
+  },
+  "keys.filterTitle": {
+    "zh-CN": "按档位筛选",
+    "zh-TW": "依檔位篩選",
+    "en": "Filter by bucket",
+    "ja": "状態で絞り込み",
+    "ko": "상태로 필터"
+  },
+  "keys.freshnessAge": {
+    "zh-CN": "这一屏的数据是 {dur} 前拉的",
+    "zh-TW": "這一屏的資料是 {dur} 前拉的",
+    "en": "This view was loaded {dur} ago",
+    "ja": "この画面のデータは {dur} 前に取得したものです",
+    "ko": "이 화면의 데이터는 {dur} 전에 가져온 것입니다"
+  },
+  "keys.freshnessBound": {
+    "zh-CN": "；别的实例判定的冷却 / 剔除最多要 {sec} 秒才会出现在这里。",
+    "zh-TW": "；別的實例判定的冷卻 / 剔除最多要 {sec} 秒才會出現在這裡。",
+    "en": "; cooldowns and evictions decided by another instance take up to {sec} s to show up here.",
+    "ja": "；他のインスタンスが判定したクールダウン／除外がここに出るまで最大 {sec} 秒かかります。",
+    "ko": "; 다른 인스턴스가 판정한 쿨다운/제외가 여기에 나타나기까지 최대 {sec}초 걸립니다."
+  },
+  "keys.freshnessNever": {
+    "zh-CN": "这一屏还没有成功拉到过数据",
+    "zh-TW": "這一屏還沒有成功拉到過資料",
+    "en": "This view has not loaded any data yet",
+    "ja": "この画面はまだ一度もデータを取得できていません",
+    "ko": "이 화면은 아직 데이터를 가져온 적이 없습니다"
+  },
+  "keys.import.done": {
+    "zh-CN": "已添加 {added} 把，{duplicated} 把重复被跳过，{invalid} 行不是合法的 key。",
+    "zh-TW": "已新增 {added} 把，{duplicated} 把重複被跳過，{invalid} 行不是合法的 key。",
+    "en": "Added {added}, skipped {duplicated} duplicate(s), {invalid} line(s) are not valid keys.",
+    "ja": "{added} 件を追加し、{duplicated} 件の重複をスキップしました。{invalid} 行は有効な key ではありません。",
+    "ko": "{added}개를 추가하고 중복 {duplicated}개를 건너뛰었습니다. {invalid}줄은 올바른 key가 아닙니다."
+  },
+  "keys.import.empty": {
+    "zh-CN": "至少粘一把 key 进去。",
+    "zh-TW": "至少貼一把 key 進去。",
+    "en": "Paste at least one key.",
+    "ja": "key を少なくとも 1 つ貼り付けてください。",
+    "ko": "key를 적어도 하나는 붙여넣으세요."
+  },
+  "keys.import.label": {
+    "zh-CN": "每行一把 key",
+    "zh-TW": "每行一把 key",
+    "en": "One key per line",
+    "ja": "1 行に 1 つの key",
+    "ko": "한 줄에 key 하나"
+  },
+  "keys.import.placeholder": {
+    "zh-CN": "每行一把 key，支持多行粘贴；空行会被跳过",
+    "zh-TW": "每行一把 key，支援多行貼上；空行會被跳過",
+    "en": "One key per line; multi-line paste works and blank lines are skipped",
+    "ja": "1 行に 1 つの key。複数行の貼り付けに対応し、空行はスキップされます",
+    "ko": "한 줄에 key 하나. 여러 줄 붙여넣기가 되고 빈 줄은 건너뜁니다"
+  },
+  "keys.import.reset": {
+    "zh-CN": "对已存在的账号也重置冷却 / 连续失败 / 剔除状态",
+    "zh-TW": "對已存在的帳號也重設冷卻 / 連續失敗 / 剔除狀態",
+    "en": "Also reset cooldown, strikes and eviction for accounts that already exist",
+    "ja": "既存のアカウントもクールダウン・連続失敗・除外状態をリセットする",
+    "ko": "이미 있는 계정도 쿨다운·연속 실패·제외 상태를 재설정"
+  },
+  "keys.import.resetHint": {
+    "zh-CN": "勾上之后，重新导入就成了一条能绕过「已剔除」的路径，后端会为此单打一条 warn 事件。",
+    "zh-TW": "勾上之後，重新匯入就成了一條能繞過「已剔除」的路徑，後端會為此單打一條 warn 事件。",
+    "en": "With this ticked, re-importing becomes a way to bypass eviction, and the backend records a separate warn event for it.",
+    "ja": "これを有効にすると、再インポートが「除外済み」を回避する経路になり、バックエンドはそのために warn イベントを 1 件記録します。",
+    "ko": "이 항목을 켜면 다시 가져오기가 ‘제외됨’을 우회하는 경로가 되며, 백엔드는 이를 위해 warn 이벤트를 따로 기록합니다."
+  },
+  "keys.import.resetSuffix": {
+    "zh-CN": "其中 {reset} 把被重置了状态。",
+    "zh-TW": "其中 {reset} 把被重設了狀態。",
+    "en": " {reset} of them had their state reset.",
+    "ja": "うち {reset} 件は状態をリセットしました。",
+    "ko": " 그중 {reset}개는 상태를 재설정했습니다."
+  },
+  "keys.import.submit": {
+    "zh-CN": "导入",
+    "zh-TW": "匯入",
+    "en": "Import",
+    "ja": "インポート",
+    "ko": "가져오기"
+  },
+  "keys.import.title": {
+    "zh-CN": "粘贴导入账号",
+    "zh-TW": "貼上匯入帳號",
+    "en": "Paste and import accounts",
+    "ja": "アカウントを貼り付けてインポート",
+    "ko": "계정 붙여넣어 가져오기"
+  },
+  "keys.loadFailed": {
+    "zh-CN": "这一次没读到账号池 —— 这不是「池子空了」。",
+    "zh-TW": "這一次沒讀到帳號池 —— 這不是「池子空了」。",
+    "en": "The account pool could not be read this time — that is not the same as an empty pool.",
+    "ja": "今回はアカウントプールを読み取れませんでした。「プールが空」とは別のことです。",
+    "ko": "이번에는 계정 풀을 읽지 못했습니다 — ‘풀이 비었다’와는 다른 일입니다."
+  },
+  "keys.loading": {
+    "zh-CN": "正在读取…",
+    "zh-TW": "正在讀取…",
+    "en": "Loading…",
+    "ja": "読み込み中…",
+    "ko": "불러오는 중…"
+  },
+  "keys.meta.added": {
+    "zh-CN": "加入于 {when}",
+    "zh-TW": "加入於 {when}",
+    "en": "Added {when}",
+    "ja": "追加 {when}",
+    "ko": "추가 {when}"
+  },
+  "keys.meta.lastUsed": {
+    "zh-CN": "最后使用 {when}",
+    "zh-TW": "最後使用 {when}",
+    "en": "Last used {when}",
+    "ja": "最終使用 {when}",
+    "ko": "마지막 사용 {when}"
+  },
+  "keys.meta.neverUsed": {
+    "zh-CN": "还没用过",
+    "zh-TW": "還沒用過",
+    "en": "Never used",
+    "ja": "未使用",
+    "ko": "사용한 적 없음"
+  },
+  "keys.meta.note": {
+    "zh-CN": "备注：",
+    "zh-TW": "備註：",
+    "en": "Note: ",
+    "ja": "備考：",
+    "ko": "비고: "
+  },
+  "keys.mustDisableFirst": {
+    "zh-CN": "先停用这把再删（删除不可撤销，而停用随时能撤回）",
+    "zh-TW": "先停用這把再刪（刪除不可復原，而停用隨時能撤回）",
+    "en": "Disable this account before deleting it — deletion is permanent, disabling can be undone anytime",
+    "ja": "削除する前に無効化してください（削除は取り消せませんが、無効化はいつでも戻せます）",
+    "ko": "삭제하기 전에 먼저 정지하세요 — 삭제는 되돌릴 수 없지만 정지는 언제든 되돌릴 수 있습니다"
+  },
+  "keys.noMatch": {
+    "zh-CN": "没有符合当前筛选条件的账号。",
+    "zh-TW": "沒有符合目前篩選條件的帳號。",
+    "en": "No account matches the current filter.",
+    "ja": "現在の絞り込み条件に一致するアカウントはありません。",
+    "ko": "현재 필터 조건에 맞는 계정이 없습니다."
+  },
+  "keys.noneHint": {
+    "zh-CN": "这一次读成功了，这一行就是不在冷却。",
+    "zh-TW": "這一次讀成功了，這一行就是不在冷卻。",
+    "en": "The read succeeded — this row simply is not cooling down.",
+    "ja": "読み取りは成功しています。この行はクールダウン中ではありません。",
+    "ko": "읽기는 성공했습니다 — 이 행은 쿨다운 중이 아닙니다."
+  },
+  "keys.note.hint": {
+    "zh-CN": "最多 {max} 个字符；清空表示删掉备注。",
+    "zh-TW": "最多 {max} 個字元；清空表示刪掉備註。",
+    "en": "At most {max} characters; leaving it empty clears the note.",
+    "ja": "最大 {max} 文字。空にすると備考を削除します。",
+    "ko": "최대 {max}자. 비우면 비고를 지웁니다."
+  },
+  "keys.note.label": {
+    "zh-CN": "备注内容",
+    "zh-TW": "備註內容",
+    "en": "Note text",
+    "ja": "備考の内容",
+    "ko": "비고 내용"
+  },
+  "keys.note.save": {
+    "zh-CN": "保存",
+    "zh-TW": "儲存",
+    "en": "Save",
+    "ja": "保存する",
+    "ko": "저장"
+  },
+  "keys.note.title": {
+    "zh-CN": "编辑备注",
+    "zh-TW": "編輯備註",
+    "en": "Edit note",
+    "ja": "備考を編集",
+    "ko": "비고 편집"
+  },
+  "keys.pager.info": {
+    "zh-CN": "第 {page}/{pages} 页 · 共 {total} 条",
+    "zh-TW": "第 {page}/{pages} 頁 · 共 {total} 筆",
+    "en": "Page {page} of {pages} · {total} in total",
+    "ja": "{pages} ページ中 {page} ページ目 · 全 {total} 件",
+    "ko": "{pages}페이지 중 {page}페이지 · 총 {total}개"
+  },
+  "keys.pager.next": {
+    "zh-CN": "下一页",
+    "zh-TW": "下一頁",
+    "en": "Next",
+    "ja": "次へ",
+    "ko": "다음"
+  },
+  "keys.pager.prev": {
+    "zh-CN": "上一页",
+    "zh-TW": "上一頁",
+    "en": "Previous",
+    "ja": "前へ",
+    "ko": "이전"
+  },
+  "keys.reason.cooldown": {
+    "zh-CN": "冷却原因：{reason}",
+    "zh-TW": "冷卻原因：{reason}",
+    "en": "Cooling because: {reason}",
+    "ja": "クールダウンの理由：{reason}",
+    "ko": "쿨다운 사유: {reason}"
+  },
+  "keys.reason.evicted": {
+    "zh-CN": "剔除原因：{reason}",
+    "zh-TW": "剔除原因：{reason}",
+    "en": "Evicted because: {reason}",
+    "ja": "除外の理由：{reason}",
+    "ko": "제외 사유: {reason}"
+  },
+  "keys.refresh": {
+    "zh-CN": "刷新",
+    "zh-TW": "重新整理",
+    "en": "Refresh",
+    "ja": "更新",
+    "ko": "새로 고침"
+  },
+  "keys.reveal.failed": {
+    "zh-CN": "这一次没取到明文，重试可能有用。",
+    "zh-TW": "這一次沒取到明文，重試可能有用。",
+    "en": "The plaintext did not come back this time; retrying may help.",
+    "ja": "今回は平文を取得できませんでした。再試行が有効かもしれません。",
+    "ko": "이번에는 평문을 받지 못했습니다. 다시 시도하면 될 수 있습니다."
+  },
+  "keys.reveal.gone": {
+    "zh-CN": "这一行已经不在池子里了 —— 刷新一次列表。",
+    "zh-TW": "這一行已經不在池子裡了 —— 重新整理一次列表。",
+    "en": "This row is no longer in the pool — refresh the list.",
+    "ja": "この行はすでにプールにありません。一覧を再読み込みしてください。",
+    "ko": "이 행은 더 이상 풀에 없습니다 — 목록을 새로 고치세요."
+  },
+  "keys.reveal.unavailable": {
+    "zh-CN": "这个部署关掉了明文回显。",
+    "zh-TW": "這個部署關掉了明文回顯。",
+    "en": "This deployment has plaintext reveal turned off.",
+    "ja": "このデプロイでは平文の表示が無効になっています。",
+    "ko": "이 배포는 평문 표시를 꺼 두었습니다."
+  },
+  "keys.search": {
+    "zh-CN": "搜索 id 或掩码",
+    "zh-TW": "搜尋 id 或遮罩",
+    "en": "Search by id or masked key",
+    "ja": "id またはマスクで検索",
+    "ko": "id 또는 마스크로 검색"
+  },
+  "keys.selectAll": {
+    "zh-CN": "全选本页",
+    "zh-TW": "全選本頁",
+    "en": "Select all on this page",
+    "ja": "このページをすべて選択",
+    "ko": "이 페이지 전체 선택"
+  },
+  "keys.selectRow": {
+    "zh-CN": "选择这一行",
+    "zh-TW": "選擇這一行",
+    "en": "Select this row",
+    "ja": "この行を選択",
+    "ko": "이 행 선택"
+  },
+  "keys.serverLabelUnknown": {
+    "zh-CN": "后端给了一个这个面板还不认识的标签，请核对两边的版本。",
+    "zh-TW": "後端給了一個這個面板還不認識的標籤，請核對兩邊的版本。",
+    "en": "The backend sent a label this panel does not recognise yet — check that both sides are on the same version.",
+    "ja": "この画面がまだ認識できないラベルがバックエンドから返りました。両者のバージョンを確認してください。",
+    "ko": "이 콘솔이 아직 알지 못하는 라벨을 백엔드가 보냈습니다. 양쪽 버전을 확인하세요."
+  },
+  "keys.stat.clientErrors": {
+    "zh-CN": "客户端 4xx",
+    "zh-TW": "用戶端 4xx",
+    "en": "Client 4xx",
+    "ja": "クライアント 4xx",
+    "ko": "클라이언트 4xx"
+  },
+  "keys.stat.cooldown": {
+    "zh-CN": "冷却剩余",
+    "zh-TW": "冷卻剩餘",
+    "en": "Cooldown left",
+    "ja": "クールダウン残り",
+    "ko": "쿨다운 잔여"
+  },
+  "keys.stat.failed": {
+    "zh-CN": "失败",
+    "zh-TW": "失敗",
+    "en": "Failed",
+    "ja": "失敗",
+    "ko": "실패"
+  },
+  "keys.stat.requests": {
+    "zh-CN": "请求",
+    "zh-TW": "請求",
+    "en": "Requests",
+    "ja": "リクエスト",
+    "ko": "요청"
+  },
+  "keys.stat.strikes": {
+    "zh-CN": "连续失败",
+    "zh-TW": "連續失敗",
+    "en": "Strikes",
+    "ja": "連続失敗",
+    "ko": "연속 실패"
+  },
+  "keys.stat.success": {
+    "zh-CN": "成功",
+    "zh-TW": "成功",
+    "en": "Success",
+    "ja": "成功件数",
+    "ko": "성공"
+  },
+  "keys.title": {
+    "zh-CN": "账号池",
+    "zh-TW": "帳號池",
+    "en": "Account pool",
+    "ja": "アカウントプール",
+    "ko": "계정 풀"
+  },
+  "keys.unknownHint": {
+    "zh-CN": "这一格压根没读出来 —— 这是「不知道」，不是 0。",
+    "zh-TW": "這一格壓根沒讀出來 —— 這是「不知道」，不是 0。",
+    "en": "This value could not be read at all — it means “unknown”, not zero.",
+    "ja": "この値はまったく読み取れませんでした —— 「不明」であって 0 ではありません。",
+    "ko": "이 값은 전혀 읽지 못했습니다 — “알 수 없음”이지 0이 아닙니다."
+  },
+  "keys.verify.disabledCoolingDown": {
+    "zh-CN": "刚探过，隔一小段时间再试。",
+    "zh-TW": "剛探過，隔一小段時間再試。",
+    "en": "Just probed; try again in a moment.",
+    "ja": "たった今確認したばかりです。少し待ってから再試行してください。",
+    "ko": "방금 탐지했습니다. 잠시 후 다시 시도하세요."
+  },
+  "keys.verify.disabledInFlight": {
+    "zh-CN": "上一次探测还在飞，等它回来。",
+    "zh-TW": "上一次探測還在飛，等它回來。",
+    "en": "The previous probe is still in flight; wait for it to come back.",
+    "ja": "前回のプローブがまだ実行中です。戻るまでお待ちください。",
+    "ko": "이전 탐지가 아직 진행 중입니다. 돌아올 때까지 기다리세요."
+  },
+  "keys.verify.disabledNoKey": {
+    "zh-CN": "这一行没有可用的账号标识，点不了。",
+    "zh-TW": "這一行沒有可用的帳號識別碼，點不了。",
+    "en": "This row has no usable account id, so the button does nothing.",
+    "ja": "この行には利用できるアカウント識別子がないため、押せません。",
+    "ko": "이 행에는 쓸 수 있는 계정 식별자가 없어 누를 수 없습니다."
+  },
+  "keys.verify.hintEnabled": {
+    "zh-CN": "按一下会真的向上游发一次请求。",
+    "zh-TW": "按一下會真的向上游發一次請求。",
+    "en": "Each click really does send one request upstream.",
+    "ja": "クリックするたびに上流へ実際にリクエストを 1 回送ります。",
+    "ko": "누를 때마다 업스트림으로 실제 요청을 한 번 보냅니다."
+  },
+  "keys.verify.keyNotFound": {
+    "zh-CN": "这个账号已经不在池子里了，刷新一下列表。",
+    "zh-TW": "這個帳號已經不在池子裡了，重新整理一下列表。",
+    "en": "This account is no longer in the pool — refresh the list.",
+    "ja": "このアカウントはすでにプールにありません。一覧を再読み込みしてください。",
+    "ko": "이 계정은 더 이상 풀에 없습니다. 목록을 새로 고치세요."
+  },
+  "keys.verify.networkError": {
+    "zh-CN": "连不上上游：这次探测没有拿到任何响应。",
+    "zh-TW": "連不上上游：這次探測沒有拿到任何回應。",
+    "en": "Cannot reach upstream: this probe got no response at all.",
+    "ja": "上流に到達できません：今回のプローブは応答をまったく受け取れませんでした。",
+    "ko": "업스트림에 연결할 수 없습니다: 이번 탐지는 어떤 응답도 받지 못했습니다."
+  },
+  "keys.verify.ok": {
+    "zh-CN": "验活通过：上游接受了这个账号。",
+    "zh-TW": "驗活通過：上游接受了這個帳號。",
+    "en": "Verified: upstream accepted this account.",
+    "ja": "確認できました：上流はこのアカウントを受け付けました。",
+    "ko": "확인 완료: 업스트림이 이 계정을 받아들였습니다."
+  },
+  "keys.verify.probeCooldown": {
+    "zh-CN": "两次探测之间至少要隔一小段时间，稍后再试。这不是这个账号的故障。",
+    "zh-TW": "兩次探測之間至少要隔一小段時間，稍後再試。這不是這個帳號的故障。",
+    "en": "There is a minimum interval between two probes; retry shortly. This is not a fault of the account.",
+    "ja": "プローブとプローブの間には最小間隔があります。少し待ってから再試行してください。アカウントの障害ではありません。",
+    "ko": "탐지와 탐지 사이에는 최소 간격이 있습니다. 잠시 후 다시 시도하세요. 계정의 고장이 아닙니다."
+  },
+  "keys.verify.probeInFlight": {
+    "zh-CN": "上一次探测还没回来，等它结束再试 —— 这颗按钮每按一次都会真的打一次上游。",
+    "zh-TW": "上一次探測還沒回來，等它結束再試 —— 這顆按鈕每按一次都會真的打一次上游。",
+    "en": "The previous probe has not returned yet; wait for it to finish before retrying — each click really does hit upstream.",
+    "ja": "前回のプローブがまだ返っていません。終わってから再試行してください。このボタンは押すたびに上流へ実際に送ります。",
+    "ko": "이전 탐지가 아직 돌아오지 않았습니다. 끝난 뒤에 다시 시도하세요 — 이 버튼은 누를 때마다 실제로 업스트림을 호출합니다."
+  },
+  "keys.verify.rateLimited": {
+    "zh-CN": "上游正在限流（429）：这个账号本身没问题，等一会儿再用。",
+    "zh-TW": "上游正在限流（429）：這個帳號本身沒問題，等一會兒再用。",
+    "en": "Upstream is rate limiting (429): the account itself is fine — wait a while.",
+    "ja": "上流がレート制限中です（429）：アカウント自体に問題はありません。しばらく待ってください。",
+    "ko": "업스트림이 속도를 제한하고 있습니다(429): 계정 자체는 문제없으니 잠시 기다리세요."
+  },
+  "keys.verify.readOnlyNote": {
+    "zh-CN": "这是一次人造探测，不改这个账号的任何状态：连续失败、冷却、用量统计都不会动。",
+    "zh-TW": "這是一次人造探測，不改這個帳號的任何狀態：連續失敗、冷卻、用量統計都不會動。",
+    "en": "This is a synthetic probe. It changes none of the account's state — strikes, cooldown and usage stats all stay untouched.",
+    "ja": "これは人工的なプローブです。このアカウントの状態は変わりません（連続失敗・クールダウン・利用統計はいずれも動きません）。",
+    "ko": "이것은 인위적인 탐지입니다. 이 계정의 상태는 바뀌지 않습니다 — 연속 실패, 쿨다운, 사용량 통계 모두 그대로입니다."
+  },
+  "keys.verify.running": {
+    "zh-CN": "正在探测…",
+    "zh-TW": "正在探測…",
+    "en": "Probing…",
+    "ja": "確認中…",
+    "ko": "확인 중…"
+  },
+  "keys.verify.timeout": {
+    "zh-CN": "探测超时：上游在超时档内没有返回响应头。",
+    "zh-TW": "探測逾時：上游在逾時檔內沒有返回回應標頭。",
+    "en": "Probe timed out: upstream did not return response headers within the timeout budget.",
+    "ja": "プローブがタイムアウトしました：上流はタイムアウト時間内にレスポンスヘッダーを返しませんでした。",
+    "ko": "탐지 시간 초과: 업스트림이 제한 시간 안에 응답 헤더를 반환하지 않았습니다."
+  },
+  "keys.verify.transportError": {
+    "zh-CN": "这次探测没有发出去：请求本身失败了，与上游状态无关。",
+    "zh-TW": "這次探測沒有發出去：請求本身失敗了，與上游狀態無關。",
+    "en": "This probe never left the panel: the request itself failed, which says nothing about upstream.",
+    "ja": "今回のプローブは送信されていません：リクエスト自体が失敗しており、上流の状態とは無関係です。",
+    "ko": "이번 탐지는 전송되지 않았습니다: 요청 자체가 실패한 것이며 업스트림 상태와는 무관합니다."
+  },
+  "keys.verify.unauthorized": {
+    "zh-CN": "上游拒绝了这个账号（401/403）：它已经失效，换一个。",
+    "zh-TW": "上游拒絕了這個帳號（401/403）：它已經失效，換一個。",
+    "en": "Upstream rejected this account (401/403): it is no longer valid — replace it.",
+    "ja": "上流がこのアカウントを拒否しました（401/403）：すでに無効です。差し替えてください。",
+    "ko": "업스트림이 이 계정을 거부했습니다(401/403): 이미 무효이므로 교체하세요."
+  },
+  "keys.verify.unauthorizedAdmin": {
+    "zh-CN": "管理会话已失效，请重新输入管理口令。",
+    "zh-TW": "管理工作階段已失效，請重新輸入管理口令。",
+    "en": "The admin session has expired; enter the admin token again.",
+    "ja": "管理セッションの有効期限が切れました。管理トークンを入力し直してください。",
+    "ko": "관리 세션이 만료되었습니다. 관리 토큰을 다시 입력하세요."
+  },
+  "keys.verify.unknownReason": {
+    "zh-CN": "后端给出了这个面板还不认识的一种探测结果，请核对两边的版本。",
+    "zh-TW": "後端給出了這個面板還不認識的一種探測結果，請核對兩邊的版本。",
+    "en": "The backend reported a probe outcome this panel does not recognise yet — check that both sides are on the same version.",
+    "ja": "この画面がまだ認識できない種類の結果がバックエンドから返りました。両者のバージョンを確認してください。",
+    "ko": "이 콘솔이 아직 인식하지 못하는 종류의 결과를 백엔드가 반환했습니다. 양쪽 버전을 확인하세요."
+  },
+  "keys.verify.upstreamError": {
+    "zh-CN": "上游回了一个我们没细分的错误状态码：这次探测没能确认这个账号是好是坏。",
+    "zh-TW": "上游回了一個我們沒細分的錯誤狀態碼：這次探測沒能確認這個帳號是好是壞。",
+    "en": "Upstream returned an error status we do not classify further: this probe could not tell whether the account is good.",
+    "ja": "上流が細分していないエラーステータスを返しました：このアカウントが有効かどうかは今回の確認では判断できません。",
+    "ko": "업스트림이 세분화하지 않은 오류 상태 코드를 반환했습니다: 이번 탐지로는 이 계정이 정상인지 판단할 수 없습니다."
+  },
+  "section.notWired": {
+    "zh-CN": "这个板块还没接线（P2b 分期交付，见 docs/porting/06-panel-spec.md §9 R-8）",
+    "zh-TW": "這個板塊還沒接線（P2b 分期交付，見 docs/porting/06-panel-spec.md §9 R-8）",
+    "en": "This section is not wired yet (staged delivery, see docs/porting/06-panel-spec.md 9 R-8)",
+    "ja": "このセクションはまだ接続されていません（段階的な提供、docs/porting/06-panel-spec.md 9 R-8 を参照）",
+    "ko": "이 섹션은 아직 연결되지 않았습니다(단계적 제공, docs/porting/06-panel-spec.md 9 R-8 참조)"
+  },
+  "section.ak.action.copyInfo": {
+    "zh-CN": "复制地址与掩码",
+    "zh-TW": "複製位址與遮罩",
+    "en": "Copy endpoint and masked key",
+    "ja": "接続先とマスク済みキーをコピー",
+    "ko": "주소와 마스킹된 키 복사"
+  },
+  "section.ak.action.delete": {
+    "zh-CN": "吊销这把",
+    "zh-TW": "吊銷這把",
+    "en": "Revoke this key",
+    "ja": "このキーを失効させる",
+    "ko": "이 키 폐기"
+  },
+  "section.ak.action.disable": {
+    "zh-CN": "停用这把",
+    "zh-TW": "停用這把",
+    "en": "Disable this key",
+    "ja": "このキーを無効にする",
+    "ko": "이 키 비활성화"
+  },
+  "section.ak.action.edit": {
+    "zh-CN": "改名 / 改到期",
+    "zh-TW": "改名 / 改到期",
+    "en": "Rename or change expiry",
+    "ja": "名前・有効期限を変更",
+    "ko": "이름·만료 변경"
+  },
+  "section.ak.action.enable": {
+    "zh-CN": "启用这把",
+    "zh-TW": "啟用這把",
+    "en": "Enable this key",
+    "ja": "このキーを有効にする",
+    "ko": "이 키 활성화"
+  },
+  "section.ak.bucket.active": {
+    "zh-CN": "可用",
+    "zh-TW": "可用",
+    "en": "Active",
+    "ja": "有効",
+    "ko": "사용 가능"
+  },
+  "section.ak.bucket.disabled": {
+    "zh-CN": "已停用",
+    "zh-TW": "已停用",
+    "en": "Disabled",
+    "ja": "無効化",
+    "ko": "비활성"
+  },
+  "section.ak.bucket.expired": {
+    "zh-CN": "已过期",
+    "zh-TW": "已過期",
+    "en": "Expired",
+    "ja": "期限切れ",
+    "ko": "만료됨"
+  },
+  "section.ak.copyBlock": {
+    "zh-CN": "网关地址：{url}\n密钥（掩码）：{key}",
+    "zh-TW": "閘道位址：{url}\n金鑰（遮罩）：{key}",
+    "en": "Gateway: {url}\nKey (masked): {key}",
+    "ja": "ゲートウェイ：{url}\nキー（マスク）：{key}",
+    "ko": "게이트웨이: {url}\n키(마스킹): {key}"
+  },
+  "section.ak.deleteConfirm": {
+    "zh-CN": "吊销之后拿着它的客户端会开始被拒。这一步不可撤销。",
+    "zh-TW": "吊銷之後拿著它的客戶端會開始被拒。這一步不可撤銷。",
+    "en": "Once revoked, clients holding it start getting rejected. This cannot be undone.",
+    "ja": "失効させると、それを持つクライアントは拒否され始めます。取り消せません。",
+    "ko": "폐기하면 이 키를 가진 클라이언트가 거부되기 시작합니다. 되돌릴 수 없습니다."
+  },
+  "section.ak.deleteTitle": {
+    "zh-CN": "吊销这把密钥",
+    "zh-TW": "吊銷這把金鑰",
+    "en": "Revoke this key",
+    "ja": "このキーを失効させる",
+    "ko": "이 키 폐기"
+  },
+  "section.ak.deleted": {
+    "zh-CN": "已吊销",
+    "zh-TW": "已吊銷",
+    "en": "Key revoked",
+    "ja": "キーを失効させました",
+    "ko": "키를 폐기했습니다"
+  },
+  "section.ak.disabled": {
+    "zh-CN": "已停用",
+    "zh-TW": "已停用",
+    "en": "Key disabled",
+    "ja": "キーを無効化しました",
+    "ko": "키를 비활성화했습니다"
+  },
+  "section.ak.dur.minutes": {
+    "zh-CN": "{n} 分钟",
+    "zh-TW": "{n} 分鐘",
+    "en": "{n} min",
+    "ja": "{n} 分間",
+    "ko": "{n}분"
+  },
+  "section.ak.dur.seconds": {
+    "zh-CN": "{n} 秒",
+    "zh-TW": "{n} 秒",
+    "en": "{n} s",
+    "ja": "{n} 秒間",
+    "ko": "{n}초"
+  },
+  "section.ak.editDesc": {
+    "zh-CN": "改名与改到期都不会换掉密钥本身，下游客户端不必改配置。",
+    "zh-TW": "改名與改到期都不會換掉金鑰本身，下游客戶端不必改設定。",
+    "en": "Neither renaming nor changing the expiry replaces the key itself; downstream clients need no config change.",
+    "ja": "名前や有効期限を変えてもキー自体は変わりません。下流のクライアントは設定を変える必要がありません。",
+    "ko": "이름이나 만료를 바꿔도 키 자체는 바뀌지 않습니다. 다운스트림 클라이언트는 설정을 바꿀 필요가 없습니다."
+  },
+  "section.ak.editTitle": {
+    "zh-CN": "改名 / 改到期",
+    "zh-TW": "改名 / 改到期",
+    "en": "Rename or change expiry",
+    "ja": "名前・有効期限の変更",
+    "ko": "이름·만료 변경"
+  },
+  "section.ak.empty": {
+    "zh-CN": "还没有签发过任何密钥。",
+    "zh-TW": "還沒有簽發過任何金鑰。",
+    "en": "No key has been issued yet.",
+    "ja": "まだキーを発行していません。",
+    "ko": "아직 발급한 키가 없습니다."
+  },
+  "section.ak.emptySearch": {
+    "zh-CN": "没有匹配的密钥。",
+    "zh-TW": "沒有符合的金鑰。",
+    "en": "No key matches that search.",
+    "ja": "検索条件に一致するキーはありません。",
+    "ko": "검색 조건에 맞는 키가 없습니다."
+  },
+  "section.ak.enabled": {
+    "zh-CN": "已启用",
+    "zh-TW": "已啟用",
+    "en": "Key enabled",
+    "ja": "キーを有効化しました",
+    "ko": "키를 활성화했습니다"
+  },
+  "section.ak.err.badExpiry": {
+    "zh-CN": "这个到期时刻后端不收。",
+    "zh-TW": "這個到期時刻後端不收。",
+    "en": "The backend refuses that expiry.",
+    "ja": "その有効期限はバックエンドが受け付けません。",
+    "ko": "백엔드가 그 만료 시각을 받지 않습니다."
+  },
+  "section.ak.err.badName": {
+    "zh-CN": "这个名称后端不收。",
+    "zh-TW": "這個名稱後端不收。",
+    "en": "The backend refuses that name.",
+    "ja": "その名前はバックエンドが受け付けません。",
+    "ko": "백엔드가 그 이름을 받지 않습니다."
+  },
+  "section.ak.err.expiryBad": {
+    "zh-CN": "这个日期读不出来。",
+    "zh-TW": "這個日期讀不出來。",
+    "en": "That date could not be read.",
+    "ja": "その日付を解釈できません。",
+    "ko": "그 날짜를 해석할 수 없습니다."
+  },
+  "section.ak.err.expiryPast": {
+    "zh-CN": "到期时刻必须在将来。",
+    "zh-TW": "到期時刻必須在將來。",
+    "en": "The expiry must be in the future.",
+    "ja": "有効期限は未来である必要があります。",
+    "ko": "만료 시각은 미래여야 합니다."
+  },
+  "section.ak.err.nameEmpty": {
+    "zh-CN": "名称不能为空。",
+    "zh-TW": "名稱不能為空。",
+    "en": "The name cannot be empty.",
+    "ja": "名前は空にできません。",
+    "ko": "이름은 비워 둘 수 없습니다."
+  },
+  "section.ak.err.nameTooLong": {
+    "zh-CN": "名称最多 {max} 个字符。",
+    "zh-TW": "名稱最多 {max} 個字元。",
+    "en": "The name may be at most {max} characters.",
+    "ja": "名前は最大 {max} 文字です。",
+    "ko": "이름은 최대 {max}자입니다."
+  },
+  "section.ak.err.notFound": {
+    "zh-CN": "没有这把密钥 —— 它可能在别处被删掉了。",
+    "zh-TW": "沒有這把金鑰 —— 它可能在別處被刪掉了。",
+    "en": "No such key — it may have been deleted elsewhere.",
+    "ja": "そのキーはありません。別の場所で削除された可能性があります。",
+    "ko": "그런 키가 없습니다 — 다른 곳에서 삭제되었을 수 있습니다."
+  },
+  "section.ak.err.stale": {
+    "zh-CN": "有人在你之前改过这张表，刷新一次再来。",
+    "zh-TW": "有人在你之前改過這張表，重新整理一次再來。",
+    "en": "Someone changed this table before you; refresh and try again.",
+    "ja": "先に誰かがこの一覧を変更しました。再読み込みしてからやり直してください。",
+    "ko": "누군가 먼저 이 목록을 변경했습니다. 새로 고친 뒤 다시 시도하세요."
+  },
+  "section.ak.err.tooMany": {
+    "zh-CN": "已经到上限了，先清理几把再签发。",
+    "zh-TW": "已經到上限了，先清理幾把再簽發。",
+    "en": "The cap is reached; purge a few before issuing more.",
+    "ja": "上限に達しています。いくつか整理してから発行してください。",
+    "ko": "상한에 도달했습니다. 몇 개를 정리한 뒤 발급하세요."
+  },
+  "section.ak.err.unreadable": {
+    "zh-CN": "存储里那张表结构不认，本次写入已被拒绝。",
+    "zh-TW": "儲存裡那張表結構不認，本次寫入已被拒絕。",
+    "en": "The table in storage has an unrecognised shape; this write was refused.",
+    "ja": "ストレージ上の一覧の形式が認識できないため、この書き込みは拒否されました。",
+    "ko": "저장소의 목록 형식을 인식할 수 없어 이번 쓰기는 거부되었습니다."
+  },
+  "section.ak.expiry.custom": {
+    "zh-CN": "指定日期",
+    "zh-TW": "指定日期",
+    "en": "Pick a date",
+    "ja": "日付を指定",
+    "ko": "날짜 지정"
+  },
+  "section.ak.expiry.d30": {
+    "zh-CN": "自签发起 30 天",
+    "zh-TW": "自簽發起 30 天",
+    "en": "30 days from issue",
+    "ja": "発行から 30 日",
+    "ko": "발급 후 30일"
+  },
+  "section.ak.expiry.d7": {
+    "zh-CN": "自签发起 7 天",
+    "zh-TW": "自簽發起 7 天",
+    "en": "7 days from issue",
+    "ja": "発行から 7 日",
+    "ko": "발급 후 7일"
+  },
+  "section.ak.expiry.d90": {
+    "zh-CN": "自签发起 90 天",
+    "zh-TW": "自簽發起 90 天",
+    "en": "90 days from issue",
+    "ja": "発行から 90 日",
+    "ko": "발급 후 90일"
+  },
+  "section.ak.expiry.never": {
+    "zh-CN": "不过期",
+    "zh-TW": "不過期",
+    "en": "Never",
+    "ja": "無期限",
+    "ko": "없음"
+  },
+  "section.ak.form.expiry": {
+    "zh-CN": "到期",
+    "zh-TW": "到期",
+    "en": "Expiry",
+    "ja": "有効期限",
+    "ko": "만료"
+  },
+  "section.ak.form.name": {
+    "zh-CN": "名称",
+    "zh-TW": "名稱",
+    "en": "Name",
+    "ja": "名前",
+    "ko": "이름"
+  },
+  "section.ak.form.namePh": {
+    "zh-CN": "给这把密钥起个认得出来的名字",
+    "zh-TW": "給這把金鑰起個認得出來的名字",
+    "en": "A name you will recognise later",
+    "ja": "後から分かる名前を付けてください",
+    "ko": "나중에 알아볼 수 있는 이름"
+  },
+  "section.ak.form.onceOnly": {
+    "zh-CN": "签发是追加操作，不会动到已经发出去的任何一把。",
+    "zh-TW": "簽發是追加操作，不會動到已經發出去的任何一把。",
+    "en": "Issuing only appends; it touches none of the keys already handed out.",
+    "ja": "発行は追加のみで、すでに配ったキーには影響しません。",
+    "ko": "발급은 추가만 하며 이미 배포한 키에는 영향을 주지 않습니다."
+  },
+  "section.ak.issue": {
+    "zh-CN": "签发一把",
+    "zh-TW": "簽發一把",
+    "en": "Issue a key",
+    "ja": "キーを発行",
+    "ko": "키 발급"
+  },
+  "section.ak.issueDesc": {
+    "zh-CN": "明文只在下一屏出现一次，之后能不能再取回由这个部署的存法决定。",
+    "zh-TW": "明文只在下一屏出現一次，之後能不能再取回由這個部署的存法決定。",
+    "en": "The plaintext appears once on the next screen; whether it can be fetched again depends on how this deployment stores it.",
+    "ja": "平文は次の画面で一度だけ表示されます。後から取り出せるかはこのデプロイの保存方法次第です。",
+    "ko": "평문은 다음 화면에 한 번만 표시됩니다. 이후 다시 가져올 수 있는지는 이 배포의 저장 방식에 달려 있습니다."
+  },
+  "section.ak.issueSubmit": {
+    "zh-CN": "签发",
+    "zh-TW": "簽發",
+    "en": "Issue",
+    "ja": "発行する",
+    "ko": "발급"
+  },
+  "section.ak.issueTitle": {
+    "zh-CN": "签发一把新密钥",
+    "zh-TW": "簽發一把新金鑰",
+    "en": "Issue a new key",
+    "ja": "新しいキーを発行",
+    "ko": "새 키 발급"
+  },
+  "section.ak.issued": {
+    "zh-CN": "已签发",
+    "zh-TW": "已簽發",
+    "en": "Key issued",
+    "ja": "キーを発行しました",
+    "ko": "키를 발급했습니다"
+  },
+  "section.ak.listTitle": {
+    "zh-CN": "API 密钥",
+    "zh-TW": "API 金鑰",
+    "en": "API keys",
+    "ja": "API キー",
+    "ko": "API 키"
+  },
+  "section.ak.loadFailed": {
+    "zh-CN": "这一次没读到密钥表。",
+    "zh-TW": "這一次沒讀到金鑰表。",
+    "en": "The key table could not be read this time.",
+    "ja": "今回はキー一覧を読み取れませんでした。",
+    "ko": "이번에는 키 목록을 읽지 못했습니다."
+  },
+  "section.ak.meta.created": {
+    "zh-CN": "签发于",
+    "zh-TW": "簽發於",
+    "en": "Issued",
+    "ja": "発行",
+    "ko": "발급"
+  },
+  "section.ak.meta.expiresAt": {
+    "zh-CN": "到期",
+    "zh-TW": "到期",
+    "en": "Expires",
+    "ja": "有効期限",
+    "ko": "만료"
+  },
+  "section.ak.meta.expiresNever": {
+    "zh-CN": "不过期",
+    "zh-TW": "不過期",
+    "en": "Never expires",
+    "ja": "無期限",
+    "ko": "만료 없음"
+  },
+  "section.ak.notWired": {
+    "zh-CN": "这个部署没有接上对外 API 密钥的存储 —— 这与「一把都没签发过」不是一回事。",
+    "zh-TW": "這個部署沒有接上對外 API 金鑰的儲存 —— 這與「一把都沒簽發過」不是一回事。",
+    "en": "This deployment has no storage wired for client API keys — that is not the same as “no key has ever been issued”.",
+    "ja": "このデプロイにはクライアント API キー用のストレージが接続されていません。「1 本も発行していない」とは別のことです。",
+    "ko": "이 배포에는 클라이언트 API 키 저장소가 연결되어 있지 않습니다 — “한 번도 발급하지 않았다”와는 다릅니다."
+  },
+  "section.ak.purge": {
+    "zh-CN": "清理失效（{n}）",
+    "zh-TW": "清理失效（{n}）",
+    "en": "Purge unusable ({n})",
+    "ja": "無効を整理（{n}）",
+    "ko": "무효 정리({n})"
+  },
+  "section.ak.purgeConfirm": {
+    "zh-CN": "全部删掉",
+    "zh-TW": "全部刪掉",
+    "en": "Delete them all",
+    "ja": "すべて削除",
+    "ko": "모두 삭제"
+  },
+  "section.ak.purgeDesc": {
+    "zh-CN": "这一次会删掉下面这 {n} 把（已停用或已过期）。",
+    "zh-TW": "這一次會刪掉下面這 {n} 把（已停用或已過期）。",
+    "en": "This will delete the {n} keys listed below (disabled or expired).",
+    "ja": "以下の {n} 本（無効化済みまたは期限切れ）を削除します。",
+    "ko": "아래 {n}개(비활성 또는 만료)를 삭제합니다."
+  },
+  "section.ak.purgeTitle": {
+    "zh-CN": "清理失效密钥",
+    "zh-TW": "清理失效金鑰",
+    "en": "Purge unusable keys",
+    "ja": "無効なキーを整理",
+    "ko": "무효 키 정리"
+  },
+  "section.ak.purged": {
+    "zh-CN": "已清理",
+    "zh-TW": "已清理",
+    "en": "Purged",
+    "ja": "整理しました",
+    "ko": "정리했습니다"
+  },
+  "section.ak.refresh": {
+    "zh-CN": "刷新",
+    "zh-TW": "重新整理",
+    "en": "Refresh",
+    "ja": "更新",
+    "ko": "새로 고침"
+  },
+  "section.ak.reveal.expired": {
+    "zh-CN": "管理会话已失效，请重新输入口令。",
+    "zh-TW": "管理工作階段已失效，請重新輸入口令。",
+    "en": "The admin session has expired; enter the token again.",
+    "ja": "管理セッションが失効しました。トークンを入力し直してください。",
+    "ko": "관리 세션이 만료되었습니다. 토큰을 다시 입력하세요."
+  },
+  "section.ak.reveal.failed": {
+    "zh-CN": "这一次没取到明文，重试可能有用。",
+    "zh-TW": "這一次沒取到明文，重試可能有用。",
+    "en": "The plaintext did not come back this time; retrying may help.",
+    "ja": "今回は平文を取得できませんでした。再試行が有効かもしれません。",
+    "ko": "이번에는 평문을 받지 못했습니다. 재시도가 도움이 될 수 있습니다."
+  },
+  "section.ak.reveal.gone": {
+    "zh-CN": "这条记录已经不在表里了 —— 列表正在重新拉一次。",
+    "zh-TW": "這條記錄已經不在表裡了 —— 列表正在重新拉一次。",
+    "en": "That record is no longer in the table — the list is being reloaded.",
+    "ja": "そのレコードはもう一覧にありません。リストを再取得しています。",
+    "ko": "해당 레코드가 더 이상 목록에 없습니다 — 목록을 다시 불러오는 중입니다."
+  },
+  "section.ak.reveal.permanent": {
+    "zh-CN": "明文永久取不回",
+    "zh-TW": "明文永久取不回",
+    "en": "plaintext is permanently unrecoverable",
+    "ja": "平文は永久に取り出せません",
+    "ko": "평문은 영구히 복구할 수 없습니다"
+  },
+  "section.ak.reveal.unavailable": {
+    "zh-CN": "这把签发于明文落盘之前，服务端从来就没有过它的明文 —— 永久取不回，重发一把。",
+    "zh-TW": "這把簽發於明文落盤之前，伺服器從來就沒有過它的明文 —— 永久取不回，重發一把。",
+    "en": "This key was issued before plaintext was persisted, so the server never had it — permanently unrecoverable, issue a new one.",
+    "ja": "このキーは平文を保存する前に発行されたため、サーバーは元から平文を持っていません。永久に取り出せないので新しく発行してください。",
+    "ko": "이 키는 평문을 저장하기 전에 발급되어 서버가 애초에 평문을 가진 적이 없습니다 — 영구히 복구 불가, 새로 발급하세요."
+  },
+  "section.ak.revokeDelay": {
+    "zh-CN": "停用/吊销最多还要 {delay} 才会在每个实例上生效 —— 这段时间里它仍然能用。",
+    "zh-TW": "停用/吊銷最多還要 {delay} 才會在每個實例上生效 —— 這段時間裡它仍然能用。",
+    "en": "It can take up to {delay} for this to take effect on every instance — until then the key still works.",
+    "ja": "すべてのインスタンスで反映されるまで最大 {delay} かかります。その間このキーはまだ使えます。",
+    "ko": "모든 인스턴스에 반영되기까지 최대 {delay} 걸립니다 — 그동안 이 키는 여전히 동작합니다."
+  },
+  "section.ak.saved": {
+    "zh-CN": "已保存",
+    "zh-TW": "已儲存",
+    "en": "Saved",
+    "ja": "保存しました",
+    "ko": "저장했습니다"
+  },
+  "section.ak.searchPh": {
+    "zh-CN": "按名称或末四位搜索",
+    "zh-TW": "按名稱或末四位搜尋",
+    "en": "Search by name or last four",
+    "ja": "名前または末尾 4 桁で検索",
+    "ko": "이름 또는 마지막 네 자리로 검색"
+  },
+  "section.ak.secret.copy": {
+    "zh-CN": "只复制密钥",
+    "zh-TW": "只複製金鑰",
+    "en": "Copy the key only",
+    "ja": "キーだけをコピー",
+    "ko": "키만 복사"
+  },
+  "section.ak.secret.intro": {
+    "zh-CN": "把它交给下游客户端。它现在就已经能用了。",
+    "zh-TW": "把它交給下游客戶端。它現在就已經能用了。",
+    "en": "Hand this to the downstream client. It already works.",
+    "ja": "これを下流のクライアントに渡してください。すでに使えます。",
+    "ko": "이것을 다운스트림 클라이언트에 전달하세요. 이미 사용할 수 있습니다."
+  },
+  "section.ak.secret.label": {
+    "zh-CN": "密钥",
+    "zh-TW": "金鑰",
+    "en": "Key",
+    "ja": "キー",
+    "ko": "키"
+  },
+  "section.ak.secret.onceOnly": {
+    "zh-CN": "这个部署不保存明文：关掉这一屏就再也看不到了。",
+    "zh-TW": "這個部署不保存明文：關掉這一屏就再也看不到了。",
+    "en": "This deployment does not keep the plaintext: close this screen and it is gone for good.",
+    "ja": "このデプロイは平文を保存しません。この画面を閉じると二度と見られません。",
+    "ko": "이 배포는 평문을 보관하지 않습니다. 이 화면을 닫으면 다시 볼 수 없습니다."
+  },
+  "section.ak.secret.title": {
+    "zh-CN": "这把密钥的明文",
+    "zh-TW": "這把金鑰的明文",
+    "en": "The key in plaintext",
+    "ja": "キーの平文",
+    "ko": "키 평문"
+  },
+  "section.ak.sort.name": {
+    "zh-CN": "按名称",
+    "zh-TW": "按名稱",
+    "en": "By name",
+    "ja": "名前順",
+    "ko": "이름순"
+  },
+  "section.ak.sort.new": {
+    "zh-CN": "最新在前",
+    "zh-TW": "最新在前",
+    "en": "Newest first",
+    "ja": "新しい順",
+    "ko": "최신순"
+  },
+  "section.ak.sort.old": {
+    "zh-CN": "最早在前",
+    "zh-TW": "最早在前",
+    "en": "Oldest first",
+    "ja": "古い順",
+    "ko": "오래된 순"
+  },
+  "section.ak.staleView": {
+    "zh-CN": "这一屏的版本号已经过期，先刷新一次再写。",
+    "zh-TW": "這一屏的版本號已經過期，先重新整理一次再寫。",
+    "en": "This view's version is stale — refresh before writing.",
+    "ja": "この画面のバージョンは古くなっています。書き込む前に再読み込みしてください。",
+    "ko": "이 화면의 버전이 오래되었습니다. 쓰기 전에 새로 고치세요."
+  },
+  "section.ak.stat.active": {
+    "zh-CN": "可用",
+    "zh-TW": "可用",
+    "en": "Active",
+    "ja": "有効",
+    "ko": "사용 가능"
+  },
+  "section.ak.stat.disabled": {
+    "zh-CN": "已停用",
+    "zh-TW": "已停用",
+    "en": "Disabled",
+    "ja": "無効化",
+    "ko": "비활성"
+  },
+  "section.ak.stat.expired": {
+    "zh-CN": "已过期",
+    "zh-TW": "已過期",
+    "en": "Expired",
+    "ja": "期限切れ",
+    "ko": "만료됨"
+  },
+  "section.ak.stat.max": {
+    "zh-CN": "上限",
+    "zh-TW": "上限",
+    "en": "Cap",
+    "ja": "上限数",
+    "ko": "상한"
+  },
+  "section.ak.stat.total": {
+    "zh-CN": "总数",
+    "zh-TW": "總數",
+    "en": "Total",
+    "ja": "合計",
+    "ko": "전체"
+  },
+  "section.ak.svc.baseUrl": {
+    "zh-CN": "网关地址",
+    "zh-TW": "閘道位址",
+    "en": "Gateway base URL",
+    "ja": "ゲートウェイのベース URL",
+    "ko": "게이트웨이 주소"
+  },
+  "section.ak.svc.master": {
+    "zh-CN": "这一族密钥是发给下游客户端的；管理口令是另一把，它在「设置」里轮换。",
+    "zh-TW": "這一族金鑰是發給下游客戶端的；管理口令是另一把，它在「設定」裡輪換。",
+    "en": "These keys are handed to downstream clients. The admin token is a different key and is rotated under Settings.",
+    "ja": "これらのキーは下流のクライアントに配るものです。管理トークンは別の鍵で、「設定」でローテーションします。",
+    "ko": "이 키들은 다운스트림 클라이언트에게 주는 것입니다. 관리 토큰은 별개의 키이며 ‘설정’에서 교체합니다."
+  },
+  "section.ak.svc.title": {
+    "zh-CN": "服务连接",
+    "zh-TW": "服務連線",
+    "en": "Service endpoint",
+    "ja": "サービス接続先",
+    "ko": "서비스 연결"
+  },
+  "section.ak.unreadable": {
+    "zh-CN": "存储里那张密钥表结构不认 —— 此刻全部下游客户端都在被拒。",
+    "zh-TW": "儲存裡那張金鑰表結構不認 —— 此刻全部下游客戶端都在被拒。",
+    "en": "The key table in storage has a shape we do not recognise — every downstream client is being rejected right now.",
+    "ja": "ストレージ上のキー一覧の形式が認識できません。今この瞬間、下流のクライアントはすべて拒否されています。",
+    "ko": "저장소의 키 목록 형식을 인식할 수 없습니다 — 지금 모든 다운스트림 클라이언트가 거부되고 있습니다."
+  },
+  "section.ak.unreadableHelp": {
+    "zh-CN": "面板已经拒绝写入，原字节原地不动，人工捞回随时可做。",
+    "zh-TW": "面板已經拒絕寫入，原位元組原地不動，人工撈回隨時可做。",
+    "en": "The panel refuses to write, so the original bytes are untouched and can still be recovered by hand.",
+    "ja": "パネルは書き込みを拒否しており、元のバイト列はそのまま残っているため手作業で復旧できます。",
+    "ko": "패널이 쓰기를 거부했으므로 원래 바이트는 그대로 남아 있어 수동 복구가 가능합니다."
+  },
+  "section.ak.usage.notLanded": {
+    "zh-CN": "这段区间还没有分片落盘",
+    "zh-TW": "這段區間還沒有分片落盤",
+    "en": "No shard has been persisted for this window yet",
+    "ja": "この期間の断片はまだ保存されていません",
+    "ko": "이 구간의 조각이 아직 저장되지 않았습니다"
+  },
+  "section.ak.usage.notLandedTip": {
+    "zh-CN": "统计是开着的，只是这段时间的分片还没写下去 —— 这不是「没人用」。",
+    "zh-TW": "統計是開著的，只是這段時間的分片還沒寫下去 —— 這不是「沒人用」。",
+    "en": "Usage recording is on; the shard for this window simply has not been written yet — this is not “nobody used it”.",
+    "ja": "使用量の記録は有効ですが、この期間の断片がまだ書き込まれていません。「誰も使っていない」ではありません。",
+    "ko": "사용량 기록은 켜져 있고 이 구간의 조각이 아직 기록되지 않았을 뿐입니다 — “아무도 쓰지 않았다”가 아닙니다."
+  },
+  "section.ak.usage.off": {
+    "zh-CN": "这个部署没在记账",
+    "zh-TW": "這個部署沒在記帳",
+    "en": "This deployment is not recording usage",
+    "ja": "このデプロイは使用量を記録していません",
+    "ko": "이 배포는 사용량을 기록하지 않습니다"
+  },
+  "section.ak.usage.tip": {
+    "zh-CN": "这个数是近似值：未落盘的尾巴不算在内。",
+    "zh-TW": "這個數是近似值：未落盤的尾巴不算在內。",
+    "en": "Approximate: the not-yet-persisted tail is excluded.",
+    "ja": "概算です。まだ保存されていない分は含みません。",
+    "ko": "근사치입니다. 아직 저장되지 않은 부분은 제외됩니다."
+  },
+  "section.ak.usage.unknown": {
+    "zh-CN": "用量这一块读不出来",
+    "zh-TW": "用量這一塊讀不出來",
+    "en": "usage could not be read",
+    "ja": "使用量を読み取れません",
+    "ko": "사용량을 읽지 못했습니다"
+  },
+  "section.ak.usage.value": {
+    "zh-CN": "近 24 小时 {n} 次请求",
+    "zh-TW": "近 24 小時 {n} 次請求",
+    "en": "{n} requests in the last 24 h",
+    "ja": "直近 24 時間で {n} 件のリクエスト",
+    "ko": "최근 24시간 동안 요청 {n}건"
+  },
+  "section.ak.usageFailed": {
+    "zh-CN": "用量这一次没读到，卡片上那一行先留空。",
+    "zh-TW": "用量這一次沒讀到，卡片上那一行先留空。",
+    "en": "Usage could not be read this time; that line on each card stays blank.",
+    "ja": "今回は使用量を取得できませんでした。各カードのその行は空のままです。",
+    "ko": "이번에는 사용량을 읽지 못했습니다. 각 카드의 해당 줄은 비워 둡니다."
+  },
+  "section.ak.writeFailed": {
+    "zh-CN": "这一次写入没成功。",
+    "zh-TW": "這一次寫入沒成功。",
+    "en": "The write did not go through.",
+    "ja": "今回の書き込みは失敗しました。",
+    "ko": "이번 쓰기는 실패했습니다."
+  },
+  "section.ev.title": {
+    "zh-CN": "实时日志",
+    "zh-TW": "即時日誌",
+    "en": "Live Logs",
+    "ja": "リアルタイムログ",
+    "ko": "실시간 로그"
+  },
+  "section.ev.status.connected": {
+    "zh-CN": "轮询正常",
+    "zh-TW": "輪詢正常",
+    "en": "Polling",
+    "ja": "ポーリング中",
+    "ko": "폴링 중"
+  },
+  "section.ev.status.connecting": {
+    "zh-CN": "连接中…",
+    "zh-TW": "連線中…",
+    "en": "Connecting…",
+    "ja": "接続中…",
+    "ko": "연결 중…"
+  },
+  "section.ev.status.reconnecting": {
+    "zh-CN": "重试中…",
+    "zh-TW": "重試中…",
+    "en": "Retrying…",
+    "ja": "再試行中…",
+    "ko": "재시도 중…"
+  },
+  "section.ev.status.disconnected": {
+    "zh-CN": "已断开",
+    "zh-TW": "已斷線",
+    "en": "Disconnected",
+    "ja": "切断されました",
+    "ko": "연결 끊김"
+  },
+  "section.ev.status.paused": {
+    "zh-CN": "已暂停",
+    "zh-TW": "已暫停",
+    "en": "Paused",
+    "ja": "一時停止中",
+    "ko": "일시 중지됨"
+  },
+  "section.ev.statusHint": {
+    "zh-CN": "实例 {shard} · 缓冲区里还有 {buffered} 条没落盘 · 已丢弃 {dropped} 条 · 畸形 {malformed} 条",
+    "zh-TW": "實例 {shard} · 緩衝區裡還有 {buffered} 條沒落盤 · 已丟棄 {dropped} 條 · 畸形 {malformed} 條",
+    "en": "Shard {shard} · {buffered} buffered (not yet persisted) · {dropped} dropped · {malformed} malformed",
+    "ja": "インスタンス {shard} · 未保存 {buffered} 件 · 破棄 {dropped} 件 · 不正 {malformed} 件",
+    "ko": "인스턴스 {shard} · 미저장 {buffered}건 · 폐기 {dropped}건 · 비정상 {malformed}건"
+  },
+  "section.ev.statusHintEmpty": {
+    "zh-CN": "还没有取回任何一页",
+    "zh-TW": "還沒有取回任何一頁",
+    "en": "No page fetched yet",
+    "ja": "まだ 1 ページも取得していません",
+    "ko": "아직 한 페이지도 가져오지 않았습니다"
+  },
+  "section.ev.searchPlaceholder": {
+    "zh-CN": "搜索事件名、消息与字段",
+    "zh-TW": "搜尋事件名、訊息與欄位",
+    "en": "Search event, message and fields",
+    "ja": "イベント名・メッセージ・フィールドを検索",
+    "ko": "이벤트명·메시지·필드 검색"
+  },
+  "section.ev.levelGroup": {
+    "zh-CN": "级别筛选",
+    "zh-TW": "等級篩選",
+    "en": "Level filter",
+    "ja": "レベルの絞り込み",
+    "ko": "레벨 필터"
+  },
+  "section.ev.filter.all": {
+    "zh-CN": "全部",
+    "zh-TW": "全部",
+    "en": "All",
+    "ja": "すべて",
+    "ko": "전체"
+  },
+  "section.ev.filter.debug": {
+    "zh-CN": "调试",
+    "zh-TW": "偵錯",
+    "en": "Debug",
+    "ja": "デバッグ",
+    "ko": "디버그"
+  },
+  "section.ev.filter.info": {
+    "zh-CN": "信息",
+    "zh-TW": "資訊",
+    "en": "Info",
+    "ja": "情報",
+    "ko": "정보"
+  },
+  "section.ev.filter.warn": {
+    "zh-CN": "警告",
+    "zh-TW": "警告",
+    "en": "Warn",
+    "ja": "警告レベル",
+    "ko": "경고 레벨"
+  },
+  "section.ev.filter.error": {
+    "zh-CN": "错误",
+    "zh-TW": "錯誤",
+    "en": "Error",
+    "ja": "エラーレベル",
+    "ko": "오류 레벨"
+  },
+  "section.ev.level.debug": {
+    "zh-CN": "调试",
+    "zh-TW": "偵錯",
+    "en": "DEBUG",
+    "ja": "デバッグ",
+    "ko": "디버그"
+  },
+  "section.ev.level.info": {
+    "zh-CN": "信息",
+    "zh-TW": "資訊",
+    "en": "INFO",
+    "ja": "情報",
+    "ko": "정보"
+  },
+  "section.ev.level.warn": {
+    "zh-CN": "警告",
+    "zh-TW": "警告",
+    "en": "WARN",
+    "ja": "ワーニング",
+    "ko": "경고"
+  },
+  "section.ev.level.error": {
+    "zh-CN": "错误",
+    "zh-TW": "錯誤",
+    "en": "ERROR",
+    "ja": "エラー",
+    "ko": "오류"
+  },
+  "section.ev.level.unknown": {
+    "zh-CN": "未知级别",
+    "zh-TW": "未知等級",
+    "en": "UNKNOWN",
+    "ja": "不明なレベル",
+    "ko": "알 수 없는 레벨"
+  },
+  "section.ev.pause": {
+    "zh-CN": "暂停",
+    "zh-TW": "暫停",
+    "en": "Pause",
+    "ja": "一時停止",
+    "ko": "일시 중지"
+  },
+  "section.ev.resume": {
+    "zh-CN": "继续",
+    "zh-TW": "繼續",
+    "en": "Resume",
+    "ja": "再開",
+    "ko": "재개"
+  },
+  "section.ev.clear": {
+    "zh-CN": "清屏",
+    "zh-TW": "清畫面",
+    "en": "Clear view",
+    "ja": "画面をクリア",
+    "ko": "화면 지우기"
+  },
+  "section.ev.clearHint": {
+    "zh-CN": "只清掉当前屏幕上的行。服务端那份事件是持久的，不会被删掉。",
+    "zh-TW": "只清掉目前畫面上的行。伺服器那份事件是持久的，不會被刪掉。",
+    "en": "Clears the on-screen lines only. Events on the server are persisted and stay untouched.",
+    "ja": "画面上の行だけを消します。サーバー側のイベントは永続化されており削除されません。",
+    "ko": "화면의 줄만 지웁니다. 서버에 저장된 이벤트는 삭제되지 않습니다."
+  },
+  "section.ev.download": {
+    "zh-CN": "下载整份",
+    "zh-TW": "下載整份",
+    "en": "Download all",
+    "ja": "全件ダウンロード",
+    "ko": "전체 다운로드"
+  },
+  "section.ev.downloadFailed": {
+    "zh-CN": "下载失败：这一份没有取回来",
+    "zh-TW": "下載失敗：這一份沒有取回來",
+    "en": "Download failed: the file was not retrieved",
+    "ja": "ダウンロードに失敗しました：ファイルを取得できませんでした",
+    "ko": "다운로드 실패: 파일을 가져오지 못했습니다"
+  },
+  "section.ev.autoScroll": {
+    "zh-CN": "自动滚动",
+    "zh-TW": "自動捲動",
+    "en": "Auto-scroll",
+    "ja": "自動スクロール",
+    "ko": "자동 스크롤"
+  },
+  "section.ev.empty": {
+    "zh-CN": "这一档还没有事件",
+    "zh-TW": "這一檔還沒有事件",
+    "en": "No events in this level yet",
+    "ja": "このレベルのイベントはまだありません",
+    "ko": "이 레벨의 이벤트가 아직 없습니다"
+  },
+  "section.ev.emptySearch": {
+    "zh-CN": "没有匹配这个关键词的行",
+    "zh-TW": "沒有符合這個關鍵字的行",
+    "en": "No line matches this keyword",
+    "ja": "このキーワードに一致する行はありません",
+    "ko": "이 키워드와 일치하는 줄이 없습니다"
+  },
+  "section.ev.detail": {
+    "zh-CN": "事件详情",
+    "zh-TW": "事件詳情",
+    "en": "Event detail",
+    "ja": "イベントの詳細",
+    "ko": "이벤트 상세"
+  },
+  "section.ev.detailClose": {
+    "zh-CN": "关闭详情",
+    "zh-TW": "關閉詳情",
+    "en": "Close detail",
+    "ja": "詳細を閉じる",
+    "ko": "상세 닫기"
+  },
+  "section.ev.detailUnserializable": {
+    "zh-CN": "这一条序列化不出来，原文没法显示",
+    "zh-TW": "這一條序列化不出來，原文沒法顯示",
+    "en": "This entry cannot be serialised; the raw form cannot be shown",
+    "ja": "このエントリはシリアライズできず、原文を表示できません",
+    "ko": "이 항목은 직렬화할 수 없어 원문을 표시할 수 없습니다"
+  },
+  "section.ev.warn.dropped": {
+    "zh-CN": "有事件被丢弃过：缓冲区满过，这段时间的记录是不完整的。",
+    "zh-TW": "有事件被丟棄過：緩衝區滿過，這段時間的記錄是不完整的。",
+    "en": "Some events were dropped: the buffer overflowed, so this window is incomplete.",
+    "ja": "破棄されたイベントがあります：バッファが溢れたため、この期間の記録は不完全です。",
+    "ko": "폐기된 이벤트가 있습니다: 버퍼가 넘쳐 이 구간의 기록은 불완전합니다."
+  },
+  "section.ev.warn.budgetExhausted": {
+    "zh-CN": "落盘预算已耗尽：新事件暂时只在内存里，实例被回收就会丢。",
+    "zh-TW": "落盤預算已耗盡：新事件暫時只在記憶體裡，實例被回收就會丟。",
+    "en": "The persistence budget is exhausted: new events live in memory only and are lost if this instance is recycled.",
+    "ja": "書き込み予算を使い切りました：新しいイベントはメモリ上のみで、インスタンス再起動で失われます。",
+    "ko": "저장 예산이 소진되었습니다: 새 이벤트는 메모리에만 있으며 인스턴스가 재활용되면 사라집니다."
+  },
+  "section.ev.warn.truncated": {
+    "zh-CN": "这一页被截断了：还有更旧的事件没显示出来。",
+    "zh-TW": "這一頁被截斷了：還有更舊的事件沒顯示出來。",
+    "en": "This page was truncated: older events exist but are not shown.",
+    "ja": "このページは切り詰められました：表示されていない古いイベントがあります。",
+    "ko": "이 페이지는 잘렸습니다: 표시되지 않은 더 오래된 이벤트가 있습니다."
+  },
+  "section.ev.warn.cursorAhead": {
+    "zh-CN": "游标比服务端时钟还新：这一页是空的并不代表没有事件（多副本之间时钟不一致）。",
+    "zh-TW": "游標比伺服器時鐘還新：這一頁是空的並不代表沒有事件（多副本之間時鐘不一致）。",
+    "en": "The cursor is ahead of the server clock: an empty page here does not mean there are no events (clock skew across replicas).",
+    "ja": "カーソルがサーバー時計より進んでいます：ここが空でもイベントが無いとは限りません（レプリカ間の時刻ずれ）。",
+    "ko": "커서가 서버 시계보다 앞서 있습니다: 이 페이지가 비어 있다고 이벤트가 없는 것은 아닙니다(복제본 간 시계 차이)."
+  },
+  "section.md.badge.no": {
+    "zh-CN": "这条协议上不可用",
+    "zh-TW": "這條協定上不可用",
+    "en": "not available on this protocol",
+    "ja": "このプロトコルでは利用できません",
+    "ko": "이 프로토콜에서는 사용할 수 없음"
+  },
+  "section.md.badge.yes": {
+    "zh-CN": "这条协议上可用",
+    "zh-TW": "這條協定上可用",
+    "en": "available on this protocol",
+    "ja": "このプロトコルで利用可能",
+    "ko": "이 프로토콜에서 사용 가능"
+  },
+  "section.md.catalog.filterAll": {
+    "zh-CN": "全部",
+    "zh-TW": "全部",
+    "en": "All",
+    "ja": "すべて",
+    "ko": "전체"
+  },
+  "section.md.catalog.title": {
+    "zh-CN": "模型目录",
+    "zh-TW": "模型目錄",
+    "en": "Model catalog",
+    "ja": "モデルカタログ",
+    "ko": "모델 카탈로그"
+  },
+  "section.md.col.endpoints": {
+    "zh-CN": "端点",
+    "zh-TW": "端點",
+    "en": "Endpoints",
+    "ja": "エンドポイント",
+    "ko": "엔드포인트"
+  },
+  "section.md.col.id": {
+    "zh-CN": "模型",
+    "zh-TW": "模型",
+    "en": "Model",
+    "ja": "モデル",
+    "ko": "모델"
+  },
+  "section.md.col.modality": {
+    "zh-CN": "形态",
+    "zh-TW": "形態",
+    "en": "Kind",
+    "ja": "種別",
+    "ko": "종류"
+  },
+  "section.md.col.protocols": {
+    "zh-CN": "协议可用性",
+    "zh-TW": "協定可用性",
+    "en": "Protocol availability",
+    "ja": "プロトコル対応",
+    "ko": "프로토콜 가용성"
+  },
+  "section.md.desc": {
+    "zh-CN": "三张卡回答三个不同的问题：本网关支持什么、这个账号此刻有什么、这一刻通不通。",
+    "zh-TW": "三張卡回答三個不同的問題：本閘道支援什麼、這個帳號此刻有什麼、這一刻通不通。",
+    "en": "Three cards, three different questions: what this gateway supports, what the account has right now, and whether it answers right now.",
+    "ja": "3 枚のカードが答えるのは別々の問いです：このゲートウェイが対応するもの、このアカウントが今持つもの、今この瞬間つながるかどうか。",
+    "ko": "세 카드가 서로 다른 세 질문에 답합니다: 이 게이트웨이가 지원하는 것, 이 계정이 지금 가진 것, 지금 이 순간 연결되는지."
+  },
+  "section.md.empty": {
+    "zh-CN": "这个网关的目录里一个模型都没有。",
+    "zh-TW": "這個閘道的目錄裡一個模型都沒有。",
+    "en": "This gateway's catalog lists no model at all.",
+    "ja": "このゲートウェイのカタログにはモデルが 1 つもありません。",
+    "ko": "이 게이트웨이 카탈로그에는 모델이 하나도 없습니다."
+  },
+  "section.md.filterEmpty": {
+    "zh-CN": "这条协议上没有可用的模型。",
+    "zh-TW": "這條協定上沒有可用的模型。",
+    "en": "No model is available on this protocol.",
+    "ja": "このプロトコルで使えるモデルはありません。",
+    "ko": "이 프로토콜에서 사용할 수 있는 모델이 없습니다."
+  },
+  "section.md.loadFailed": {
+    "zh-CN": "模型目录这一次没读出来。",
+    "zh-TW": "模型目錄這一次沒讀出來。",
+    "en": "The model catalog could not be read this time.",
+    "ja": "今回はモデルカタログを読み取れませんでした。",
+    "ko": "이번에는 모델 카탈로그를 읽지 못했습니다."
+  },
+  "section.md.modality.chat": {
+    "zh-CN": "对话",
+    "zh-TW": "對話",
+    "en": "Chat",
+    "ja": "チャット",
+    "ko": "대화"
+  },
+  "section.md.modality.image": {
+    "zh-CN": "图片",
+    "zh-TW": "圖片",
+    "en": "Image",
+    "ja": "画像",
+    "ko": "이미지"
+  },
+  "section.md.modality.video": {
+    "zh-CN": "视频",
+    "zh-TW": "影片",
+    "en": "Video",
+    "ja": "動画",
+    "ko": "동영상"
+  },
+  "section.md.retry": {
+    "zh-CN": "再读一次",
+    "zh-TW": "再讀一次",
+    "en": "Read again",
+    "ja": "もう一度読む",
+    "ko": "다시 읽기"
+  },
+  "section.md.test.col.latency": {
+    "zh-CN": "延迟（ms）",
+    "zh-TW": "延遲（ms）",
+    "en": "Latency (ms)",
+    "ja": "レイテンシ（ms）",
+    "ko": "지연(ms)"
+  },
+  "section.md.test.col.model": {
+    "zh-CN": "模型",
+    "zh-TW": "模型",
+    "en": "Model",
+    "ja": "モデル",
+    "ko": "모델"
+  },
+  "section.md.test.col.result": {
+    "zh-CN": "结果",
+    "zh-TW": "結果",
+    "en": "Result",
+    "ja": "結果",
+    "ko": "결과"
+  },
+  "section.md.test.desc": {
+    "zh-CN": "逐个对话模型真发一次最小请求。图片与视频模型不进这一轮 —— 测它们会真的花掉这个账号的生成额度。",
+    "zh-TW": "逐個對話模型真發一次最小請求。圖片與影片模型不進這一輪 —— 測它們會真的花掉這個帳號的生成額度。",
+    "en": "Sends one minimal real request per chat model. Image and video models are excluded — testing those really spends the account's generation quota.",
+    "ja": "チャットモデルごとに最小のリクエストを実際に 1 回送ります。画像・動画モデルは対象外です。テストすると本当に生成枠を消費するからです。",
+    "ko": "채팅 모델마다 최소 요청을 실제로 한 번 보냅니다. 이미지와 동영상 모델은 제외됩니다 — 테스트하면 계정의 생성 할당량을 실제로 씁니다."
+  },
+  "section.md.test.empty": {
+    "zh-CN": "目录里没有能这么测的模型。",
+    "zh-TW": "目錄裡沒有能這麼測的模型。",
+    "en": "The catalog has no model that can be tested this way.",
+    "ja": "この方法でテストできるモデルはカタログにありません。",
+    "ko": "이 방식으로 테스트할 수 있는 모델이 카탈로그에 없습니다."
+  },
+  "section.md.test.eta": {
+    "zh-CN": "{n} 个模型，整轮至少要 {sec} 秒 —— 中间那几段是在等后端的最小间隔。",
+    "zh-TW": "{n} 個模型，整輪至少要 {sec} 秒 —— 中間那幾段是在等後端的最小間隔。",
+    "en": "{n} models; one round takes at least {sec} s — the gaps are the backend's minimum interval.",
+    "ja": "{n} 件のモデル、1 周で最低 {sec} 秒かかります。間の時間はバックエンドの最小間隔の待ちです。",
+    "ko": "모델 {n}개, 한 바퀴에 최소 {sec}초 걸립니다 — 중간 구간은 백엔드 최소 간격을 기다리는 시간입니다."
+  },
+  "section.md.test.idle": {
+    "zh-CN": "这一次进面板以来还没测过（这与「都不通」不是一回事）。",
+    "zh-TW": "這一次進面板以來還沒測過（這與「都不通」不是一回事）。",
+    "en": "Nothing has been tested since this panel was opened — that is not the same as “none of them work”.",
+    "ja": "この画面を開いてからまだテストしていません（「どれもつながらない」とは別です）。",
+    "ko": "이 화면을 연 뒤 아직 테스트하지 않았습니다(“모두 안 된다”와는 다릅니다)."
+  },
+  "section.md.test.pacingUnknown": {
+    "zh-CN": "读不到后端那个最小间隔，整轮的节奏就排不出来 —— 这颗按钮先停用，免得把我们自己的节流当成一张连通性矩阵。",
+    "zh-TW": "讀不到後端那個最小間隔，整輪的節奏就排不出來 —— 這顆按鈕先停用，免得把我們自己的節流當成一張連通性矩陣。",
+    "en": "Without the backend's minimum interval we cannot pace a round, so the button stays disabled — otherwise our own throttling would be read as a connectivity matrix.",
+    "ja": "バックエンドの最小間隔が読めないと 1 周のペースを組めないため、ボタンは無効のままです。さもないと自分たちのスロットルを疎通結果と読み違えます。",
+    "ko": "백엔드의 최소 간격을 읽지 못하면 한 바퀴의 속도를 정할 수 없어 버튼을 비활성화합니다. 그렇지 않으면 자체 스로틀을 연결 결과로 오해하게 됩니다."
+  },
+  "section.md.test.progress": {
+    "zh-CN": "正在逐个测：{done}/{total}",
+    "zh-TW": "正在逐個測：{done}/{total}",
+    "en": "Testing one by one: {done}/{total}",
+    "ja": "1 件ずつテスト中：{done}/{total}",
+    "ko": "하나씩 테스트 중: {done}/{total}"
+  },
+  "section.md.test.reason.networkError": {
+    "zh-CN": "没连上",
+    "zh-TW": "沒連上",
+    "en": "Could not connect",
+    "ja": "接続できません",
+    "ko": "연결하지 못함"
+  },
+  "section.md.test.reason.noKey": {
+    "zh-CN": "没有可用的 key",
+    "zh-TW": "沒有可用的 key",
+    "en": "No usable key",
+    "ja": "使える鍵がありません",
+    "ko": "사용 가능한 키 없음"
+  },
+  "section.md.test.reason.notTestable": {
+    "zh-CN": "这个形态不做连通性测试",
+    "zh-TW": "這個形態不做連通性測試",
+    "en": "This kind is not connectivity-tested",
+    "ja": "この種別は疎通テストの対象外",
+    "ko": "이 종류는 연결 테스트 대상이 아님"
+  },
+  "section.md.test.reason.ok": {
+    "zh-CN": "通了",
+    "zh-TW": "通了",
+    "en": "OK",
+    "ja": "成功",
+    "ko": "성공"
+  },
+  "section.md.test.reason.other": {
+    "zh-CN": "这一次没测到",
+    "zh-TW": "這一次沒測到",
+    "en": "No result this time",
+    "ja": "今回は結果なし",
+    "ko": "이번에는 결과 없음"
+  },
+  "section.md.test.reason.probeCooldown": {
+    "zh-CN": "被自己的护栏挡下（还在最小间隔里）",
+    "zh-TW": "被自己的護欄擋下（還在最小間隔裡）",
+    "en": "Blocked by our own guard (still inside the minimum interval)",
+    "ja": "自分たちのガードに阻止（最小間隔の内側）",
+    "ko": "자체 가드에 차단됨(최소 간격 이내)"
+  },
+  "section.md.test.reason.probeInFlight": {
+    "zh-CN": "被自己的护栏挡下（上一次还没回来）",
+    "zh-TW": "被自己的護欄擋下（上一次還沒回來）",
+    "en": "Blocked by our own guard (the previous probe is still open)",
+    "ja": "自分たちのガードに阻止（前回がまだ返っていない）",
+    "ko": "자체 가드에 차단됨(이전 요청이 아직 안 끝남)"
+  },
+  "section.md.test.reason.timeout": {
+    "zh-CN": "超时",
+    "zh-TW": "逾時",
+    "en": "Timed out",
+    "ja": "タイムアウト",
+    "ko": "시간 초과"
+  },
+  "section.md.test.reason.upstreamError": {
+    "zh-CN": "上游没正常回",
+    "zh-TW": "上游沒正常回",
+    "en": "Upstream did not answer normally",
+    "ja": "上流が正常に応答しません",
+    "ko": "업스트림이 정상 응답하지 않음"
+  },
+  "section.md.test.rerun": {
+    "zh-CN": "再测一遍",
+    "zh-TW": "再測一遍",
+    "en": "Test again",
+    "ja": "もう一度テスト",
+    "ko": "다시 테스트"
+  },
+  "section.md.test.run": {
+    "zh-CN": "全部测一遍",
+    "zh-TW": "全部測一遍",
+    "en": "Test them all",
+    "ja": "すべてテスト",
+    "ko": "전체 테스트"
+  },
+  "section.md.test.state.active": {
+    "zh-CN": "正在测",
+    "zh-TW": "正在測",
+    "en": "Testing",
+    "ja": "テスト中",
+    "ko": "테스트 중"
+  },
+  "section.md.test.state.pending": {
+    "zh-CN": "待测",
+    "zh-TW": "待測",
+    "en": "Queued",
+    "ja": "待機中",
+    "ko": "대기"
+  },
+  "section.md.test.status": {
+    "zh-CN": "HTTP 状态 {status}",
+    "zh-TW": "HTTP 狀態 {status}",
+    "en": "HTTP {status}",
+    "ja": "HTTP ステータス {status}",
+    "ko": "HTTP 상태 {status}"
+  },
+  "section.md.test.throttledNote": {
+    "zh-CN": "其中 {n} 行是被我们自己的护栏挡下的，不是模型不通 —— 隔一会儿再单独测那几个。",
+    "zh-TW": "其中 {n} 行是被我們自己的護欄擋下的，不是模型不通 —— 隔一會兒再單獨測那幾個。",
+    "en": "{n} of these rows were blocked by our own guard, not by the model — retest those separately in a moment.",
+    "ja": "そのうち {n} 行は自分たちのガードに阻止されたもので、モデルの不通ではありません。少し置いて個別に再テストしてください。",
+    "ko": "그중 {n}행은 모델 문제가 아니라 자체 가드에 막힌 것입니다 — 잠시 후 따로 다시 테스트하세요."
+  },
+  "section.md.test.title": {
+    "zh-CN": "连通性测试",
+    "zh-TW": "連通性測試",
+    "en": "Connectivity test",
+    "ja": "疎通テスト",
+    "ko": "연결 테스트"
+  },
+  "section.md.test.waiting": {
+    "zh-CN": "在等节流：{done}/{total}",
+    "zh-TW": "在等節流：{done}/{total}",
+    "en": "Waiting out the throttle: {done}/{total}",
+    "ja": "スロットル待ち：{done}/{total}",
+    "ko": "스로틀 대기 중: {done}/{total}"
+  },
+  "section.md.title": {
+    "zh-CN": "支持模型",
+    "zh-TW": "支援模型",
+    "en": "Supported models",
+    "ja": "対応モデル",
+    "ko": "지원 모델"
+  },
+  "section.md.unknown": {
+    "zh-CN": "我们不知道这个网关认得哪些模型。",
+    "zh-TW": "我們不知道這個閘道認得哪些模型。",
+    "en": "We do not know which models this gateway recognises.",
+    "ja": "このゲートウェイがどのモデルを認識するか分かりません。",
+    "ko": "이 게이트웨이가 어떤 모델을 아는지 알 수 없습니다."
+  },
+  "section.md.up.desc": {
+    "zh-CN": "这颗按钮会拿池里的一把 key 真打一次上游，问它此刻有哪些模型。",
+    "zh-TW": "這顆按鈕會拿池裡的一把 key 真打一次上游，問它此刻有哪些模型。",
+    "en": "This button really calls upstream with one key from the pool and asks which models it has right now.",
+    "ja": "このボタンはプールの鍵を 1 本使って実際に上流へ問い合わせ、今どのモデルがあるかを尋ねます。",
+    "ko": "이 버튼은 풀의 키 하나로 실제로 업스트림을 호출해 지금 어떤 모델이 있는지 묻습니다."
+  },
+  "section.md.up.diffNone": {
+    "zh-CN": "两边一条不差。",
+    "zh-TW": "兩邊一條不差。",
+    "en": "Both sides match exactly.",
+    "ja": "両者は完全に一致しています。",
+    "ko": "양쪽이 정확히 일치합니다."
+  },
+  "section.md.up.idle": {
+    "zh-CN": "还没问过上游（这与「上游没有模型」不是一回事）。",
+    "zh-TW": "還沒問過上游（這與「上游沒有模型」不是一回事）。",
+    "en": "We have not asked upstream yet — that is not the same as “upstream has no models”.",
+    "ja": "まだ上流に問い合わせていません（「上流にモデルがない」とは別のことです）。",
+    "ko": "아직 업스트림에 묻지 않았습니다(“업스트림에 모델이 없다”와는 다릅니다)."
+  },
+  "section.md.up.listLabel": {
+    "zh-CN": "上游这次回的模型（{n}）",
+    "zh-TW": "上游這次回的模型（{n}）",
+    "en": "Models upstream returned ({n})",
+    "ja": "上流が返したモデル（{n}）",
+    "ko": "업스트림이 반환한 모델({n})"
+  },
+  "section.md.up.loading": {
+    "zh-CN": "正在问上游……",
+    "zh-TW": "正在問上游……",
+    "en": "Asking upstream...",
+    "ja": "上流に問い合わせ中…",
+    "ko": "업스트림에 문의 중…"
+  },
+  "section.md.up.onlyCatalog": {
+    "zh-CN": "目录有、上游这次没回（{n}）",
+    "zh-TW": "目錄有、上游這次沒回（{n}）",
+    "en": "In the catalog, not returned upstream this time ({n})",
+    "ja": "カタログにあり今回上流が返さなかった（{n}）",
+    "ko": "카탈로그에 있고 이번에 업스트림이 반환하지 않음({n})"
+  },
+  "section.md.up.onlyUpstream": {
+    "zh-CN": "上游有、目录没有（{n}）",
+    "zh-TW": "上游有、目錄沒有（{n}）",
+    "en": "Upstream only, not in the catalog ({n})",
+    "ja": "上流のみ・カタログにない（{n}）",
+    "ko": "업스트림에만 있고 카탈로그에 없음({n})"
+  },
+  "section.md.up.reason.badPayload": {
+    "zh-CN": "正文读全了，但这份响应我们看不懂。",
+    "zh-TW": "內文讀全了，但這份回應我們看不懂。",
+    "en": "The body arrived in full, but we cannot make sense of it.",
+    "ja": "本文は届きましたが、その中身を解釈できません。",
+    "ko": "본문은 모두 받았지만 그 내용을 해석할 수 없습니다."
+  },
+  "section.md.up.reason.bodyIncomplete": {
+    "zh-CN": "响应头到手了，正文没读全。",
+    "zh-TW": "回應標頭到手了，內文沒讀全。",
+    "en": "Headers arrived, the body did not come through in full.",
+    "ja": "ヘッダーは届きましたが本文が最後まで届きませんでした。",
+    "ko": "헤더는 도착했지만 본문을 끝까지 받지 못했습니다."
+  },
+  "section.md.up.reason.networkError": {
+    "zh-CN": "根本没连上（DNS / TCP / TLS）。",
+    "zh-TW": "根本沒連上（DNS / TCP / TLS）。",
+    "en": "Never connected at all (DNS / TCP / TLS).",
+    "ja": "そもそも接続できませんでした（DNS / TCP / TLS）。",
+    "ko": "아예 연결되지 않았습니다(DNS / TCP / TLS)."
+  },
+  "section.md.up.reason.noKey": {
+    "zh-CN": "池子里一把能用的 key 都没有。",
+    "zh-TW": "池子裡一把能用的 key 都沒有。",
+    "en": "No usable key in the pool.",
+    "ja": "プールに使える鍵が 1 本もありません。",
+    "ko": "풀에 사용할 수 있는 키가 없습니다."
+  },
+  "section.md.up.reason.other": {
+    "zh-CN": "这一次没问到，重试可能有用。",
+    "zh-TW": "這一次沒問到，重試可能有用。",
+    "en": "Nothing came back this time; retrying may help.",
+    "ja": "今回は結果を得られませんでした。再試行が有効かもしれません。",
+    "ko": "이번에는 결과를 받지 못했습니다. 재시도가 도움이 될 수 있습니다."
+  },
+  "section.md.up.reason.probeCooldown": {
+    "zh-CN": "两次探测之间要隔一小段时间，这一次被我们自己的护栏挡下了。",
+    "zh-TW": "兩次探測之間要隔一小段時間，這一次被我們自己的護欄擋下了。",
+    "en": "Probes need a gap between them; this one was blocked by our own guard.",
+    "ja": "プローブの間には間隔が必要です。今回は自分たちのガードに止められました。",
+    "ko": "탐지 사이에는 간격이 필요합니다. 이번에는 자체 가드에 막혔습니다."
+  },
+  "section.md.up.reason.probeInFlight": {
+    "zh-CN": "上一次探测还没回来，等它结束再试。",
+    "zh-TW": "上一次探測還沒回來，等它結束再試。",
+    "en": "The previous probe has not returned yet; wait for it to finish.",
+    "ja": "前回のプローブがまだ返っていません。終わってから再試行してください。",
+    "ko": "이전 탐지가 아직 끝나지 않았습니다. 끝난 뒤 다시 시도하세요."
+  },
+  "section.md.up.reason.timeout": {
+    "zh-CN": "响应头到达之前就超时了。",
+    "zh-TW": "回應標頭到達之前就逾時了。",
+    "en": "Timed out before any response header arrived.",
+    "ja": "応答ヘッダーが届く前にタイムアウトしました。",
+    "ko": "응답 헤더가 도착하기 전에 시간이 초과되었습니다."
+  },
+  "section.md.up.reason.upstreamError": {
+    "zh-CN": "上游回了，但不是 2xx。",
+    "zh-TW": "上游回了，但不是 2xx。",
+    "en": "Upstream answered, but not with a 2xx.",
+    "ja": "上流は応答しましたが 2xx ではありません。",
+    "ko": "업스트림이 응답했지만 2xx가 아닙니다."
+  },
+  "section.md.up.run": {
+    "zh-CN": "去问一次上游",
+    "zh-TW": "去問一次上游",
+    "en": "Ask upstream",
+    "ja": "上流に問い合わせる",
+    "ko": "업스트림에 문의"
+  },
+  "section.md.up.status": {
+    "zh-CN": "上游回了 {status}",
+    "zh-TW": "上游回了 {status}",
+    "en": "Upstream answered {status}",
+    "ja": "上流の応答は {status}",
+    "ko": "업스트림 응답 {status}"
+  },
+  "section.md.up.title": {
+    "zh-CN": "上游模型",
+    "zh-TW": "上游模型",
+    "en": "Upstream models",
+    "ja": "上流のモデル",
+    "ko": "업스트림 모델"
+  },
+  "section.md.up.truncated": {
+    "zh-CN": "上游回的清单被截断了，这里只有前 {n} 条。",
+    "zh-TW": "上游回的清單被截斷了，這裡只有前 {n} 條。",
+    "en": "The upstream list was truncated; only the first {n} entries are shown.",
+    "ja": "上流のリストは切り詰められました。ここには先頭 {n} 件だけです。",
+    "ko": "업스트림 목록이 잘렸습니다. 여기에는 처음 {n}개만 있습니다."
+  },
+  "section.pg.cancel": {
+    "zh-CN": "取消这一轮",
+    "zh-TW": "取消這一輪",
+    "en": "Cancel this round",
+    "ja": "この回をキャンセル",
+    "ko": "이번 회차 취소"
+  },
+  "section.pg.cfg.modality": {
+    "zh-CN": "形态",
+    "zh-TW": "形態",
+    "en": "Kind",
+    "ja": "種別",
+    "ko": "종류"
+  },
+  "section.pg.cfg.model": {
+    "zh-CN": "模型",
+    "zh-TW": "模型",
+    "en": "Model",
+    "ja": "モデル",
+    "ko": "모델"
+  },
+  "section.pg.cfg.noModel": {
+    "zh-CN": "这个形态下没有可选模型",
+    "zh-TW": "這個形態下沒有可選模型",
+    "en": "No model available for this kind",
+    "ja": "この種別に選べるモデルはありません",
+    "ko": "이 종류에 선택할 수 있는 모델이 없습니다"
+  },
+  "section.pg.cfg.prompt": {
+    "zh-CN": "提示词",
+    "zh-TW": "提示詞",
+    "en": "Prompt",
+    "ja": "プロンプト",
+    "ko": "프롬프트"
+  },
+  "section.pg.cfg.promptPh": {
+    "zh-CN": "说点什么",
+    "zh-TW": "說點什麼",
+    "en": "Say something",
+    "ja": "何か入力してください",
+    "ko": "무언가 입력하세요"
+  },
+  "section.pg.cfg.protocol": {
+    "zh-CN": "协议",
+    "zh-TW": "協定",
+    "en": "Protocol",
+    "ja": "プロトコル",
+    "ko": "프로토콜"
+  },
+  "section.pg.cfg.save": {
+    "zh-CN": "存下来",
+    "zh-TW": "存起來",
+    "en": "Save",
+    "ja": "保存",
+    "ko": "저장"
+  },
+  "section.pg.cfg.stream": {
+    "zh-CN": "流式返回",
+    "zh-TW": "串流回應",
+    "en": "Stream the response",
+    "ja": "ストリーミングで受け取る",
+    "ko": "스트리밍으로 받기"
+  },
+  "section.pg.cfg.title": {
+    "zh-CN": "请求",
+    "zh-TW": "請求",
+    "en": "Request",
+    "ja": "リクエスト",
+    "ko": "요청"
+  },
+  "section.pg.cfg.token": {
+    "zh-CN": "网关口令",
+    "zh-TW": "閘道口令",
+    "en": "Gateway token",
+    "ja": "ゲートウェイトークン",
+    "ko": "게이트웨이 토큰"
+  },
+  "section.pg.cfg.tokenPh": {
+    "zh-CN": "粘贴发给下游客户端的那把口令",
+    "zh-TW": "貼上發給下游客戶端的那把口令",
+    "en": "Paste the token you hand to downstream clients",
+    "ja": "下流のクライアントに配るトークンを貼り付けてください",
+    "ko": "다운스트림 클라이언트에 배포하는 토큰을 붙여 넣으세요"
+  },
+  "section.pg.clear": {
+    "zh-CN": "清空对话",
+    "zh-TW": "清空對話",
+    "en": "Clear the conversation",
+    "ja": "会話をクリア",
+    "ko": "대화 비우기"
+  },
+  "section.pg.desc": {
+    "zh-CN": "拿网关自己的对外接口真发一次请求。用的是网关口令，不是管理口令 —— 两把钥匙分开存、分开走。",
+    "zh-TW": "拿閘道自己的對外介面真發一次請求。用的是閘道口令，不是管理口令 —— 兩把鑰匙分開存、分開走。",
+    "en": "Sends a real request through the gateway's own public API. It uses the gateway token, not the admin token — the two keys are stored and sent separately.",
+    "ja": "ゲートウェイ自身の公開 API へ実際にリクエストを送ります。使うのはゲートウェイトークンで、管理トークンではありません。2 つの鍵は別々に保存し、別々に送ります。",
+    "ko": "게이트웨이의 공개 API로 실제 요청을 보냅니다. 관리 토큰이 아니라 게이트웨이 토큰을 사용하며, 두 키는 따로 저장하고 따로 전송합니다."
+  },
+  "section.pg.err.badUrl": {
+    "zh-CN": "目录给的地址不是一条能用的 URL。",
+    "zh-TW": "目錄給的位址不是一條能用的 URL。",
+    "en": "The catalog's address is not a usable URL.",
+    "ja": "カタログのアドレスは有効な URL ではありません。",
+    "ko": "카탈로그의 주소가 유효한 URL이 아닙니다."
+  },
+  "section.pg.err.buildFailed": {
+    "zh-CN": "按目录拼不出这一次请求 —— 宁可不发，也不发一条与你选的不一样的。",
+    "zh-TW": "按目錄拼不出這一次請求 —— 寧可不發，也不發一條與你選的不一樣的。",
+    "en": "The request could not be built from the catalog — better to send nothing than to send something different from what you picked.",
+    "ja": "カタログからこのリクエストを組み立てられませんでした。選んだ内容と違うものを送るくらいなら送りません。",
+    "ko": "카탈로그로 이번 요청을 구성할 수 없습니다 — 선택한 것과 다른 요청을 보내느니 보내지 않습니다."
+  },
+  "section.pg.err.crossOrigin": {
+    "zh-CN": "目录给的地址不在本面板这个源上 —— 一个字节都没发（那把口令是发给每个下游用户的）。",
+    "zh-TW": "目錄給的位址不在本面板這個來源上 —— 一個位元組都沒發（那把口令是發給每個下游使用者的）。",
+    "en": "The catalog's URL is not on this panel's origin — nothing was sent (that token is the one handed to every downstream user).",
+    "ja": "カタログの URL がこのパネルのオリジンと異なります。何も送信していません（そのトークンは全下流ユーザーに配るものです）。",
+    "ko": "카탈로그의 URL이 이 패널의 출처가 아닙니다 — 아무것도 보내지 않았습니다(그 토큰은 모든 다운스트림 사용자에게 배포하는 것입니다)."
+  },
+  "section.pg.err.emptyPrompt": {
+    "zh-CN": "先写点提示词。",
+    "zh-TW": "先寫點提示詞。",
+    "en": "Type a prompt first.",
+    "ja": "まずプロンプトを入力してください。",
+    "ko": "먼저 프롬프트를 입력하세요."
+  },
+  "section.pg.err.http": {
+    "zh-CN": "网关回了 {status}，下面是它的原话。",
+    "zh-TW": "閘道回了 {status}，下面是它的原話。",
+    "en": "The gateway answered {status}; its own words are below.",
+    "ja": "ゲートウェイの応答は {status} です。以下はその原文です。",
+    "ko": "게이트웨이가 {status}로 응답했습니다. 아래는 원문입니다."
+  },
+  "section.pg.err.noEndpoint": {
+    "zh-CN": "目录里没有这个形态要用的端点。",
+    "zh-TW": "目錄裡沒有這個形態要用的端點。",
+    "en": "The catalog has no endpoint for this kind.",
+    "ja": "この種別に必要なエンドポイントがカタログにありません。",
+    "ko": "이 종류에 필요한 엔드포인트가 카탈로그에 없습니다."
+  },
+  "section.pg.err.noTaskId": {
+    "zh-CN": "建任务那一步没回任务标识 —— 不去猜一个 id 接着轮询。",
+    "zh-TW": "建任務那一步沒回任務識別 —— 不去猜一個 id 接著輪詢。",
+    "en": "The create step returned no task id — we will not guess one and keep polling.",
+    "ja": "作成ステップがタスク ID を返しませんでした。ID を推測してポーリングを続けることはしません。",
+    "ko": "생성 단계가 작업 ID를 반환하지 않았습니다 — ID를 추측해 계속 폴링하지 않습니다."
+  },
+  "section.pg.err.noToken": {
+    "zh-CN": "还没粘网关口令 —— 一个字节都没发出去。",
+    "zh-TW": "還沒貼閘道口令 —— 一個位元組都沒發出去。",
+    "en": "No gateway token pasted — not a single byte was sent.",
+    "ja": "ゲートウェイトークンが貼られていません。1 バイトも送信していません。",
+    "ko": "게이트웨이 토큰이 없습니다 — 한 바이트도 보내지 않았습니다."
+  },
+  "section.pg.err.pollTimeout": {
+    "zh-CN": "我们不再等了 —— 任务可能还在上游跑着，这不代表它失败了。",
+    "zh-TW": "我們不再等了 —— 任務可能還在上游跑著，這不代表它失敗了。",
+    "en": "We stopped waiting — the task may still be running upstream; this does not mean it failed.",
+    "ja": "待機を打ち切りました。タスクは上流でまだ実行中かもしれず、失敗を意味しません。",
+    "ko": "대기를 중단했습니다 — 작업은 업스트림에서 아직 실행 중일 수 있으며 실패를 뜻하지 않습니다."
+  },
+  "section.pg.err.stream": {
+    "zh-CN": "这条流读到一半断了，上面那半句是真的收到过的。",
+    "zh-TW": "這條串流讀到一半斷了，上面那半句是真的收到過的。",
+    "en": "The stream broke halfway; the half sentence above really did arrive.",
+    "ja": "ストリームが途中で切れました。上の途中までの文は実際に届いたものです。",
+    "ko": "스트림이 중간에 끊겼습니다. 위의 반쪽 문장은 실제로 도착한 것입니다."
+  },
+  "section.pg.err.title": {
+    "zh-CN": "这一轮没成",
+    "zh-TW": "這一輪沒成",
+    "en": "This round did not go through",
+    "ja": "この回は失敗しました",
+    "ko": "이번 회차는 실패했습니다"
+  },
+  "section.pg.err.transport": {
+    "zh-CN": "这一次连响应都没拿到（断网 / 被取消 / 被重定向拦下）。",
+    "zh-TW": "這一次連回應都沒拿到（斷網 / 被取消 / 被重新導向攔下）。",
+    "en": "No response came back at all (offline, cancelled, or stopped by a redirect).",
+    "ja": "応答をまったく受け取れませんでした（オフライン・キャンセル・リダイレクトによる中止）。",
+    "ko": "응답을 전혀 받지 못했습니다(오프라인, 취소, 또는 리디렉션으로 중단)."
+  },
+  "section.pg.loading": {
+    "zh-CN": "正在读协议目录……",
+    "zh-TW": "正在讀協定目錄……",
+    "en": "Reading the protocol catalog...",
+    "ja": "プロトコルカタログを読み込み中…",
+    "ko": "프로토콜 카탈로그를 읽는 중…"
+  },
+  "section.pg.media.none": {
+    "zh-CN": "这一轮没有可展示的媒体地址，完整响应体在下面。",
+    "zh-TW": "這一輪沒有可展示的媒體位址，完整回應體在下面。",
+    "en": "No displayable media URL this round; the full body is below.",
+    "ja": "この回に表示できるメディア URL はありません。完全なボディは下にあります。",
+    "ko": "이번 회차에는 표시할 미디어 URL이 없습니다. 전체 본문은 아래에 있습니다."
+  },
+  "section.pg.media.remote": {
+    "zh-CN": "远端地址只给链接：面板的 CSP 会拦下跨源图片。",
+    "zh-TW": "遠端位址只給連結：面板的 CSP 會擋下跨來源圖片。",
+    "en": "Remote URLs are shown as links only: the panel's CSP blocks cross-origin images.",
+    "ja": "リモート URL はリンクのみです。パネルの CSP がクロスオリジン画像を遮断します。",
+    "ko": "원격 URL은 링크로만 표시합니다: 패널의 CSP가 교차 출처 이미지를 차단합니다."
+  },
+  "section.pg.media.title": {
+    "zh-CN": "媒体结果",
+    "zh-TW": "媒體結果",
+    "en": "Media result",
+    "ja": "メディア結果",
+    "ko": "미디어 결과"
+  },
+  "section.pg.modality.chat": {
+    "zh-CN": "对话",
+    "zh-TW": "對話",
+    "en": "Chat",
+    "ja": "チャット",
+    "ko": "대화"
+  },
+  "section.pg.modality.image": {
+    "zh-CN": "图片",
+    "zh-TW": "圖片",
+    "en": "Image",
+    "ja": "画像",
+    "ko": "이미지"
+  },
+  "section.pg.modality.video": {
+    "zh-CN": "视频",
+    "zh-TW": "影片",
+    "en": "Video",
+    "ja": "動画",
+    "ko": "동영상"
+  },
+  "section.pg.raw.title": {
+    "zh-CN": "响应体原文",
+    "zh-TW": "回應體原文",
+    "en": "Raw response body",
+    "ja": "レスポンス本文の原文",
+    "ko": "응답 본문 원문"
+  },
+  "section.pg.resp.chunks": {
+    "zh-CN": "收到块数",
+    "zh-TW": "收到塊數",
+    "en": "Chunks",
+    "ja": "受信チャンク",
+    "ko": "수신 청크"
+  },
+  "section.pg.resp.latency": {
+    "zh-CN": "延迟",
+    "zh-TW": "延遲",
+    "en": "Latency",
+    "ja": "レイテンシ",
+    "ko": "지연"
+  },
+  "section.pg.resp.malformed": {
+    "zh-CN": "读不出来的块",
+    "zh-TW": "讀不出來的塊",
+    "en": "Unreadable chunks",
+    "ja": "解釈できないチャンク",
+    "ko": "해석 불가 청크"
+  },
+  "section.pg.resp.nonStream": {
+    "zh-CN": "这一轮是非流式的：完整响应体在下面的原文里。",
+    "zh-TW": "這一輪是非串流的：完整回應體在下面的原文裡。",
+    "en": "This round was non-streaming: the full body is in the raw text below.",
+    "ja": "この回は非ストリーミングです。完全なボディは下の原文にあります。",
+    "ko": "이번 회차는 비스트리밍입니다. 전체 본문은 아래 원문에 있습니다."
+  },
+  "section.pg.resp.placeholder": {
+    "zh-CN": "还没发过请求。",
+    "zh-TW": "還沒發過請求。",
+    "en": "Nothing has been sent yet.",
+    "ja": "まだ何も送信していません。",
+    "ko": "아직 아무것도 보내지 않았습니다."
+  },
+  "section.pg.resp.status": {
+    "zh-CN": "状态",
+    "zh-TW": "狀態",
+    "en": "Status",
+    "ja": "ステータス",
+    "ko": "상태"
+  },
+  "section.pg.resp.title": {
+    "zh-CN": "响应",
+    "zh-TW": "回應",
+    "en": "Response",
+    "ja": "レスポンス",
+    "ko": "응답"
+  },
+  "section.pg.retry": {
+    "zh-CN": "再读一次",
+    "zh-TW": "再讀一次",
+    "en": "Read again",
+    "ja": "もう一度読む",
+    "ko": "다시 읽기"
+  },
+  "section.pg.send": {
+    "zh-CN": "发出去",
+    "zh-TW": "發出去",
+    "en": "Send",
+    "ja": "送信",
+    "ko": "보내기"
+  },
+  "section.pg.title": {
+    "zh-CN": "调试台",
+    "zh-TW": "除錯台",
+    "en": "Playground",
+    "ja": "デバッグ台",
+    "ko": "디버그 콘솔"
+  },
+  "section.pg.token.cleared": {
+    "zh-CN": "口令已清掉。",
+    "zh-TW": "口令已清掉。",
+    "en": "The token has been cleared.",
+    "ja": "トークンを削除しました。",
+    "ko": "토큰을 지웠습니다."
+  },
+  "section.pg.token.empty": {
+    "zh-CN": "还没粘口令 —— 在粘上之前一个字节都不会发出去。",
+    "zh-TW": "還沒貼口令 —— 在貼上之前一個位元組都不會發出去。",
+    "en": "No token pasted yet — nothing is sent until you paste one.",
+    "ja": "まだトークンが貼られていません。貼るまで 1 バイトも送信しません。",
+    "ko": "아직 토큰을 붙여 넣지 않았습니다 — 붙여 넣기 전에는 한 바이트도 보내지 않습니다."
+  },
+  "section.pg.token.match": {
+    "zh-CN": "与设置页记着的那把末位一致。",
+    "zh-TW": "與設定頁記著的那把末位一致。",
+    "en": "Matches the last characters recorded in Settings.",
+    "ja": "設定ページに記録された末尾と一致しています。",
+    "ko": "설정 페이지에 기록된 마지막 문자와 일치합니다."
+  },
+  "section.pg.token.mismatch": {
+    "zh-CN": "与设置页记着的那把末位对不上 —— 可能粘错了。",
+    "zh-TW": "與設定頁記著的那把末位對不上 —— 可能貼錯了。",
+    "en": "Does not match the last characters recorded in Settings — you may have pasted the wrong one.",
+    "ja": "設定ページに記録された末尾と一致しません。貼り間違えた可能性があります。",
+    "ko": "설정 페이지에 기록된 마지막 문자와 다릅니다 — 잘못 붙여 넣었을 수 있습니다."
+  },
+  "section.pg.token.note": {
+    "zh-CN": "面板拿不到明文网关口令，所以这里没有「一键填入」——那需要在后端开一个明文回显口子。",
+    "zh-TW": "面板拿不到明文閘道口令，所以這裡沒有「一鍵填入」——那需要在後端開一個明文回顯口子。",
+    "en": "The panel cannot read the gateway token in plaintext, so there is no “fill it in for me” — that would need a plaintext echo on the backend.",
+    "ja": "パネルはゲートウェイトークンの平文を取得できないため「自動入力」はありません。実現にはバックエンドに平文を返す口を開ける必要があります。",
+    "ko": "패널은 게이트웨이 토큰 평문을 읽을 수 없으므로 ‘자동 입력’이 없습니다 — 그러려면 백엔드에 평문 회신 통로를 열어야 합니다."
+  },
+  "section.pg.token.saved": {
+    "zh-CN": "口令已存在这台浏览器里。",
+    "zh-TW": "口令已存在這台瀏覽器裡。",
+    "en": "The token is stored in this browser.",
+    "ja": "トークンをこのブラウザーに保存しました。",
+    "ko": "이 브라우저에 토큰을 저장했습니다."
+  },
+  "section.pg.token.unknown": {
+    "zh-CN": "设置页那份末位读不到，这一次比不了。",
+    "zh-TW": "設定頁那份末位讀不到，這一次比不了。",
+    "en": "The hint from Settings could not be read, so there is nothing to compare against.",
+    "ja": "設定ページのヒントを読み取れないため、照合できません。",
+    "ko": "설정 페이지의 힌트를 읽을 수 없어 대조할 수 없습니다."
+  },
+  "section.pg.turn.assistant": {
+    "zh-CN": "模型",
+    "zh-TW": "模型",
+    "en": "Model",
+    "ja": "モデル",
+    "ko": "모델"
+  },
+  "section.pg.turn.user": {
+    "zh-CN": "你",
+    "zh-TW": "你",
+    "en": "You",
+    "ja": "あなた",
+    "ko": "나"
+  },
+  "section.pg.turnsTrimmed": {
+    "zh-CN": "上下文超过 {max} 条，最早的几条已经丢掉了。",
+    "zh-TW": "上下文超過 {max} 條，最早的幾條已經丟掉了。",
+    "en": "The context passed {max} turns; the oldest ones were dropped.",
+    "ja": "文脈が {max} 件を超えたため、古いものを破棄しました。",
+    "ko": "문맥이 {max}개를 넘어 가장 오래된 항목을 버렸습니다."
+  },
+  "section.pg.unavailable": {
+    "zh-CN": "协议目录读不出来，这个板块暂时什么都做不了。",
+    "zh-TW": "協定目錄讀不出來，這個板塊暫時什麼都做不了。",
+    "en": "The protocol catalog cannot be read, so this section can do nothing for now.",
+    "ja": "プロトコルカタログを読み取れないため、この画面では今のところ何もできません。",
+    "ko": "프로토콜 카탈로그를 읽을 수 없어 지금은 이 화면에서 아무것도 할 수 없습니다."
+  },
+  "section.pg.video.polling": {
+    "zh-CN": "正在轮询视频任务：第 {n} 次，最多 {max} 次。",
+    "zh-TW": "正在輪詢影片任務：第 {n} 次，最多 {max} 次。",
+    "en": "Polling the video task: attempt {n} of at most {max}.",
+    "ja": "動画タスクをポーリング中：{n} 回目（最大 {max} 回）。",
+    "ko": "동영상 작업 폴링 중: {n}번째, 최대 {max}번."
+  },
+  "section.reg.title": {
+    "zh-CN": "注册机",
+    "zh-TW": "註冊機",
+    "en": "Registrar",
+    "ja": "登録マシン",
+    "ko": "등록기"
+  },
+  "section.reg.desc": {
+    "zh-CN": "自动铸 key 补池：按设定的目标数量，用邮箱通道注册新账号并取回 key。",
+    "zh-TW": "自動鑄 key 補池：依設定的目標數量，用郵箱通道註冊新帳號並取回 key。",
+    "en": "Automatic key minting: registers new accounts through a mailbox channel and collects their keys until the pool reaches its target size.",
+    "ja": "キーの自動発行：メールチャネルで新しいアカウントを登録し、プールが目標数に達するまでキーを取得します。",
+    "ko": "키 자동 발급: 메일 채널로 새 계정을 등록하고 풀이 목표 수량에 도달할 때까지 키를 회수합니다."
+  },
+  "section.reg.tab.status": {
+    "zh-CN": "运行状态",
+    "zh-TW": "執行狀態",
+    "en": "Status",
+    "ja": "稼働状況",
+    "ko": "실행 상태"
+  },
+  "section.reg.tab.settings": {
+    "zh-CN": "设置",
+    "zh-TW": "設定",
+    "en": "Settings",
+    "ja": "設定",
+    "ko": "설정"
+  },
+  "section.reg.refresh": {
+    "zh-CN": "刷新",
+    "zh-TW": "重新整理",
+    "en": "Refresh",
+    "ja": "更新",
+    "ko": "새로 고침"
+  },
+  "section.reg.retry": {
+    "zh-CN": "重试",
+    "zh-TW": "重試",
+    "en": "Retry",
+    "ja": "再試行",
+    "ko": "다시 시도"
+  },
+  "section.reg.loading": {
+    "zh-CN": "正在读取注册机状态……",
+    "zh-TW": "正在讀取註冊機狀態……",
+    "en": "Loading registrar status…",
+    "ja": "登録マシンの状態を読み込み中…",
+    "ko": "등록기 상태를 불러오는 중…"
+  },
+  "section.reg.loadFailed": {
+    "zh-CN": "读不出注册机状态。这一屏上的每个数字都来自那一次读取，所以下面一格都不画——画出来的只会是上一次的旧值。",
+    "zh-TW": "讀不出註冊機狀態。這一屏上的每個數字都來自那一次讀取，所以下面一格都不畫——畫出來的只會是上一次的舊值。",
+    "en": "The registrar status could not be read. Every number on this page comes from that one read, so nothing below is drawn: whatever appeared would be last time's stale value.",
+    "ja": "登録マシンの状態を読み取れませんでした。この画面の数値はすべてその読み取りに由来するため、以下には何も表示しません（表示すれば前回の古い値になります）。",
+    "ko": "등록기 상태를 읽지 못했습니다. 이 화면의 모든 숫자는 그 한 번의 읽기에서 나오므로 아래에는 아무것도 그리지 않습니다. 그렸다면 지난번의 낡은 값일 뿐입니다."
+  },
+  "section.reg.unknownHint": {
+    "zh-CN": "这一格没读出来（不是 0）。",
+    "zh-TW": "這一格沒讀出來（不是 0）。",
+    "en": "This value could not be read (it is not zero).",
+    "ja": "この値は読み取れませんでした（0 ではありません）。",
+    "ko": "이 값은 읽지 못했습니다(0이 아닙니다)."
+  },
+  "section.reg.notWired.title": {
+    "zh-CN": "这个部署没有接上注册机。",
+    "zh-TW": "這個部署沒有接上註冊機。",
+    "en": "This deployment has no registrar wired in.",
+    "ja": "このデプロイには登録マシンが接続されていません。",
+    "ko": "이 배포에는 등록기가 연결되어 있지 않습니다."
+  },
+  "section.reg.notWired.body": {
+    "zh-CN": "这不是出错，也不是「功能正常」：网关本身一切照常，只是自动补池这一块在这套部署里没有装起来，所以下面那几块没有对象可显示。",
+    "zh-TW": "這不是出錯，也不是「功能正常」：閘道本身一切照常，只是自動補池這一塊在這套部署裡沒有裝起來，所以下面那幾塊沒有對象可顯示。",
+    "en": "This is neither an error nor a working feature: the gateway itself is fine, but automatic pool replenishment was never assembled in this deployment, so the panels below have nothing to describe.",
+    "ja": "これはエラーでも「正常動作」でもありません。ゲートウェイ自体は正常ですが、このデプロイでは自動補充が組み込まれていないため、以下のパネルには表示すべき対象がありません。",
+    "ko": "이것은 오류도 아니고 「정상 동작」도 아닙니다. 게이트웨이 자체는 정상이지만 이 배포에는 자동 보충이 조립되어 있지 않아 아래 영역에는 표시할 대상이 없습니다."
+  },
+  "section.reg.notWired.next": {
+    "zh-CN": "因此这里刻意一颗动作按钮都不画：一颗点下去只会得到同一句话的按钮，比没有按钮更容易让人以为补池在跑。",
+    "zh-TW": "因此這裡刻意一顆動作按鈕都不畫：一顆點下去只會得到同一句話的按鈕，比沒有按鈕更容易讓人以為補池在跑。",
+    "en": "That is why no action button is drawn here on purpose: a button that only ever repeats this same sentence is more likely to suggest that replenishment is running than no button at all.",
+    "ja": "そのため、ここには操作ボタンを意図的に一つも描いていません。押しても同じ文言しか返さないボタンは、ボタンが無い場合よりも「補充が動いている」と誤解されやすいからです。",
+    "ko": "그래서 여기에는 의도적으로 동작 버튼을 하나도 그리지 않습니다. 눌러도 같은 문장만 돌려주는 버튼은 버튼이 아예 없을 때보다 「보충이 돌고 있다」는 오해를 더 쉽게 부릅니다."
+  },
+  "section.reg.notWired.recheck": {
+    "zh-CN": "重新检查",
+    "zh-TW": "重新檢查",
+    "en": "Check again",
+    "ja": "再確認",
+    "ko": "다시 확인"
+  },
+  "section.reg.notWired.toast": {
+    "zh-CN": "这一次什么都没发生：这个部署没有接上注册机。",
+    "zh-TW": "這一次什麼都沒發生：這個部署沒有接上註冊機。",
+    "en": "Nothing happened this time: this deployment has no registrar wired in.",
+    "ja": "今回は何も起きていません。このデプロイには登録マシンが接続されていません。",
+    "ko": "이번에는 아무 일도 일어나지 않았습니다. 이 배포에는 등록기가 연결되어 있지 않습니다."
+  },
+  "section.reg.state.title": {
+    "zh-CN": "运行状态",
+    "zh-TW": "執行狀態",
+    "en": "Runtime state",
+    "ja": "稼働状態",
+    "ko": "실행 상태"
+  },
+  "section.reg.state.on": {
+    "zh-CN": "已启用",
+    "zh-TW": "已啟用",
+    "en": "Enabled",
+    "ja": "有効",
+    "ko": "사용 중"
+  },
+  "section.reg.state.off": {
+    "zh-CN": "已关闭",
+    "zh-TW": "已關閉",
+    "en": "Disabled",
+    "ja": "無効",
+    "ko": "꺼짐"
+  },
+  "section.reg.state.blocked": {
+    "zh-CN": "开着，但这份配置装不起来",
+    "zh-TW": "開著，但這份設定裝不起來",
+    "en": "On, but this configuration will not assemble",
+    "ja": "オンですが、この設定では組み立てられません",
+    "ko": "켜져 있지만 이 설정으로는 조립되지 않습니다"
+  },
+  "section.reg.state.unknown": {
+    "zh-CN": "状态未知",
+    "zh-TW": "狀態未知",
+    "en": "State unknown",
+    "ja": "状態不明",
+    "ko": "상태 불명"
+  },
+  "section.reg.channel.label": {
+    "zh-CN": "本次使用的通道",
+    "zh-TW": "本次使用的通道",
+    "en": "Channel in use",
+    "ja": "使用中のチャネル",
+    "ko": "사용 중인 채널"
+  },
+  "section.reg.channel.none": {
+    "zh-CN": "还没有选定通道",
+    "zh-TW": "還沒有選定通道",
+    "en": "No channel selected yet",
+    "ja": "チャネル未選択",
+    "ko": "아직 선택된 채널 없음"
+  },
+  "section.reg.emptyChannel": {
+    "zh-CN": "注册机是开着的，但一条邮箱通道都没选中——这种状态下补池一轮都跑不起来。",
+    "zh-TW": "註冊機是開著的，但一條郵箱通道都沒選中——這種狀態下補池一輪都跑不起來。",
+    "en": "The registrar is on, but no mailbox channel is selected: in this state not a single replenishment round can run.",
+    "ja": "登録マシンはオンですが、メールチャネルが一つも選択されていません。この状態では補充は一度も実行できません。",
+    "ko": "등록기는 켜져 있지만 메일 채널이 하나도 선택되지 않았습니다. 이 상태에서는 보충이 한 번도 실행되지 않습니다."
+  },
+  "section.reg.quotaLabel": {
+    "zh-CN": "今天还能手动补几次",
+    "zh-TW": "今天還能手動補幾次",
+    "en": "Manual runs left today",
+    "ja": "本日の手動実行の残り",
+    "ko": "오늘 남은 수동 실행 횟수"
+  },
+  "section.reg.quota": {
+    "zh-CN": "还剩 {remaining} 次（每天 {perDay} 次）",
+    "zh-TW": "還剩 {remaining} 次（每天 {perDay} 次）",
+    "en": "{remaining} left (of {perDay} per day)",
+    "ja": "残り {remaining} 回（1 日 {perDay} 回）",
+    "ko": "{remaining}회 남음(하루 {perDay}회)"
+  },
+  "section.reg.cooldown": {
+    "zh-CN": "手动补池还在冷却里：还要等 {left}，{at} 之后可以再点。",
+    "zh-TW": "手動補池還在冷卻裡：還要等 {left}，{at} 之後可以再點。",
+    "en": "Manual replenishment is cooling down: {left} to go, available again after {at}.",
+    "ja": "手動補充はクールダウン中です：あと {left}、{at} 以降に再度実行できます。",
+    "ko": "수동 보충이 쿨다운 중입니다: {left} 남았고 {at} 이후에 다시 실행할 수 있습니다."
+  },
+  "section.reg.locked": {
+    "zh-CN": "另一个副本正攥着补池锁，{at} 之前这一轮不会重复跑。",
+    "zh-TW": "另一個副本正攥著補池鎖，{at} 之前這一輪不會重複跑。",
+    "en": "Another replica holds the replenishment lock; no duplicate round will start before {at}.",
+    "ja": "別のレプリカが補充ロックを保持しています。{at} まで重複した実行は始まりません。",
+    "ko": "다른 복제본이 보충 잠금을 쥐고 있습니다. {at} 전까지 중복 실행은 시작되지 않습니다."
+  },
+  "section.reg.backoff.edge": {
+    "zh-CN": "上游边缘层正在限流，还要等 {left}（{at} 之后重试）。换一条邮箱通道逃不掉——限流发生在出口 IP 到上游那条边上。",
+    "zh-TW": "上游邊緣層正在限流，還要等 {left}（{at} 之後重試）。換一條郵箱通道逃不掉——限流發生在出口 IP 到上游那條邊上。",
+    "en": "The upstream edge layer is rate-limiting us; {left} to go (retry after {at}). Switching mailbox channels will not help: the limit sits on the egress IP to upstream edge.",
+    "ja": "上流のエッジ層がレート制限中です。あと {left}（{at} 以降に再試行）。メールチャネルを変えても回避できません。制限は送信元 IP と上流の間にあります。",
+    "ko": "상류 엣지 계층이 속도를 제한하고 있습니다. {left} 남음({at} 이후 재시도). 메일 채널을 바꿔도 소용없습니다. 제한은 출구 IP와 상류 사이에 걸려 있습니다."
+  },
+  "section.reg.backoff.app": {
+    "zh-CN": "上游应用层明说了在限流，还要等 {left}（{at} 之后重试）。换一条邮箱通道逃不掉——限流发生在出口 IP 到上游那条边上。",
+    "zh-TW": "上游應用層明說了在限流，還要等 {left}（{at} 之後重試）。換一條郵箱通道逃不掉——限流發生在出口 IP 到上游那條邊上。",
+    "en": "The upstream application layer explicitly said it is rate-limiting us; {left} to go (retry after {at}). Switching mailbox channels will not help: the limit sits on the egress IP to upstream edge.",
+    "ja": "上流のアプリケーション層が明示的にレート制限を通知しました。あと {left}（{at} 以降に再試行）。メールチャネルを変えても回避できません。制限は送信元 IP と上流の間にあります。",
+    "ko": "상류 애플리케이션 계층이 속도 제한을 명시했습니다. {left} 남음({at} 이후 재시도). 메일 채널을 바꿔도 소용없습니다. 제한은 출구 IP와 상류 사이에 걸려 있습니다."
+  },
+  "section.reg.backoff.cluster": {
+    "zh-CN": "这一轮的域名成片被判屏蔽而且零产出，看起来像在被限流——但我们的词表一个字都没命中，所以这是形状上的推断，不是上游的声明。还要等 {left}（{at} 之后重试）。换一条邮箱通道逃不掉。",
+    "zh-TW": "這一輪的網域成片被判封鎖而且零產出，看起來像在被限流——但我們的詞表一個字都沒命中，所以這是形狀上的推斷，不是上游的聲明。還要等 {left}（{at} 之後重試）。換一條郵箱通道逃不掉。",
+    "en": "A whole cluster of domains was judged blocked this round with zero output, which looks like rate limiting. Our word list matched nothing, so this is inferred from the shape, not stated by upstream. {left} to go (retry after {at}). Switching mailbox channels will not help.",
+    "ja": "今回はドメインがまとまってブロック判定となり産出ゼロでした。レート制限のように見えますが、当方の語句リストは一つも一致していないため、これは形状からの推測であり上流の宣言ではありません。あと {left}（{at} 以降に再試行）。メールチャネルを変えても回避できません。",
+    "ko": "이번 회차에는 도메인이 무더기로 차단 판정되고 산출이 0이었습니다. 속도 제한처럼 보이지만 우리 단어 목록은 하나도 일치하지 않았으므로 이는 형태로부터의 추론이지 상류의 선언이 아닙니다. {left} 남음({at} 이후 재시도). 메일 채널을 바꿔도 소용없습니다."
+  },
+  "section.reg.pool.title": {
+    "zh-CN": "池子",
+    "zh-TW": "池子",
+    "en": "Pool",
+    "ja": "プール",
+    "ko": "풀"
+  },
+  "section.reg.pool.target": {
+    "zh-CN": "目标数量",
+    "zh-TW": "目標數量",
+    "en": "Target size",
+    "ja": "目標数",
+    "ko": "목표 수량"
+  },
+  "section.reg.pool.counted": {
+    "zh-CN": "占名额数",
+    "zh-TW": "佔名額數",
+    "en": "Slots taken",
+    "ja": "枠の使用数",
+    "ko": "차지한 정원 수"
+  },
+  "section.reg.pool.countedTip": {
+    "zh-CN": "停用的与冷却中的都算在里面，它们都打不了上游。",
+    "zh-TW": "停用的與冷卻中的都算在裡面，它們都打不了上游。",
+    "en": "Disabled and cooling-down keys are counted here too; neither of them can reach upstream.",
+    "ja": "無効化中とクールダウン中のキーもここに含まれます。どちらも上流には到達できません。",
+    "ko": "비활성화된 키와 쿨다운 중인 키도 여기에 포함됩니다. 둘 다 상류에 도달할 수 없습니다."
+  },
+  "section.reg.pool.gap": {
+    "zh-CN": "还差",
+    "zh-TW": "還差",
+    "en": "Short by",
+    "ja": "不足",
+    "ko": "부족분"
+  },
+  "section.reg.pool.fresh": {
+    "zh-CN": "真正可用",
+    "zh-TW": "真正可用",
+    "en": "Actually usable",
+    "ja": "実際に使用可能",
+    "ko": "실제 사용 가능"
+  },
+  "section.reg.channels.title": {
+    "zh-CN": "邮箱通道",
+    "zh-TW": "郵箱通道",
+    "en": "Mailbox channels",
+    "ja": "メールチャネル",
+    "ko": "메일 채널"
+  },
+  "section.reg.channels.hint": {
+    "zh-CN": "两条通道完全平级，任选其一即可；「测试连接」每点一次都会向对应服务发一次真实请求。",
+    "zh-TW": "兩條通道完全平級，任選其一即可；「測試連線」每點一次都會向對應服務發一次真實請求。",
+    "en": "The two channels are strictly equal in rank; pick either one. Each click on Test connection sends one real request to that service.",
+    "ja": "2 つのチャネルは完全に対等です。どちらを選んでも構いません。「接続テスト」は 1 回押すごとに該当サービスへ実際のリクエストを 1 件送信します。",
+    "ko": "두 채널은 완전히 대등합니다. 어느 쪽이든 선택하면 됩니다. 「연결 테스트」는 누를 때마다 해당 서비스로 실제 요청을 한 번 보냅니다."
+  },
+  "section.reg.channel.inUseLabel": {
+    "zh-CN": "本次使用",
+    "zh-TW": "本次使用",
+    "en": "Used this time",
+    "ja": "今回の使用",
+    "ko": "이번 사용 여부"
+  },
+  "section.reg.channel.inUse": {
+    "zh-CN": "本次使用这条",
+    "zh-TW": "本次使用這條",
+    "en": "This one is in use",
+    "ja": "今回はこちらを使用",
+    "ko": "이번에는 이 채널 사용"
+  },
+  "section.reg.channel.unused": {
+    "zh-CN": "本次没有用到",
+    "zh-TW": "本次沒有用到",
+    "en": "Not used this time",
+    "ja": "今回は未使用",
+    "ko": "이번에는 사용하지 않음"
+  },
+  "section.reg.channel.creds": {
+    "zh-CN": "凭据",
+    "zh-TW": "憑證",
+    "en": "Credentials",
+    "ja": "資格情報",
+    "ko": "자격 증명"
+  },
+  "section.reg.channel.credsYes": {
+    "zh-CN": "已配置",
+    "zh-TW": "已設定",
+    "en": "Configured",
+    "ja": "設定済み",
+    "ko": "설정됨"
+  },
+  "section.reg.channel.credsNo": {
+    "zh-CN": "没配置",
+    "zh-TW": "沒設定",
+    "en": "Not configured",
+    "ja": "未設定",
+    "ko": "설정되지 않음"
+  },
+  "section.reg.channel.fact.moemail": {
+    "zh-CN": "自建的临时邮箱服务：收信域名由你自己在它的后台登记，建邮箱不占活跃名额。",
+    "zh-TW": "自建的臨時郵箱服務：收信網域由你自己在它的後台登記，建郵箱不佔活躍名額。",
+    "en": "A self-hosted temporary mailbox service: you register the receiving domains in its own console, and creating a mailbox takes no active slot.",
+    "ja": "自前でホストする一時メールサービスです。受信ドメインは自分でその管理画面に登録し、メールボックスの作成でアクティブ枠を消費しません。",
+    "ko": "직접 호스팅하는 임시 메일 서비스입니다. 수신 도메인은 자체 콘솔에서 직접 등록하며, 메일박스를 만들어도 활성 정원을 쓰지 않습니다."
+  },
+  "section.reg.channel.fact.yyds": {
+    "zh-CN": "第三方临时邮箱服务：收信域名由它自己提供，活跃邮箱有名额上限，建一个就占一个。",
+    "zh-TW": "第三方臨時郵箱服務：收信網域由它自己提供，活躍郵箱有名額上限，建一個就佔一個。",
+    "en": "A third-party temporary mailbox service: it supplies the receiving domains itself, and active mailboxes are capped, so each one you create takes a slot.",
+    "ja": "サードパーティの一時メールサービスです。受信ドメインはサービス側が提供し、アクティブなメールボックスには上限があるため、作成するたびに枠を 1 つ消費します。",
+    "ko": "서드파티 임시 메일 서비스입니다. 수신 도메인은 서비스가 제공하며 활성 메일박스에 상한이 있어 하나 만들 때마다 정원을 하나 차지합니다."
+  },
+  "section.reg.channel.test": {
+    "zh-CN": "测试连接",
+    "zh-TW": "測試連線",
+    "en": "Test connection",
+    "ja": "接続テスト",
+    "ko": "연결 테스트"
+  },
+  "section.reg.channel.testing": {
+    "zh-CN": "正在测试……",
+    "zh-TW": "正在測試……",
+    "en": "Testing…",
+    "ja": "テスト中…",
+    "ko": "테스트 중…"
+  },
+  "section.reg.channel.testOk": {
+    "zh-CN": "通了：读到 {domains} 个域名，凭据也验过了（{ms} ms）。",
+    "zh-TW": "通了：讀到 {domains} 個網域，憑證也驗過了（{ms} ms）。",
+    "en": "Reachable: {domains} domains read and credentials verified ({ms} ms).",
+    "ja": "接続成功：{domains} 件のドメインを取得し、資格情報も検証済みです（{ms} ms）。",
+    "ko": "연결 성공: 도메인 {domains}개를 읽었고 자격 증명도 검증했습니다({ms} ms)."
+  },
+  "section.reg.channel.testOkNoDomains": {
+    "zh-CN": "接口通了，但一个可用域名都没读到——这条通道现在补不了池（{ms} ms）。",
+    "zh-TW": "介面通了，但一個可用網域都沒讀到——這條通道現在補不了池（{ms} ms）。",
+    "en": "The API answered, but not a single usable domain came back, so this channel cannot replenish anything right now ({ms} ms).",
+    "ja": "API は応答しましたが、利用可能なドメインが一つも返りませんでした。このチャネルでは現在補充できません（{ms} ms）。",
+    "ko": "API는 응답했지만 사용 가능한 도메인이 하나도 오지 않았습니다. 이 채널로는 지금 보충할 수 없습니다({ms} ms)."
+  },
+  "section.reg.channel.testOkUnverified": {
+    "zh-CN": "读到 {domains} 个域名，但这一次没有验凭据（{ms} ms）。",
+    "zh-TW": "讀到 {domains} 個網域，但這一次沒有驗憑證（{ms} ms）。",
+    "en": "{domains} domains were read, but the credentials were not checked this time ({ms} ms).",
+    "ja": "{domains} 件のドメインを取得しましたが、今回は資格情報を検証していません（{ms} ms）。",
+    "ko": "도메인 {domains}개를 읽었지만 이번에는 자격 증명을 검증하지 않았습니다({ms} ms)."
+  },
+  "section.reg.channel.testOkDirty": {
+    "zh-CN": "通了（{domains} 个域名，{ms} ms），但这次建出来的临时邮箱没能删掉——它正占着一个活跃名额，去事件里查删除失败那条。",
+    "zh-TW": "通了（{domains} 個網域，{ms} ms），但這次建出來的臨時郵箱沒能刪掉——它正佔著一個活躍名額，去事件裡查刪除失敗那條。",
+    "en": "Reachable ({domains} domains, {ms} ms), but the temporary mailbox created for this test could not be deleted; it is holding an active slot. Look for the deletion-failure event in the log.",
+    "ja": "接続成功（ドメイン {domains} 件、{ms} ms）ですが、このテストで作成した一時メールボックスを削除できませんでした。アクティブ枠を 1 つ占有しています。ログで削除失敗のイベントを確認してください。",
+    "ko": "연결 성공(도메인 {domains}개, {ms} ms)이지만 이 테스트로 만든 임시 메일박스를 삭제하지 못했습니다. 활성 정원을 하나 차지하고 있습니다. 로그에서 삭제 실패 이벤트를 확인하세요."
+  },
+  "section.reg.channel.testNotAttempted": {
+    "zh-CN": "一次上游请求都没发出去：读本网关自己的配置就失败了（{ms} ms）。要查的是这一侧，不是对面。",
+    "zh-TW": "一次上游請求都沒發出去：讀本閘道自己的設定就失敗了（{ms} ms）。要查的是這一側，不是對面。",
+    "en": "Not a single upstream request was sent: reading this gateway's own configuration already failed ({ms} ms). Look on this side, not at the other end.",
+    "ja": "上流へのリクエストは一度も送信されていません。このゲートウェイ自身の設定の読み取り段階で失敗しました（{ms} ms）。調べるべきはこちら側です。",
+    "ko": "상류 요청은 한 번도 보내지 않았습니다. 이 게이트웨이 자체 설정을 읽는 단계에서 이미 실패했습니다({ms} ms). 확인할 곳은 반대편이 아니라 이쪽입니다."
+  },
+  "section.reg.channel.testRejected": {
+    "zh-CN": "上游拒绝了这套凭据（HTTP {status}）。",
+    "zh-TW": "上游拒絕了這套憑證（HTTP {status}）。",
+    "en": "Upstream rejected these credentials (HTTP {status}).",
+    "ja": "上流がこの資格情報を拒否しました（HTTP {status}）。",
+    "ko": "상류가 이 자격 증명을 거부했습니다(HTTP {status})."
+  },
+  "section.reg.channel.testRateLimited": {
+    "zh-CN": "上游正在限流这条通道，隔一会儿再试。",
+    "zh-TW": "上游正在限流這條通道，隔一會兒再試。",
+    "en": "Upstream is rate-limiting this channel; try again in a while.",
+    "ja": "上流がこのチャネルをレート制限しています。しばらくしてから再試行してください。",
+    "ko": "상류가 이 채널을 속도 제한하고 있습니다. 잠시 후 다시 시도하세요."
+  },
+  "section.reg.channel.testFailed": {
+    "zh-CN": "上游回了 HTTP {status}（{ms} ms）。",
+    "zh-TW": "上游回了 HTTP {status}（{ms} ms）。",
+    "en": "Upstream answered HTTP {status} ({ms} ms).",
+    "ja": "上流が HTTP {status} を返しました（{ms} ms）。",
+    "ko": "상류가 HTTP {status}를 반환했습니다({ms} ms)."
+  },
+  "section.reg.channel.testFailedNoStatus": {
+    "zh-CN": "这一次连状态码都没拿到（{ms} ms）。请求可能压根没走通，也可能上游回了 2xx 但正文不是我们能解析的东西（反代或 CDN 的错误页就是这样）——两种都落在这一档里。",
+    "zh-TW": "這一次連狀態碼都沒拿到（{ms} ms）。請求可能壓根沒走通，也可能上游回了 2xx 但正文不是我們能解析的東西（反向代理或 CDN 的錯誤頁就是這樣）——兩種都落在這一檔裡。",
+    "en": "No status code came back at all this time ({ms} ms). The request may never have gone through, or upstream may have answered 2xx with a body we cannot parse (a reverse-proxy or CDN error page does exactly that). Both land in this bucket.",
+    "ja": "今回はステータスコードすら取得できませんでした（{ms} ms）。リクエストが通らなかった可能性も、上流が 2xx を返しつつ解析できない本文を返した可能性（リバースプロキシや CDN のエラーページがこれに当たります）もあり、どちらもこの区分に入ります。",
+    "ko": "이번에는 상태 코드조차 받지 못했습니다({ms} ms). 요청이 아예 통하지 않았을 수도 있고, 상류가 2xx를 반환하면서 우리가 해석할 수 없는 본문을 보냈을 수도 있습니다(리버스 프록시나 CDN 오류 페이지가 그렇습니다). 둘 다 이 구간에 들어갑니다."
+  },
+  "section.reg.channel.testError": {
+    "zh-CN": "这一次测试没有结果，原因说不准。",
+    "zh-TW": "這一次測試沒有結果，原因說不準。",
+    "en": "This test produced no result, and we cannot say why.",
+    "ja": "今回のテストは結果が得られず、理由も特定できません。",
+    "ko": "이번 테스트는 결과가 없었고 이유도 특정할 수 없습니다."
+  },
+  "section.reg.domains.title": {
+    "zh-CN": "域名台账",
+    "zh-TW": "網域台帳",
+    "en": "Domain ledger",
+    "ja": "ドメイン台帳",
+    "ko": "도메인 장부"
+  },
+  "section.reg.domains.note": {
+    "zh-CN": "「判死」是我们按一张启发式词表做的判定，不是上游的声明——它会误判。",
+    "zh-TW": "「判死」是我們按一張啟發式詞表做的判定，不是上游的聲明——它會誤判。",
+    "en": "Blocked here is our own verdict from a heuristic word list, not a statement by upstream, and it does get things wrong.",
+    "ja": "ここでの「ブロック」は当方がヒューリスティックな語句リストで下した判定であり、上流の宣言ではありません。誤判定も起こります。",
+    "ko": "여기서 「차단」은 우리가 휴리스틱 단어 목록으로 내린 판정이며 상류의 선언이 아닙니다. 오판도 일어납니다."
+  },
+  "section.reg.domains.ok": {
+    "zh-CN": "还能用",
+    "zh-TW": "還能用",
+    "en": "Usable",
+    "ja": "使用可能",
+    "ko": "사용 가능"
+  },
+  "section.reg.domains.blocked": {
+    "zh-CN": "判为屏蔽",
+    "zh-TW": "判為封鎖",
+    "en": "Judged blocked",
+    "ja": "ブロック判定",
+    "ko": "차단 판정"
+  },
+  "section.reg.domains.suspect": {
+    "zh-CN": "可疑",
+    "zh-TW": "可疑",
+    "en": "Suspect",
+    "ja": "疑わしい",
+    "ko": "의심"
+  },
+  "section.reg.domains.unknown": {
+    "zh-CN": "还没试过",
+    "zh-TW": "還沒試過",
+    "en": "Never tried",
+    "ja": "未試行",
+    "ko": "아직 시도 안 함"
+  },
+  "section.reg.domains.updatedAt": {
+    "zh-CN": "台账更新于 {at}",
+    "zh-TW": "台帳更新於 {at}",
+    "en": "Ledger updated at {at}",
+    "ja": "台帳の更新時刻：{at}",
+    "ko": "장부 갱신 시각: {at}"
+  },
+  "section.reg.history.title": {
+    "zh-CN": "补池历史",
+    "zh-TW": "補池歷史",
+    "en": "Replenishment history",
+    "ja": "補充の履歴",
+    "ko": "보충 이력"
+  },
+  "section.reg.history.empty": {
+    "zh-CN": "这个环里还没有任何一轮记录。",
+    "zh-TW": "這個環裡還沒有任何一輪記錄。",
+    "en": "This ring buffer holds no round yet.",
+    "ja": "このリングバッファにはまだ 1 回分の記録もありません。",
+    "ko": "이 링 버퍼에는 아직 한 회차의 기록도 없습니다."
+  },
+  "section.reg.history.unreadable": {
+    "zh-CN": "补池历史整块没读出来——这与「还没跑过」不是一回事。",
+    "zh-TW": "補池歷史整塊沒讀出來——這與「還沒跑過」不是一回事。",
+    "en": "The whole replenishment history could not be read, which is not the same thing as never having run.",
+    "ja": "補充履歴のブロック全体を読み取れませんでした。これは「まだ一度も実行していない」とは別のことです。",
+    "ko": "보충 이력 블록 전체를 읽지 못했습니다. 이는 「아직 한 번도 실행하지 않았다」와 다른 이야기입니다."
+  },
+  "section.reg.history.malformed": {
+    "zh-CN": "环里有 {count} 条记录读不出来，它们没有出现在下面的表里。",
+    "zh-TW": "環裡有 {count} 條記錄讀不出來，它們沒有出現在下面的表裡。",
+    "en": "{count} records in the ring could not be read; they are absent from the table below.",
+    "ja": "リング内の {count} 件の記録が読み取れず、下の表には現れていません。",
+    "ko": "링 안의 기록 {count}건을 읽지 못했고, 아래 표에는 나타나지 않습니다."
+  },
+  "section.reg.col.at": {
+    "zh-CN": "时刻",
+    "zh-TW": "時刻",
+    "en": "When",
+    "ja": "時刻",
+    "ko": "시각"
+  },
+  "section.reg.col.trigger": {
+    "zh-CN": "触发",
+    "zh-TW": "觸發",
+    "en": "Trigger",
+    "ja": "トリガー",
+    "ko": "트리거"
+  },
+  "section.reg.col.channel": {
+    "zh-CN": "用的通道",
+    "zh-TW": "用的通道",
+    "en": "Channel used",
+    "ja": "使用チャネル",
+    "ko": "사용 채널"
+  },
+  "section.reg.col.result": {
+    "zh-CN": "结果",
+    "zh-TW": "結果",
+    "en": "Result",
+    "ja": "結果",
+    "ko": "결과"
+  },
+  "section.reg.col.duration": {
+    "zh-CN": "耗时",
+    "zh-TW": "耗時",
+    "en": "Duration",
+    "ja": "所要時間",
+    "ko": "소요 시간"
+  },
+  "section.reg.col.failures": {
+    "zh-CN": "失败归因",
+    "zh-TW": "失敗歸因",
+    "en": "Failure reasons",
+    "ja": "失敗の原因",
+    "ko": "실패 원인"
+  },
+  "section.reg.trigger.manual": {
+    "zh-CN": "人点的",
+    "zh-TW": "人點的",
+    "en": "Manual",
+    "ja": "手動",
+    "ko": "수동"
+  },
+  "section.reg.trigger.cron": {
+    "zh-CN": "定时",
+    "zh-TW": "定時",
+    "en": "Scheduled",
+    "ja": "定期実行",
+    "ko": "정기 실행"
+  },
+  "section.reg.row.minted": {
+    "zh-CN": "铸出 {minted} 把 / 尝试 {attempted} 次",
+    "zh-TW": "鑄出 {minted} 把 / 嘗試 {attempted} 次",
+    "en": "{minted} minted out of {attempted} attempts",
+    "ja": "{attempted} 回の試行で {minted} 本を発行",
+    "ko": "{attempted}회 시도 중 {minted}개 발급"
+  },
+  "section.reg.row.noAttempt": {
+    "zh-CN": "这一轮根本没跑起来（池子已满，或还在退避窗口里）",
+    "zh-TW": "這一輪根本沒跑起來（池子已滿，或還在退避視窗裡）",
+    "en": "This round never got going (pool already full, or still inside a backoff window)",
+    "ja": "この回は開始すらしていません（プールが満杯、またはバックオフ期間中）",
+    "ko": "이 회차는 시작조차 하지 않았습니다(풀이 가득 찼거나 백오프 구간 중)"
+  },
+  "section.reg.row.skipped": {
+    "zh-CN": "一次上游请求都没发（配置在两步之间被改掉了）",
+    "zh-TW": "一次上游請求都沒發（設定在兩步之間被改掉了）",
+    "en": "Not one upstream request was sent (the configuration changed between the two steps)",
+    "ja": "上流へのリクエストは一度も送信されていません（2 つの手順の間に設定が変更されました）",
+    "ko": "상류 요청을 한 번도 보내지 않았습니다(두 단계 사이에 설정이 바뀌었습니다)"
+  },
+  "section.reg.row.unreadable": {
+    "zh-CN": "这一轮的记录读不出来",
+    "zh-TW": "這一輪的記錄讀不出來",
+    "en": "This round's record could not be read",
+    "ja": "この回の記録は読み取れません",
+    "ko": "이 회차의 기록은 읽을 수 없습니다"
+  },
+  "section.reg.fail.domainBlockedAll": {
+    "zh-CN": "试过的域名全被判屏蔽",
+    "zh-TW": "試過的網域全被判封鎖",
+    "en": "Every domain tried was judged blocked",
+    "ja": "試したドメインがすべてブロック判定",
+    "ko": "시도한 도메인이 모두 차단 판정"
+  },
+  "section.reg.fail.upstreamError": {
+    "zh-CN": "上游报错",
+    "zh-TW": "上游報錯",
+    "en": "Upstream error",
+    "ja": "上流のエラー",
+    "ko": "상류 오류"
+  },
+  "section.reg.fail.codeTimeout": {
+    "zh-CN": "等验证码超时",
+    "zh-TW": "等驗證碼逾時",
+    "en": "Timed out waiting for the code",
+    "ja": "認証コードの待機がタイムアウト",
+    "ko": "인증 코드 대기 시간 초과"
+  },
+  "section.reg.fail.registerFailed": {
+    "zh-CN": "注册这一步失败",
+    "zh-TW": "註冊這一步失敗",
+    "en": "The sign-up step failed",
+    "ja": "登録のステップが失敗",
+    "ko": "가입 단계 실패"
+  },
+  "section.reg.fail.loginFailed": {
+    "zh-CN": "登录这一步失败",
+    "zh-TW": "登入這一步失敗",
+    "en": "The sign-in step failed",
+    "ja": "ログインのステップが失敗",
+    "ko": "로그인 단계 실패"
+  },
+  "section.reg.fail.keyFailed": {
+    "zh-CN": "取 key 这一步失败",
+    "zh-TW": "取 key 這一步失敗",
+    "en": "Fetching the key failed",
+    "ja": "キーの取得が失敗",
+    "ko": "키 가져오기 실패"
+  },
+  "section.reg.fail.providerError": {
+    "zh-CN": "邮箱服务报错",
+    "zh-TW": "郵箱服務報錯",
+    "en": "The mailbox service errored",
+    "ja": "メールサービスがエラー",
+    "ko": "메일 서비스 오류"
+  },
+  "section.reg.fail.networkError": {
+    "zh-CN": "网络断了",
+    "zh-TW": "網路斷了",
+    "en": "The network broke",
+    "ja": "ネットワーク障害",
+    "ko": "네트워크 끊김"
+  },
+  "section.reg.fail.rateLimited": {
+    "zh-CN": "被限流",
+    "zh-TW": "被限流",
+    "en": "Rate limited",
+    "ja": "レート制限",
+    "ko": "속도 제한"
+  },
+  "section.reg.fail.providerMissing": {
+    "zh-CN": "这条通道没配凭据",
+    "zh-TW": "這條通道沒設定憑證",
+    "en": "That channel has no credentials configured",
+    "ja": "そのチャネルに資格情報が未設定",
+    "ko": "해당 채널에 자격 증명이 설정되지 않음"
+  },
+  "section.reg.fail.roundCrashed": {
+    "zh-CN": "整轮抛错",
+    "zh-TW": "整輪拋錯",
+    "en": "The whole round threw",
+    "ja": "回全体が例外で停止",
+    "ko": "회차 전체가 예외로 중단"
+  },
+  "section.reg.fail.keySuspicious": {
+    "zh-CN": "铸出来的 key 形状可疑，没有收下",
+    "zh-TW": "鑄出來的 key 形狀可疑，沒有收下",
+    "en": "The minted key looked wrong and was not accepted",
+    "ja": "発行されたキーの形が不審なため受け取りませんでした",
+    "ko": "발급된 키의 형태가 수상해 받아들이지 않았습니다"
+  },
+  "section.reg.fail.upstreamBackoff": {
+    "zh-CN": "还在上游退避窗口里",
+    "zh-TW": "還在上游退避視窗裡",
+    "en": "Still inside the upstream backoff window",
+    "ja": "上流のバックオフ期間中",
+    "ko": "상류 백오프 구간 중"
+  },
+  "section.reg.fail.unknownReason": {
+    "zh-CN": "这个面板版本不认识的归因：{reason}",
+    "zh-TW": "這個面板版本不認識的歸因：{reason}",
+    "en": "A reason this panel version does not recognise: {reason}",
+    "ja": "このパネルのバージョンが認識できない原因：{reason}",
+    "ko": "이 패널 버전이 알지 못하는 원인: {reason}"
+  },
+  "section.reg.tend.button": {
+    "zh-CN": "立即补池",
+    "zh-TW": "立即補池",
+    "en": "Replenish now",
+    "ja": "今すぐ補充",
+    "ko": "지금 보충"
+  },
+  "section.reg.tend.confirmTitle": {
+    "zh-CN": "确认补一轮",
+    "zh-TW": "確認補一輪",
+    "en": "Confirm one round",
+    "ja": "1 回分の補充を確認",
+    "ko": "한 회차 보충 확인"
+  },
+  "section.reg.tend.confirmMsg": {
+    "zh-CN": "这一次最多铸 {keys} 把 key，并为此建 {mailboxes} 个临时邮箱。",
+    "zh-TW": "這一次最多鑄 {keys} 把 key，並為此建 {mailboxes} 個臨時郵箱。",
+    "en": "This run will mint at most {keys} keys and create {mailboxes} temporary mailboxes for them.",
+    "ja": "今回は最大 {keys} 本のキーを発行し、そのために {mailboxes} 個の一時メールボックスを作成します。",
+    "ko": "이번 실행은 최대 {keys}개의 키를 발급하고 이를 위해 임시 메일박스 {mailboxes}개를 만듭니다."
+  },
+  "section.reg.tend.confirmUnknown": {
+    "zh-CN": "这一次会消耗多少说不准：池子那一块没读出来，所以算不出上界。",
+    "zh-TW": "這一次會消耗多少說不準：池子那一塊沒讀出來，所以算不出上界。",
+    "en": "How much this run will consume cannot be stated: the pool block could not be read, so no upper bound can be computed.",
+    "ja": "今回の消費量は特定できません。プールのブロックを読み取れなかったため、上限を算出できません。",
+    "ko": "이번 실행의 소모량은 특정할 수 없습니다. 풀 블록을 읽지 못해 상한을 계산할 수 없습니다."
+  },
+  "section.reg.tend.confirmWait": {
+    "zh-CN": "点下去之后这颗按钮会一直挂到整轮跑完，最长约两分钟。",
+    "zh-TW": "點下去之後這顆按鈕會一直掛到整輪跑完，最長約兩分鐘。",
+    "en": "After you confirm, this action stays pending until the whole round finishes, up to about two minutes.",
+    "ja": "確認後、この操作は 1 回分が完了するまで（最長で約 2 分）保留されたままになります。",
+    "ko": "확인한 뒤에는 이 작업이 한 회차가 끝날 때까지(최대 약 2분) 대기 상태로 남습니다."
+  },
+  "section.reg.tend.channelLabel": {
+    "zh-CN": "这一次用哪条通道",
+    "zh-TW": "這一次用哪條通道",
+    "en": "Which channel for this run",
+    "ja": "今回使用するチャネル",
+    "ko": "이번에 사용할 채널"
+  },
+  "section.reg.tend.channelAny": {
+    "zh-CN": "按设置里选中的那条",
+    "zh-TW": "按設定裡選中的那條",
+    "en": "Whichever one the settings select",
+    "ja": "設定で選択されているものに従う",
+    "ko": "설정에서 선택된 채널을 따름"
+  },
+  "section.reg.tend.skipped": {
+    "zh-CN": "这一轮一次上游请求都没发：配置在两步之间被改掉了。",
+    "zh-TW": "這一輪一次上游請求都沒發：設定在兩步之間被改掉了。",
+    "en": "This round sent no upstream request at all: the configuration changed between the two steps.",
+    "ja": "この回は上流へのリクエストを一度も送信していません。2 つの手順の間に設定が変更されました。",
+    "ko": "이 회차는 상류 요청을 한 번도 보내지 않았습니다. 두 단계 사이에 설정이 바뀌었습니다."
+  },
+  "section.reg.tend.crashed": {
+    "zh-CN": "这一轮整个抛错了，而且可能已经建出了临时邮箱——去补池历史和事件里核对一下。",
+    "zh-TW": "這一輪整個拋錯了，而且可能已經建出了臨時郵箱——去補池歷史和事件裡核對一下。",
+    "en": "This round threw outright, and temporary mailboxes may already have been created. Check the replenishment history and the log.",
+    "ja": "この回は例外で停止しました。一時メールボックスがすでに作成されている可能性があります。補充履歴とログを確認してください。",
+    "ko": "이 회차는 예외로 중단되었습니다. 임시 메일박스가 이미 만들어졌을 수 있습니다. 보충 이력과 로그를 확인하세요."
+  },
+  "section.reg.tend.unknownOutcome": {
+    "zh-CN": "这一轮回来了，但它的结果读不出来——去补池历史里看那一行。",
+    "zh-TW": "這一輪回來了，但它的結果讀不出來——去補池歷史裡看那一行。",
+    "en": "The round came back, but its outcome could not be read. Look for its row in the replenishment history.",
+    "ja": "この回は応答しましたが、結果を読み取れませんでした。補充履歴の該当行を確認してください。",
+    "ko": "이 회차는 응답했지만 결과를 읽지 못했습니다. 보충 이력의 해당 행을 확인하세요."
+  },
+  "section.reg.tend.unknownResult": {
+    "zh-CN": "请求断了，结果未知——那一轮可能仍在跑，去补池历史里看。",
+    "zh-TW": "請求斷了，結果未知——那一輪可能仍在跑，去補池歷史裡看。",
+    "en": "The request broke off and the outcome is unknown; that round may still be running. Check the replenishment history.",
+    "ja": "リクエストが切断され、結果は不明です。その回はまだ実行中の可能性があります。補充履歴を確認してください。",
+    "ko": "요청이 끊겨 결과를 알 수 없습니다. 그 회차는 아직 실행 중일 수 있습니다. 보충 이력을 확인하세요."
+  },
+  "section.reg.tend.failed": {
+    "zh-CN": "这一次补池被拒绝了，但后端没有说明原因。",
+    "zh-TW": "這一次補池被拒絕了，但後端沒有說明原因。",
+    "en": "This replenishment was refused, but the backend gave no reason.",
+    "ja": "今回の補充は拒否されましたが、バックエンドは理由を示していません。",
+    "ko": "이번 보충은 거부되었지만 백엔드가 이유를 밝히지 않았습니다."
+  },
+  "section.reg.refuse.disabled": {
+    "zh-CN": "注册机没有打开，请先在设置里打开它。",
+    "zh-TW": "註冊機沒有打開，請先在設定裡打開它。",
+    "en": "The registrar is switched off; turn it on in the settings first.",
+    "ja": "登録マシンがオフです。まず設定でオンにしてください。",
+    "ko": "등록기가 꺼져 있습니다. 먼저 설정에서 켜 주세요."
+  },
+  "section.reg.refuse.blocked": {
+    "zh-CN": "注册机的开关是开的，但这份配置装不起来——要改的是配置本身，不是那个开关。",
+    "zh-TW": "註冊機的開關是開的，但這份設定裝不起來——要改的是設定本身，不是那個開關。",
+    "en": "The registrar switch is on, but this configuration will not assemble. What needs fixing is the configuration itself, not the switch.",
+    "ja": "登録マシンのスイッチはオンですが、この設定では組み立てられません。直すべきはスイッチではなく設定そのものです。",
+    "ko": "등록기 스위치는 켜져 있지만 이 설정으로는 조립되지 않습니다. 고쳐야 할 것은 스위치가 아니라 설정 자체입니다."
+  },
+  "section.reg.refuse.unknownChannel": {
+    "zh-CN": "这个通道名后端不认识。",
+    "zh-TW": "這個通道名後端不認識。",
+    "en": "The backend does not recognise that channel name.",
+    "ja": "そのチャネル名をバックエンドが認識できません。",
+    "ko": "백엔드가 그 채널 이름을 인식하지 못합니다."
+  },
+  "section.reg.refuse.channelNotConfigured": {
+    "zh-CN": "这条通道还没配凭据。",
+    "zh-TW": "這條通道還沒設定憑證。",
+    "en": "That channel has no credentials configured yet.",
+    "ja": "そのチャネルにはまだ資格情報が設定されていません。",
+    "ko": "그 채널에는 아직 자격 증명이 설정되지 않았습니다."
+  },
+  "section.reg.refuse.notWired": {
+    "zh-CN": "这个部署没有接上注册机。",
+    "zh-TW": "這個部署沒有接上註冊機。",
+    "en": "This deployment has no registrar wired in.",
+    "ja": "このデプロイには登録マシンが接続されていません。",
+    "ko": "이 배포에는 등록기가 연결되어 있지 않습니다."
+  },
+  "section.reg.refuse.tendInFlight": {
+    "zh-CN": "已经有一轮补池在跑，等它回来再点。",
+    "zh-TW": "已經有一輪補池在跑，等它回來再點。",
+    "en": "A replenishment round is already running; wait for it to come back.",
+    "ja": "すでに補充が 1 回分実行中です。完了を待ってください。",
+    "ko": "이미 보충 한 회차가 실행 중입니다. 끝날 때까지 기다려 주세요."
+  },
+  "section.reg.refuse.locked": {
+    "zh-CN": "另一个副本正攥着补池锁，这一轮没有重复跑。",
+    "zh-TW": "另一個副本正攥著補池鎖，這一輪沒有重複跑。",
+    "en": "Another replica holds the replenishment lock, so this round did not run twice.",
+    "ja": "別のレプリカが補充ロックを保持しているため、この回は重複実行されていません。",
+    "ko": "다른 복제본이 보충 잠금을 쥐고 있어 이 회차는 중복 실행되지 않았습니다."
+  },
+  "section.reg.refuse.manualCooldown": {
+    "zh-CN": "手动补池还在冷却里，等冷却过去再点。",
+    "zh-TW": "手動補池還在冷卻裡，等冷卻過去再點。",
+    "en": "Manual replenishment is still cooling down; wait for the cooldown to pass.",
+    "ja": "手動補充はまだクールダウン中です。クールダウンが明けるまでお待ちください。",
+    "ko": "수동 보충이 아직 쿨다운 중입니다. 쿨다운이 끝날 때까지 기다려 주세요."
+  },
+  "section.reg.refuse.budgetExhausted": {
+    "zh-CN": "今天的手动补池次数已经用完了。",
+    "zh-TW": "今天的手動補池次數已經用完了。",
+    "en": "Today's manual replenishment allowance is used up.",
+    "ja": "本日の手動補充の回数を使い切りました。",
+    "ko": "오늘의 수동 보충 횟수를 모두 사용했습니다."
+  },
+  "section.reg.refuse.probeInFlight": {
+    "zh-CN": "同一条通道的上一次测试还没回来，等它回来再点。",
+    "zh-TW": "同一條通道的上一次測試還沒回來，等它回來再點。",
+    "en": "The previous test on this same channel has not come back yet; wait for it.",
+    "ja": "同じチャネルの前回のテストがまだ完了していません。完了を待ってください。",
+    "ko": "같은 채널의 이전 테스트가 아직 돌아오지 않았습니다. 완료를 기다려 주세요."
+  },
+  "section.reg.refuse.probeCooldown": {
+    "zh-CN": "刚测过这条通道，隔几秒再来。",
+    "zh-TW": "剛測過這條通道，隔幾秒再來。",
+    "en": "This channel was just tested; come back in a few seconds.",
+    "ja": "このチャネルは先ほどテストしたばかりです。数秒後に再試行してください。",
+    "ko": "이 채널은 방금 테스트했습니다. 몇 초 후에 다시 시도하세요."
+  },
+  "section.reg.settings.absent": {
+    "zh-CN": "这套部署里还没有注册机配置这回事。",
+    "zh-TW": "這套部署裡還沒有註冊機設定這回事。",
+    "en": "There is no such thing as registrar configuration in this deployment yet.",
+    "ja": "このデプロイには登録マシンの設定という概念がまだ存在しません。",
+    "ko": "이 배포에는 등록기 설정이라는 것이 아직 존재하지 않습니다."
+  },
+  "section.reg.settings.absentBody": {
+    "zh-CN": "所以这里刻意不摆一排能填能存的输入框：那些字段在后端根本没有对应物，填完保存只会得到一份自相矛盾的配置。",
+    "zh-TW": "所以這裡刻意不擺一排能填能存的輸入框：那些欄位在後端根本沒有對應物，填完儲存只會得到一份自相矛盾的設定。",
+    "en": "That is why no row of fillable, savable inputs is shown here: those fields have no counterpart in the backend, and saving them would only produce a configuration that contradicts itself.",
+    "ja": "そのため、入力して保存できるフォームを意図的に置いていません。これらの項目はバックエンドに対応物が無く、保存しても矛盾した設定が出来上がるだけです。",
+    "ko": "그래서 입력하고 저장할 수 있는 입력란을 의도적으로 두지 않았습니다. 그 항목들은 백엔드에 대응물이 없어 저장해도 스스로 모순되는 설정만 남습니다."
+  },
+  "section.reg.durationDays": {
+    "zh-CN": "{d} 天 {h} 小时",
+    "zh-TW": "{d} 天 {h} 小時",
+    "en": "{d}d {h}h",
+    "ja": "{d}日{h}時間",
+    "ko": "{d}일 {h}시간"
+  },
+  "section.reg.durationHours": {
+    "zh-CN": "{h} 小时 {m} 分",
+    "zh-TW": "{h} 小時 {m} 分",
+    "en": "{h}h {m}m",
+    "ja": "{h}時間{m}分",
+    "ko": "{h}시간 {m}분"
+  },
+  "section.reg.durationMinutes": {
+    "zh-CN": "{m} 分 {s} 秒",
+    "zh-TW": "{m} 分 {s} 秒",
+    "en": "{m}m {s}s",
+    "ja": "{m}分{s}秒",
+    "ko": "{m}분 {s}초"
+  },
+  "section.set.title": {
+    "zh-CN": "设置",
+    "zh-TW": "設定",
+    "en": "Settings",
+    "ja": "設定画面",
+    "ko": "설정 화면"
+  },
+  "section.set.reload": {
+    "zh-CN": "重新读取",
+    "zh-TW": "重新讀取",
+    "en": "Reload",
+    "ja": "再読み込み",
+    "ko": "다시 읽기"
+  },
+  "section.set.loadFailedHttp": {
+    "zh-CN": "配置没读出来（接口返回了错误）。在读出来之前，这一页不会显示任何值。",
+    "zh-TW": "設定沒讀出來（介面回傳了錯誤）。在讀出來之前，這一頁不會顯示任何值。",
+    "en": "The configuration could not be read (the endpoint returned an error). No value is shown until it can be read.",
+    "ja": "設定を読み取れませんでした（エンドポイントがエラーを返しました）。読み取れるまで値は表示しません。",
+    "ko": "설정을 읽지 못했습니다(엔드포인트가 오류를 반환). 읽을 수 있을 때까지 값을 표시하지 않습니다."
+  },
+  "section.set.loadFailedNetwork": {
+    "zh-CN": "配置没读出来（请求没发出去或没回来）。在读出来之前，这一页不会显示任何值。",
+    "zh-TW": "設定沒讀出來（請求沒發出去或沒回來）。在讀出來之前，這一頁不會顯示任何值。",
+    "en": "The configuration could not be read (the request never completed). No value is shown until it can be read.",
+    "ja": "設定を読み取れませんでした（リクエストが完了しませんでした）。読み取れるまで値は表示しません。",
+    "ko": "설정을 읽지 못했습니다(요청이 완료되지 않음). 읽을 수 있을 때까지 값을 표시하지 않습니다."
+  },
+  "section.set.diagnostic": {
+    "zh-CN": "存储里那份配置读得出来，却构造不出一份合法配置。这一页已经降级成诊断视图：先按下面的原因把缺的那几格补回来。",
+    "zh-TW": "儲存裡那份設定讀得出來，卻建構不出一份合法設定。這一頁已經降級成診斷檢視：先按下面的原因把缺的那幾格補回來。",
+    "en": "The stored configuration can be read but does not produce a valid config. This page has degraded to a diagnostic view — fix the causes listed below first.",
+    "ja": "保存された設定は読めますが、有効な設定を構築できません。この画面は診断ビューに縮退しています —— 下の原因から直してください。",
+    "ko": "저장된 설정은 읽히지만 유효한 설정을 만들지 못합니다. 이 화면은 진단 뷰로 축소되었습니다 — 아래 원인부터 해결하세요."
+  },
+  "section.set.degraded": {
+    "zh-CN": "有字段回落到了默认值（降级），网关照常在跑。逐格的「存储里是」会告诉你是哪一个。",
+    "zh-TW": "有欄位回落到了預設值（降級），閘道照常在跑。逐格的「儲存裡是」會告訴你是哪一個。",
+    "en": "Some fields fell back to defaults (degraded); the gateway keeps running. The per-field “stored” line tells you which.",
+    "ja": "一部のフィールドが既定値にフォールバックしました（デグレード）。ゲートウェイは稼働中です。各項目の「保存値」を確認してください。",
+    "ko": "일부 필드가 기본값으로 폴백했습니다(디그레이드). 게이트웨이는 계속 동작합니다. 각 항목의 “저장된 값”을 확인하세요."
+  },
+  "section.set.group.upstream": {
+    "zh-CN": "上游与超时",
+    "zh-TW": "上游與逾時",
+    "en": "Upstream & timeouts",
+    "ja": "アップストリームとタイムアウト",
+    "ko": "업스트림 및 타임아웃"
+  },
+  "section.set.group.resilience": {
+    "zh-CN": "容错与冷却",
+    "zh-TW": "容錯與冷卻",
+    "en": "Failure handling & cooldown",
+    "ja": "障害処理とクールダウン",
+    "ko": "장애 처리 및 쿨다운"
+  },
+  "section.set.group.pool": {
+    "zh-CN": "账号池旋钮",
+    "zh-TW": "帳號池旋鈕",
+    "en": "Account-pool knobs",
+    "ja": "アカウントプールの調整",
+    "ko": "계정 풀 조절값"
+  },
+  "section.set.group.readonly": {
+    "zh-CN": "只读状态（面板改不了）",
+    "zh-TW": "唯讀狀態（面板改不了）",
+    "en": "Read-only state (not editable here)",
+    "ja": "読み取り専用の状態（ここでは変更できません）",
+    "ko": "읽기 전용 상태(여기서는 변경 불가)"
+  },
+  "section.set.group.registrar": {
+    "zh-CN": "注册机：开关与节奏",
+    "zh-TW": "註冊機：開關與節奏",
+    "en": "Registrar: switch and cadence",
+    "ja": "レジストラ：オンオフと間隔",
+    "ko": "레지스트라: 켜기와 주기"
+  },
+  "section.set.group.registrarChannels": {
+    "zh-CN": "邮箱通道凭据",
+    "zh-TW": "郵箱通道憑據",
+    "en": "Mailbox channel credentials",
+    "ja": "メールチャネルの認証情報",
+    "ko": "메일 채널 자격 증명"
+  },
+  "section.set.group.registrarMint": {
+    "zh-CN": "铸号细节",
+    "zh-TW": "鑄號細節",
+    "en": "Minting details",
+    "ja": "アカウント作成の詳細",
+    "ko": "계정 생성 세부값"
+  },
+  "section.set.field.registrar.enabled": {
+    "zh-CN": "打开之后，网关会按下面的目标数量自动注册新账号来补池。关着时它一次上游请求都不发。",
+    "zh-TW": "打開之後，網關會按下面的目標數量自動註冊新帳號來補池。關著時它一次上游請求都不發。",
+    "en": "When on, the gateway registers new accounts to top the pool up to the target below. While off it makes no upstream calls at all.",
+    "ja": "オンにすると、以下の目標数までアカウントを自動作成してプールを補充します。オフの間は上流へのリクエストを一切行いません。",
+    "ko": "켜면 아래 목표 개수에 맞춰 계정을 자동 생성해 풀을 채웁니다. 꺼져 있는 동안에는 업스트림 요청을 전혀 보내지 않습니다."
+  },
+  "section.set.field.registrar.channel": {
+    "zh-CN": "这一轮用哪条邮箱通道。两条完全平级，任选其一；选中的那条必须先把凭据填全。",
+    "zh-TW": "這一輪用哪條郵箱通道。兩條完全平級，任選其一；選中的那條必須先把憑據填全。",
+    "en": "Which mailbox channel a round uses. The two are fully equivalent — pick either; the one you pick must have its credentials filled in first.",
+    "ja": "この回で使うメールチャネル。2 つは完全に同格です。選んだ方は先に認証情報を揃えてください。",
+    "ko": "한 회차에서 사용할 메일 채널. 두 채널은 완전히 동등합니다. 선택한 쪽은 먼저 자격 증명을 모두 입력해야 합니다."
+  },
+  "section.set.field.registrar.targetKeys": {
+    "zh-CN": "池子要维持的 key 数量。占名额数低于它时才补池 —— 被停用的和冷却中的都算在占名额数里。",
+    "zh-TW": "池子要維持的 key 數量。占名額數低於它時才補池 —— 被停用的和冷卻中的都算在占名額數裡。",
+    "en": "How many keys the pool should hold. Topping up starts when the counted total falls below it — disabled and cooling keys count toward that total.",
+    "ja": "プールに保ちたいキーの本数。カウント数がこれを下回ると補充します。無効化中・クールダウン中のキーもカウントに含まれます。",
+    "ko": "풀에 유지할 키 개수. 집계 수가 이 값 아래로 떨어지면 보충합니다. 비활성화·쿨다운 중인 키도 집계에 포함됩니다."
+  },
+  "section.set.field.registrar.tendIntervalMs": {
+    "zh-CN": "两轮自动补池之间隔多久（毫秒）。调小会让上游更容易把出口地址限流。",
+    "zh-TW": "兩輪自動補池之間隔多久（毫秒）。調小會讓上游更容易把出口地址限流。",
+    "en": "Milliseconds between automatic top-up rounds. Lowering it makes upstream rate-limiting of your egress address more likely.",
+    "ja": "自動補充の実行間隔（ミリ秒）。短くするほど、上流に送信元アドレスをレート制限されやすくなります。",
+    "ko": "자동 보충 회차 사이의 간격(밀리초). 값을 줄이면 업스트림이 출구 주소를 제한할 가능성이 커집니다."
+  },
+  "section.set.field.registrar.mintBatch": {
+    "zh-CN": "一轮最多铸几把。每铸一把都是一次真实的账号注册，还会占用一个临时邮箱名额。",
+    "zh-TW": "一輪最多鑄幾把。每鑄一把都是一次真實的帳號註冊，還會佔用一個臨時郵箱名額。",
+    "en": "How many keys one round mints at most. Each one is a real account registration and consumes one temporary-mailbox slot.",
+    "ja": "1 回の実行で作成するキーの上限。1 本ごとに実際のアカウント登録が走り、使い捨てメールの枠を 1 つ消費します。",
+    "ko": "한 회차에서 생성할 키의 최대 개수. 한 개마다 실제 계정 등록이 일어나고 임시 메일함 한 자리를 차지합니다."
+  },
+  "section.set.field.registrar.mintDelayMinMs": {
+    "zh-CN": "两次铸号之间至少等多久（毫秒）。它必须不大于上界，否则这一轮起不来。",
+    "zh-TW": "兩次鑄號之間至少等多久（毫秒）。它必須不大於上界，否則這一輪起不來。",
+    "en": "Minimum wait between two mints, in milliseconds. It must not exceed the maximum, or the round will not start.",
+    "ja": "作成と作成の間に最低限あける時間（ミリ秒）。上限を超えてはいけません。超えるとその回は開始しません。",
+    "ko": "생성과 생성 사이 최소 대기 시간(밀리초). 상한보다 크면 해당 회차가 시작되지 않습니다."
+  },
+  "section.set.field.registrar.mintDelayMaxMs": {
+    "zh-CN": "两次铸号之间最多等多久（毫秒）。真实等待在下界与它之间随机取。",
+    "zh-TW": "兩次鑄號之間最多等多久（毫秒）。真實等待在下界與它之間隨機取。",
+    "en": "Maximum wait between two mints, in milliseconds. The actual wait is picked at random between the minimum and this.",
+    "ja": "作成と作成の間にあける最大時間（ミリ秒）。実際の待ち時間は下限とこの値の間でランダムに決まります。",
+    "ko": "생성과 생성 사이 최대 대기 시간(밀리초). 실제 대기 시간은 하한과 이 값 사이에서 무작위로 정해집니다."
+  },
+  "section.set.field.registrar.codeTimeoutMs": {
+    "zh-CN": "等验证码最多等多久（毫秒）。等不到就算这一把失败，账号那边可能已经建出来了。",
+    "zh-TW": "等驗證碼最多等多久（毫秒）。等不到就算這一把失敗，帳號那邊可能已經建出來了。",
+    "en": "How long to wait for the verification code, in milliseconds. Timing out fails that key — the account may already exist upstream.",
+    "ja": "確認コードを待つ上限（ミリ秒）。時間切れはそのキーの失敗として扱われます。アカウントは上流に既に作られている可能性があります。",
+    "ko": "인증 코드를 기다리는 최대 시간(밀리초). 시간이 지나면 해당 키는 실패로 처리되며, 계정은 이미 만들어져 있을 수 있습니다."
+  },
+  "section.set.field.registrar.maxDomainAttempts": {
+    "zh-CN": "一把 key 最多换几个收信域名再放弃。调大会让单次尝试的耗时成倍增加。",
+    "zh-TW": "一把 key 最多換幾個收信域名再放棄。調大會讓單次嘗試的耗時成倍增加。",
+    "en": "How many receiving domains one key may try before giving up. Raising it multiplies how long a single attempt can take.",
+    "ja": "1 本のキーが諦めるまでに試す受信ドメインの数。増やすと 1 回の試行にかかる時間が倍々に伸びます。",
+    "ko": "키 하나가 포기하기 전까지 시도할 수신 도메인 수. 늘리면 한 번의 시도에 걸리는 시간이 배로 늘어납니다."
+  },
+  "section.set.field.registrar.tokenName": {
+    "zh-CN": "铸出来的 key 在上游后台显示成什么名字。只影响那边的列表，与本网关无关。",
+    "zh-TW": "鑄出來的 key 在上游後台顯示成什麼名字。只影響那邊的列表，與本網關無關。",
+    "en": "The label minted keys carry in the upstream console. It only affects that listing, not this gateway.",
+    "ja": "作成したキーが上流の管理画面に表示される名前。向こうの一覧にだけ影響し、本ゲートウェイには関係しません。",
+    "ko": "생성된 키가 업스트림 콘솔에 표시될 이름. 그쪽 목록에만 영향을 주며 이 게이트웨이와는 무관합니다."
+  },
+  "section.set.field.registrar.agnesPlatformUrl": {
+    "zh-CN": "注册与登录打到哪个地址。它与转发用的上游地址是两个，别填混。",
+    "zh-TW": "註冊與登入打到哪個地址。它與轉發用的上游地址是兩個，別填混。",
+    "en": "Where registration and sign-in are sent. This is a different address from the upstream used for forwarding — do not mix them up.",
+    "ja": "登録とログインの送信先アドレス。転送に使う上流アドレスとは別物です。取り違えないでください。",
+    "ko": "회원가입과 로그인을 보낼 주소. 전달에 사용하는 업스트림 주소와는 별개이니 혼동하지 마세요."
+  },
+  "section.set.field.channel.moemailBaseUrl": {
+    "zh-CN": "MoeMail 的地址。它是自建服务，每个实例的地址都不同，必须自己填。",
+    "zh-TW": "MoeMail 的地址。它是自建服務，每個實例的地址都不同，必須自己填。",
+    "en": "The MoeMail address. It is self-hosted, so every instance has its own address and you must supply it.",
+    "ja": "MoeMail のアドレス。セルフホスト型なので、インスタンスごとにアドレスが異なり、自分で入力する必要があります。",
+    "ko": "MoeMail 주소. 직접 호스팅하는 서비스라 인스턴스마다 주소가 다르므로 직접 입력해야 합니다."
+  },
+  "section.set.field.channel.moemailApiKey": {
+    "zh-CN": "MoeMail 的访问凭据。保存后只显示末 4 位；留空表示不改，清空要用下面的清除按钮。",
+    "zh-TW": "MoeMail 的存取憑據。保存後只顯示末 4 位；留空表示不改，清空要用下面的清除按鈕。",
+    "en": "The MoeMail access credential. Only the last 4 characters are shown after saving; leaving it blank means no change — use the clear button below to erase it.",
+    "ja": "MoeMail のアクセス認証情報。保存後は末尾 4 文字だけ表示されます。空欄は「変更しない」を意味し、消すには下の消去ボタンを使います。",
+    "ko": "MoeMail 접근 자격 증명. 저장 후에는 마지막 4자만 표시됩니다. 비워 두면 변경하지 않으며, 지우려면 아래 삭제 버튼을 사용하세요."
+  },
+  "section.set.field.channel.yydsBaseUrl": {
+    "zh-CN": "YYDS 的地址。它是地址固定的公共服务，通常不用改。",
+    "zh-TW": "YYDS 的地址。它是地址固定的公共服務，通常不用改。",
+    "en": "The YYDS address. It is a public service at a fixed address, so you normally leave it alone.",
+    "ja": "YYDS のアドレス。アドレスが固定された公開サービスなので、通常は変更しません。",
+    "ko": "YYDS 주소. 주소가 고정된 공개 서비스라 보통은 그대로 두면 됩니다."
+  },
+  "section.set.field.channel.yydsApiKey": {
+    "zh-CN": "YYDS 的访问凭据。保存后只显示末 4 位；留空表示不改，清空要用下面的清除按钮。",
+    "zh-TW": "YYDS 的存取憑據。保存後只顯示末 4 位；留空表示不改，清空要用下面的清除按鈕。",
+    "en": "The YYDS access credential. Only the last 4 characters are shown after saving; leaving it blank means no change — use the clear button below to erase it.",
+    "ja": "YYDS のアクセス認証情報。保存後は末尾 4 文字だけ表示されます。空欄は「変更しない」を意味し、消すには下の消去ボタンを使います。",
+    "ko": "YYDS 접근 자격 증명. 저장 후에는 마지막 4자만 표시됩니다. 비워 두면 변경하지 않으며, 지우려면 아래 삭제 버튼을 사용하세요."
+  },
+  "section.set.err.notABoolean": {
+    "zh-CN": "这一格只收开或关两种取值。",
+    "zh-TW": "這一格只收開或關兩種取值。",
+    "en": "This field only accepts on or off.",
+    "ja": "この項目はオンかオフのみを受け付けます。",
+    "ko": "이 항목은 켜기 또는 끄기만 받습니다."
+  },
+  "section.set.err.tooLong": {
+    "zh-CN": "太长了，请改短一些。",
+    "zh-TW": "太長了，請改短一些。",
+    "en": "Too long — please shorten it.",
+    "ja": "長すぎます。短くしてください。",
+    "ko": "너무 깁니다. 더 짧게 입력하세요."
+  },
+  "section.set.err.notAChannel": {
+    "zh-CN": "不是可用的邮箱通道名。",
+    "zh-TW": "不是可用的郵箱通道名。",
+    "en": "Not a valid mailbox channel name.",
+    "ja": "有効なメールチャネル名ではありません。",
+    "ko": "사용할 수 있는 메일 채널 이름이 아닙니다."
+  },
+  "section.set.err.delayMinGtMax": {
+    "zh-CN": "铸号间隔的下界比上界还大，这样注册机起不来。",
+    "zh-TW": "鑄號間隔的下界比上界還大，這樣註冊機起不來。",
+    "en": "The minimum mint interval is larger than the maximum, so the registrar cannot start.",
+    "ja": "作成間隔の下限が上限より大きいため、レジストラを開始できません。",
+    "ko": "생성 간격의 하한이 상한보다 커서 레지스트라를 시작할 수 없습니다."
+  },
+  "section.set.err.channelCredentialsMissing": {
+    "zh-CN": "选中的这条通道还没把凭据填全。",
+    "zh-TW": "選中的這條通道還沒把憑據填全。",
+    "en": "The selected channel is missing part of its credentials.",
+    "ja": "選択したチャネルの認証情報が揃っていません。",
+    "ko": "선택한 채널의 자격 증명이 아직 모두 입력되지 않았습니다."
+  },
+  "section.set.err.legacyChannelKey": {
+    "zh-CN": "存储里还留着旧的通道键，保存任意一次设置它就会消失。",
+    "zh-TW": "儲存裡還留著舊的通道鍵，保存任意一次設定它就會消失。",
+    "en": "An older channel key is still in storage; saving settings once will clear it.",
+    "ja": "古いチャネル項目がストレージに残っています。設定を一度保存すると消えます。",
+    "ko": "이전 채널 항목이 저장소에 남아 있습니다. 설정을 한 번 저장하면 사라집니다."
+  },
+  "section.set.err.legacyFallbackIgnored": {
+    "zh-CN": "存储里那条备用通道已被丢弃：今天是二选一，没有自动降级。",
+    "zh-TW": "儲存裡那條備用通道已被丟棄：今天是二選一，沒有自動降級。",
+    "en": "The fallback channel in storage was dropped: today it is one-of-two, with no automatic failover.",
+    "ja": "ストレージにある予備チャネルは破棄されました。現在は 2 つから 1 つを選ぶ方式で、自動切り替えはありません。",
+    "ko": "저장소의 예비 채널은 폐기되었습니다. 현재는 둘 중 하나를 고르는 방식이며 자동 전환은 없습니다."
+  },
+  "section.set.group.other": {
+    "zh-CN": "面板还不认识的字段",
+    "zh-TW": "面板還不認識的欄位",
+    "en": "Fields this panel does not know yet",
+    "ja": "パネルがまだ認識していない項目",
+    "ko": "패널이 아직 모르는 항목"
+  },
+  "section.set.group.otherDesc": {
+    "zh-CN": "后端发来了这几格，而这一版面板没有它们的说明。照实画出来，总比让它们在屏幕上消失好。",
+    "zh-TW": "後端發來了這幾格，而這一版面板沒有它們的說明。照實畫出來，總比讓它們在畫面上消失好。",
+    "en": "The backend sent these fields and this panel build has no description for them. Showing them as-is beats making them disappear.",
+    "ja": "バックエンドから届いた項目ですが、このパネルには説明がありません。画面から消すより、そのまま表示します。",
+    "ko": "백엔드가 보낸 항목이지만 이 패널에는 설명이 없습니다. 화면에서 사라지게 하는 것보다 그대로 보여줍니다."
+  },
+  "section.set.field.gatewayToken": {
+    "zh-CN": "网关口令（GATEWAY_TOKEN）",
+    "zh-TW": "閘道口令（GATEWAY_TOKEN）",
+    "en": "Gateway token (GATEWAY_TOKEN)",
+    "ja": "ゲートウェイトークン（GATEWAY_TOKEN）",
+    "ko": "게이트웨이 토큰(GATEWAY_TOKEN)"
+  },
+  "section.set.field.agnesBaseUrl": {
+    "zh-CN": "上游地址",
+    "zh-TW": "上游位址",
+    "en": "Upstream base URL",
+    "ja": "アップストリームのベース URL",
+    "ko": "업스트림 기본 URL"
+  },
+  "section.set.field.upstreamTimeoutMs": {
+    "zh-CN": "上游超时（毫秒）",
+    "zh-TW": "上游逾時（毫秒）",
+    "en": "Upstream timeout (ms)",
+    "ja": "アップストリームのタイムアウト（ミリ秒）",
+    "ko": "업스트림 타임아웃(밀리초)"
+  },
+  "section.set.field.upstreamSyncTimeoutMs": {
+    "zh-CN": "非流式请求超时（毫秒）",
+    "zh-TW": "非串流請求逾時（毫秒）",
+    "en": "Non-streaming request timeout (ms)",
+    "ja": "非ストリーミング要求のタイムアウト（ミリ秒）",
+    "ko": "비스트리밍 요청 타임아웃(밀리초)"
+  },
+  "section.set.field.maxStrikes": {
+    "zh-CN": "连续失败几次算一次剔除",
+    "zh-TW": "連續失敗幾次算一次剔除",
+    "en": "Consecutive failures before eviction",
+    "ja": "連続失敗が何回で除外するか",
+    "ko": "연속 실패 몇 회에 제외할지"
+  },
+  "section.set.field.cooldownRateLimitMs": {
+    "zh-CN": "被限流后冷却多久（毫秒）",
+    "zh-TW": "被限流後冷卻多久（毫秒）",
+    "en": "Cooldown after a rate limit (ms)",
+    "ja": "レート制限後のクールダウン（ミリ秒）",
+    "ko": "레이트 리밋 후 쿨다운(밀리초)"
+  },
+  "section.set.field.cooldownPaymentMs": {
+    "zh-CN": "欠费后冷却多久（毫秒）",
+    "zh-TW": "欠費後冷卻多久（毫秒）",
+    "en": "Cooldown after a payment failure (ms)",
+    "ja": "支払いエラー後のクールダウン（ミリ秒）",
+    "ko": "결제 실패 후 쿨다운(밀리초)"
+  },
+  "section.set.field.cooldownStrikeMs": {
+    "zh-CN": "一次普通失败后冷却多久（毫秒）",
+    "zh-TW": "一次普通失敗後冷卻多久（毫秒）",
+    "en": "Cooldown after an ordinary failure (ms)",
+    "ja": "通常の失敗後のクールダウン（ミリ秒）",
+    "ko": "일반 실패 후 쿨다운(밀리초)"
+  },
+  "section.set.field.poolCacheTtlMs": {
+    "zh-CN": "池子缓存有效期（毫秒，0 = 关掉）",
+    "zh-TW": "池子快取有效期（毫秒，0 = 關掉）",
+    "en": "Pool cache TTL (ms, 0 disables it)",
+    "ja": "プールキャッシュの有効期間（ミリ秒、0 で無効）",
+    "ko": "풀 캐시 유효 기간(밀리초, 0이면 비활성)"
+  },
+  "section.set.field.poolTouchIntervalMs": {
+    "zh-CN": "回写「最后使用」的最小间隔（毫秒，0 = 每次都写）",
+    "zh-TW": "回寫「最後使用」的最小間隔（毫秒，0 = 每次都寫）",
+    "en": "Minimum interval for writing back “last used” (ms, 0 writes every time)",
+    "ja": "「最終使用」書き戻しの最小間隔（ミリ秒、0 で毎回書き込み）",
+    "ko": "“마지막 사용” 기록 최소 간격(밀리초, 0이면 매번 기록)"
+  },
+  "section.set.field.degraded": {
+    "zh-CN": "配置是否处于降级状态",
+    "zh-TW": "設定是否處於降級狀態",
+    "en": "Whether the config is in a degraded state",
+    "ja": "設定がデグレード状態かどうか",
+    "ko": "설정이 디그레이드 상태인지 여부"
+  },
+  "section.set.field.usageStatsEnabled": {
+    "zh-CN": "用量统计（Tier-2）开没开",
+    "zh-TW": "用量統計（Tier-2）開沒開",
+    "en": "Whether usage statistics (Tier-2) are on",
+    "ja": "利用統計（Tier-2）が有効かどうか",
+    "ko": "사용 통계(Tier-2) 활성화 여부"
+  },
+  "section.set.lockedBy": {
+    "zh-CN": "被环境变量钉死了（{by}），面板改不了；要改就改部署里那一行。",
+    "zh-TW": "被環境變數釘死了（{by}），面板改不了；要改就改部署裡那一行。",
+    "en": "Pinned by an environment variable ({by}); this panel cannot change it — edit that line in your deployment.",
+    "ja": "環境変数（{by}）で固定されています。パネルからは変更できません —— デプロイ側のその行を編集してください。",
+    "ko": "환경 변수({by})로 고정되어 있습니다. 패널에서는 변경할 수 없으니 배포 설정의 해당 줄을 수정하세요."
+  },
+  "section.set.storedIs": {
+    "zh-CN": "存储里是：{v}",
+    "zh-TW": "儲存裡是：{v}",
+    "en": "Stored value: {v}",
+    "ja": "保存値：{v}",
+    "ko": "저장된 값: {v}"
+  },
+  "section.set.storedNone": {
+    "zh-CN": "没配（用的是内置默认值）",
+    "zh-TW": "沒設（用的是內建預設值）",
+    "en": "not set (built-in default in use)",
+    "ja": "未設定（組み込みの既定値を使用）",
+    "ko": "미설정(내장 기본값 사용)"
+  },
+  "section.set.readOnlyField": {
+    "zh-CN": "这一格是装载的产物，不是旋钮。",
+    "zh-TW": "這一格是裝載的產物，不是旋鈕。",
+    "en": "This cell is an outcome of loading, not a knob.",
+    "ja": "この項目は読み込み結果であり、設定つまみではありません。",
+    "ko": "이 항목은 로딩 결과이며 조절 값이 아닙니다."
+  },
+  "section.set.secretConfigured": {
+    "zh-CN": "已配置",
+    "zh-TW": "已設定",
+    "en": "Configured",
+    "ja": "設定済み",
+    "ko": "설정됨"
+  },
+  "section.set.secretMissing": {
+    "zh-CN": "未配置",
+    "zh-TW": "未設定",
+    "en": "Not configured",
+    "ja": "未設定です",
+    "ko": "설정되지 않음"
+  },
+  "section.set.secretDesc": {
+    "zh-CN": "凭据只写不读：这一页永远拿不到明文，只看得到末 4 位。留空保存 = 不改，清空只有下面那颗按钮一条路。",
+    "zh-TW": "憑據只寫不讀：這一頁永遠拿不到明文，只看得到末 4 位。留空儲存 = 不改，清空只有下面那顆按鈕一條路。",
+    "en": "Secrets are write-only: this page never receives the plaintext, only the last 4 characters. Saving an empty box means “leave unchanged”; clearing is only possible via the button below.",
+    "ja": "シークレットは書き込み専用です：この画面に平文は届かず、末尾 4 文字のみ表示します。空欄で保存＝変更なし、消去は下のボタンのみです。",
+    "ko": "비밀 값은 쓰기 전용입니다: 이 화면은 평문을 받지 않고 마지막 4자만 봅니다. 빈칸 저장 = 변경 없음이며, 삭제는 아래 버튼으로만 가능합니다."
+  },
+  "section.set.secretNoHint": {
+    "zh-CN": "已配置（太短，不给末位提示）",
+    "zh-TW": "已設定（太短，不給末位提示）",
+    "en": "Configured (too short to show a tail hint)",
+    "ja": "設定済み（短すぎるため末尾ヒントなし）",
+    "ko": "설정됨(너무 짧아 끝자리 힌트 없음)"
+  },
+  "section.set.secretNewLabel": {
+    "zh-CN": "换一把新的（留空 = 不改）",
+    "zh-TW": "換一把新的（留空 = 不改）",
+    "en": "Replace with a new one (empty = unchanged)",
+    "ja": "新しい値に置き換える（空欄＝変更なし）",
+    "ko": "새 값으로 교체(빈칸 = 변경 없음)"
+  },
+  "section.set.secretLockedLabel": {
+    "zh-CN": "被环境变量钉死了，这里改不了",
+    "zh-TW": "被環境變數釘死了，這裡改不了",
+    "en": "Pinned by an environment variable; not editable here",
+    "ja": "環境変数で固定されており、ここでは変更できません",
+    "ko": "환경 변수로 고정되어 여기서는 변경할 수 없습니다"
+  },
+  "section.set.secretHint": {
+    "zh-CN": "至少 24 个可打印 ASCII 字符，首尾不许有空白，且不许与管理口令相同。",
+    "zh-TW": "至少 24 個可列印 ASCII 字元，首尾不許有空白，且不許與管理口令相同。",
+    "en": "At least 24 printable ASCII characters, no leading or trailing whitespace, and it must differ from the admin token.",
+    "ja": "印字可能な ASCII で 24 文字以上、前後に空白を含まず、管理トークンと同一であってはいけません。",
+    "ko": "출력 가능한 ASCII로 24자 이상, 앞뒤 공백 없이, 관리자 토큰과 달라야 합니다."
+  },
+  "section.set.secretClear": {
+    "zh-CN": "清空这把凭据",
+    "zh-TW": "清空這把憑據",
+    "en": "Clear this secret",
+    "ja": "このシークレットを消去",
+    "ko": "이 비밀 값 삭제"
+  },
+  "section.set.clearTitle": {
+    "zh-CN": "清空凭据",
+    "zh-TW": "清空憑據",
+    "en": "Clear secret",
+    "ja": "シークレットの消去",
+    "ko": "비밀 값 삭제"
+  },
+  "section.set.clearConfirm": {
+    "zh-CN": "这一步会把存储里那一份删掉，且不可撤销。",
+    "zh-TW": "這一步會把儲存裡那一份刪掉，且不可撤銷。",
+    "en": "This deletes the copy in storage and cannot be undone.",
+    "ja": "この操作はストレージ側の値を削除し、取り消せません。",
+    "ko": "이 작업은 스토리지의 값을 삭제하며 되돌릴 수 없습니다."
+  },
+  "section.set.clearStillEnv": {
+    "zh-CN": "环境变量里还有一份，所以生效值不会变 —— 这次清的只是存储里那一份。",
+    "zh-TW": "環境變數裡還有一份，所以生效值不會變 —— 這次清的只是儲存裡那一份。",
+    "en": "An environment variable still provides one, so the effective value will not change — only the stored copy is removed.",
+    "ja": "環境変数にも値があるため実効値は変わりません —— 削除されるのは保存側のみです。",
+    "ko": "환경 변수에도 값이 있어 실효 값은 바뀌지 않습니다 — 저장된 사본만 삭제됩니다."
+  },
+  "section.set.clearFatal": {
+    "zh-CN": "环境变量里也没有。清完之后当前进程靠上一份快照还能跑，但下一次冷启动会起不来 —— 请立刻在这一页把它补回来。",
+    "zh-TW": "環境變數裡也沒有。清完之後目前行程靠上一份快照還能跑，但下一次冷啟動會起不來 —— 請立刻在這一頁把它補回來。",
+    "en": "No environment variable provides one either. The running process keeps going on its last snapshot, but the next cold start will fail — put it back on this page right away.",
+    "ja": "環境変数にもありません。現行プロセスは直前のスナップショットで動き続けますが、次回のコールドスタートは失敗します —— この画面ですぐ入れ直してください。",
+    "ko": "환경 변수에도 없습니다. 현재 프로세스는 직전 스냅샷으로 계속 동작하지만 다음 콜드 스타트는 실패합니다 — 이 화면에서 즉시 다시 넣으세요."
+  },
+  "section.set.cleared": {
+    "zh-CN": "已清空。这份配置仍然装载得起来。",
+    "zh-TW": "已清空。這份設定仍然裝載得起來。",
+    "en": "Cleared. The configuration still loads.",
+    "ja": "消去しました。設定は引き続き読み込めます。",
+    "ko": "삭제했습니다. 설정은 계속 로드됩니다."
+  },
+  "section.set.clearedStillEnv": {
+    "zh-CN": "已清空存储里那一份；环境变量里仍然有一份，生效值不变。",
+    "zh-TW": "已清空儲存裡那一份；環境變數裡仍然有一份，生效值不變。",
+    "en": "The stored copy was cleared; an environment variable still provides one, so the effective value is unchanged.",
+    "ja": "保存側を消去しました。環境変数の値が残っているため実効値は変わりません。",
+    "ko": "저장된 사본을 삭제했습니다. 환경 변수 값이 남아 실효 값은 그대로입니다."
+  },
+  "section.set.clearedFatal": {
+    "zh-CN": "已清空 —— 这份配置现在装载不起来了。当前进程还在跑，但下一次冷启动会失败，请立刻补回来。",
+    "zh-TW": "已清空 —— 這份設定現在裝載不起來了。目前行程還在跑，但下一次冷啟動會失敗，請立刻補回來。",
+    "en": "Cleared — the configuration no longer loads. The running process survives, but the next cold start will fail; put it back now.",
+    "ja": "消去しました —— 設定はもう読み込めません。現行プロセスは動作中ですが、次回のコールドスタートは失敗します。すぐ入れ直してください。",
+    "ko": "삭제했습니다 — 설정을 더 이상 로드할 수 없습니다. 현재 프로세스는 살아 있지만 다음 콜드 스타트는 실패합니다. 즉시 복구하세요."
+  },
+  "section.set.noPendingEdits": {
+    "zh-CN": "没有待保存的改动",
+    "zh-TW": "沒有待儲存的改動",
+    "en": "No pending edits",
+    "ja": "保存待ちの変更はありません",
+    "ko": "저장 대기 중인 변경이 없습니다"
+  },
+  "section.set.pendingEdits": {
+    "zh-CN": "有 {n} 格改动还没保存",
+    "zh-TW": "有 {n} 格改動還沒儲存",
+    "en": "{n} field(s) changed but not saved",
+    "ja": "未保存の変更が {n} 件あります",
+    "ko": "저장되지 않은 변경 {n}건"
+  },
+  "section.set.nothingToSave": {
+    "zh-CN": "没有改动可以提交",
+    "zh-TW": "沒有改動可以提交",
+    "en": "There is nothing to submit",
+    "ja": "送信する変更がありません",
+    "ko": "제출할 변경이 없습니다"
+  },
+  "section.set.dryRun": {
+    "zh-CN": "先校验（不写）",
+    "zh-TW": "先校驗（不寫）",
+    "en": "Validate only",
+    "ja": "検証のみ（書き込まない）",
+    "ko": "검증만(쓰지 않음)"
+  },
+  "section.set.dryRunOk": {
+    "zh-CN": "校验通过：真保存会改动 {n} 格。这一次一个字节都没有写。",
+    "zh-TW": "校驗通過：真儲存會改動 {n} 格。這一次一個位元組都沒有寫。",
+    "en": "Validation passed: a real save would change {n} field(s). Nothing was written this time.",
+    "ja": "検証に成功：実際の保存では {n} 件が変わります。今回は 1 バイトも書いていません。",
+    "ko": "검증 통과: 실제 저장 시 {n}건이 변경됩니다. 이번에는 한 바이트도 쓰지 않았습니다."
+  },
+  "section.set.save": {
+    "zh-CN": "保存",
+    "zh-TW": "儲存",
+    "en": "Save",
+    "ja": "保存する",
+    "ko": "저장하기"
+  },
+  "section.set.saved": {
+    "zh-CN": "已写入，回读到 {n} 格真的变了。",
+    "zh-TW": "已寫入，回讀到 {n} 格真的變了。",
+    "en": "Written; the read-back shows {n} field(s) actually changed.",
+    "ja": "書き込みました。読み戻しで {n} 件が実際に変わりました。",
+    "ko": "기록했습니다. 다시 읽은 결과 {n}건이 실제로 변경되었습니다."
+  },
+  "section.set.savedNoChange": {
+    "zh-CN": "已写入，但回读之后生效值一格都没变（多半是被环境变量压着）。",
+    "zh-TW": "已寫入，但回讀之後生效值一格都沒變（多半是被環境變數壓著）。",
+    "en": "Written, but the read-back shows no effective value changed (most likely an environment variable still wins).",
+    "ja": "書き込みましたが、読み戻すと実効値は一つも変わっていません（環境変数が優先されている可能性が高いです）。",
+    "ko": "기록했지만 다시 읽은 실효 값은 하나도 바뀌지 않았습니다(환경 변수가 우선했을 가능성이 큽니다)."
+  },
+  "section.set.propagation": {
+    "zh-CN": "其余实例最多 {s} 之后看到这次改动。",
+    "zh-TW": "其餘實例最多 {s} 之後看到這次改動。",
+    "en": "Other instances will see this change within {s} at most.",
+    "ja": "他のインスタンスは最大 {s} でこの変更を認識します。",
+    "ko": "다른 인스턴스는 최대 {s} 안에 이 변경을 인식합니다."
+  },
+  "section.set.seconds": {
+    "zh-CN": "{n} 秒",
+    "zh-TW": "{n} 秒",
+    "en": "{n}s",
+    "ja": "{n} 秒間",
+    "ko": "{n}초"
+  },
+  "section.set.saveRejected": {
+    "zh-CN": "校验没通过，本次一个字节都没有写入（{n} 条）。",
+    "zh-TW": "校驗沒通過，本次一個位元組都沒有寫入（{n} 條）。",
+    "en": "Validation failed; nothing was written ({n} problem(s)).",
+    "ja": "検証に失敗し、1 バイトも書き込んでいません（{n} 件）。",
+    "ko": "검증에 실패하여 아무것도 기록하지 않았습니다({n}건)."
+  },
+  "section.set.saveFailedHttp": {
+    "zh-CN": "保存失败（接口返回了错误）。请重新读取之后再试。",
+    "zh-TW": "儲存失敗（介面回傳了錯誤）。請重新讀取之後再試。",
+    "en": "Save failed (the endpoint returned an error). Reload and try again.",
+    "ja": "保存に失敗しました（エンドポイントがエラーを返しました）。再読み込みしてからやり直してください。",
+    "ko": "저장에 실패했습니다(엔드포인트가 오류를 반환). 다시 읽은 뒤 재시도하세요."
+  },
+  "section.set.saveFailedNetwork": {
+    "zh-CN": "保存失败（请求没发出去或没回来）。⚠️ 无法确认服务端有没有写入，请重新读取核对。",
+    "zh-TW": "儲存失敗（請求沒發出去或沒回來）。⚠️ 無法確認伺服器有沒有寫入，請重新讀取核對。",
+    "en": "Save failed (the request never completed). ⚠️ Whether the server wrote anything is unknown — reload and check.",
+    "ja": "保存に失敗しました（リクエストが完了しませんでした）。⚠️ サーバー側が書き込んだかは不明です。再読み込みして確認してください。",
+    "ko": "저장에 실패했습니다(요청이 완료되지 않음). ⚠️ 서버가 기록했는지 알 수 없으니 다시 읽어 확인하세요."
+  },
+  "section.set.err.unknown": {
+    "zh-CN": "面板还不认识这条错误码：{code}",
+    "zh-TW": "面板還不認識這條錯誤碼：{code}",
+    "en": "This panel does not recognise the error code {code} yet",
+    "ja": "パネルが未知のエラーコードです：{code}",
+    "ko": "패널이 아직 모르는 오류 코드입니다: {code}"
+  },
+  "section.set.err.unknownField": {
+    "zh-CN": "后端不认识这个字段名（或者它不是一个可改的旋钮）",
+    "zh-TW": "後端不認識這個欄位名（或者它不是一個可改的旋鈕）",
+    "en": "The backend does not know this field name (or it is not an editable knob)",
+    "ja": "バックエンドがこの項目名を認識していません（または変更可能な項目ではありません）",
+    "ko": "백엔드가 이 항목 이름을 모릅니다(또는 변경 가능한 항목이 아닙니다)"
+  },
+  "section.set.err.lockedByEnv": {
+    "zh-CN": "被环境变量 {env} 钉死了，这次写入被整条拒绝（不是「写下去但不生效」）",
+    "zh-TW": "被環境變數 {env} 釘死了，這次寫入被整條拒絕（不是「寫下去但不生效」）",
+    "en": "Pinned by environment variable {env}; the write was rejected outright (not “written but ineffective”)",
+    "ja": "環境変数 {env} で固定されており、この書き込みは丸ごと拒否されました（「書いたが効かない」ではありません）",
+    "ko": "환경 변수 {env}로 고정되어 있어 이번 쓰기는 전부 거부되었습니다(“쓰였지만 적용 안 됨”이 아닙니다)"
+  },
+  "section.set.err.notAnInteger": {
+    "zh-CN": "这一格只收整数",
+    "zh-TW": "這一格只收整數",
+    "en": "This field takes an integer only",
+    "ja": "この項目は整数のみ受け付けます",
+    "ko": "이 항목은 정수만 받습니다"
+  },
+  "section.set.err.belowMin": {
+    "zh-CN": "不能小于 {min}",
+    "zh-TW": "不能小於 {min}",
+    "en": "Must not be less than {min}",
+    "ja": "{min} 未満にはできません",
+    "ko": "{min} 미만일 수 없습니다"
+  },
+  "section.set.err.notAString": {
+    "zh-CN": "这一格只收字符串",
+    "zh-TW": "這一格只收字串",
+    "en": "This field takes a string only",
+    "ja": "この項目は文字列のみ受け付けます",
+    "ko": "이 항목은 문자열만 받습니다"
+  },
+  "section.set.err.empty": {
+    "zh-CN": "不能是空的",
+    "zh-TW": "不能是空的",
+    "en": "Must not be empty",
+    "ja": "空にはできません",
+    "ko": "비워 둘 수 없습니다"
+  },
+  "section.set.err.notAUrl": {
+    "zh-CN": "必须是一个 http:// 或 https:// 的地址",
+    "zh-TW": "必須是一個 http:// 或 https:// 的位址",
+    "en": "Must be an http:// or https:// URL",
+    "ja": "http:// または https:// の URL である必要があります",
+    "ko": "http:// 또는 https:// 주소여야 합니다"
+  },
+  "section.set.err.gatewayTokenRequired": {
+    "zh-CN": "两边都没有网关口令，这份配置装载不起来",
+    "zh-TW": "兩邊都沒有閘道口令，這份設定裝載不起來",
+    "en": "Neither side provides a gateway token, so this configuration cannot load",
+    "ja": "どちらにもゲートウェイトークンが無く、この設定は読み込めません",
+    "ko": "양쪽 모두 게이트웨이 토큰이 없어 이 설정을 로드할 수 없습니다"
+  },
+  "section.set.err.whitespacePadded": {
+    "zh-CN": "首尾有空白。带空白的口令客户端永远送不出来，症状是「口令明明是对的却一直 401」",
+    "zh-TW": "首尾有空白。帶空白的口令客戶端永遠送不出來，症狀是「口令明明是對的卻一直 401」",
+    "en": "Leading or trailing whitespace. A padded token can never be sent by a client — the symptom is “the token is right but everything 401s”",
+    "ja": "前後に空白があります。空白付きのトークンはクライアントから送れず、「正しいはずなのに 401 が続く」症状になります",
+    "ko": "앞뒤에 공백이 있습니다. 공백이 붙은 토큰은 클라이언트가 보낼 수 없어 “토큰이 맞는데 계속 401”이 됩니다"
+  },
+  "section.set.err.notSendable": {
+    "zh-CN": "含有送不出去的字符（只收可打印 ASCII）",
+    "zh-TW": "含有送不出去的字元（只收可列印 ASCII）",
+    "en": "Contains characters that cannot be sent (printable ASCII only)",
+    "ja": "送信できない文字が含まれています（印字可能な ASCII のみ）",
+    "ko": "전송할 수 없는 문자가 있습니다(출력 가능한 ASCII만 허용)"
+  },
+  "section.set.err.tooShort": {
+    "zh-CN": "太短了，至少要 {min} 个字符 —— 本网关没有任何登录限速，口令熵就是唯一的防线",
+    "zh-TW": "太短了，至少要 {min} 個字元 —— 本閘道沒有任何登入限速，口令熵就是唯一的防線",
+    "en": "Too short; at least {min} characters are required — this gateway has no login rate limit, so token entropy is the only defence",
+    "ja": "短すぎます。最低 {min} 文字必要です —— 本ゲートウェイにはログイン制限が無く、トークンのエントロピーが唯一の防御です",
+    "ko": "너무 짧습니다. 최소 {min}자가 필요합니다 — 이 게이트웨이에는 로그인 제한이 없어 토큰 엔트로피가 유일한 방어선입니다"
+  },
+  "section.set.err.sameAsAdminToken": {
+    "zh-CN": "不能与管理口令相同：那样管理面会当场把自己锁死，连改回去的那一次保存也会失败",
+    "zh-TW": "不能與管理口令相同：那樣管理面會當場把自己鎖死，連改回去的那一次儲存也會失敗",
+    "en": "Must not equal the admin token: the admin plane would lock itself out, and even the save that undoes it would fail",
+    "ja": "管理トークンと同一にはできません：管理面が自らをロックアウトし、元に戻す保存すら失敗します",
+    "ko": "관리자 토큰과 같을 수 없습니다: 관리 화면이 스스로 잠기고, 되돌리는 저장조차 실패합니다"
+  },
+  "section.set.err.configUnloadable": {
+    "zh-CN": "存储里那份配置读得出来，却构造不出一份合法配置，而逐字段判据说不出是哪一格",
+    "zh-TW": "儲存裡那份設定讀得出來，卻建構不出一份合法設定，而逐欄位判據說不出是哪一格",
+    "en": "The stored configuration can be read but yields no valid config, and the per-field checks cannot say which cell is at fault",
+    "ja": "保存された設定は読めますが有効な設定にならず、項目ごとの判定でも原因を特定できません",
+    "ko": "저장된 설정은 읽히지만 유효한 설정이 되지 않으며, 항목별 판정으로도 원인을 특정할 수 없습니다"
+  },
+  "section.set.examplesTitle": {
+    "zh-CN": "怎么调这个网关",
+    "zh-TW": "怎麼呼叫這個閘道",
+    "en": "How to call this gateway",
+    "ja": "このゲートウェイの呼び出し方",
+    "ko": "이 게이트웨이 호출 방법"
+  },
+  "section.set.examplesDesc": {
+    "zh-CN": "下面这段是从服务端的协议目录现拼的，口令一律画成占位符 —— 复制之前请自己换成真的。",
+    "zh-TW": "下面這段是從伺服器的協定目錄現拼的，口令一律畫成佔位符 —— 複製之前請自己換成真的。",
+    "en": "The snippet below is assembled from the server-side protocol catalogue; the token is always a placeholder — substitute your own before using it.",
+    "ja": "以下のスニペットはサーバー側のプロトコルカタログから生成しています。トークンは常にプレースホルダです —— 使う前にご自分の値に置き換えてください。",
+    "ko": "아래 스니펫은 서버의 프로토콜 카탈로그에서 생성됩니다. 토큰은 항상 자리표시자이니 사용 전에 실제 값으로 바꾸세요."
+  },
+  "section.set.examplesProtocol": {
+    "zh-CN": "选协议",
+    "zh-TW": "選協定",
+    "en": "Protocol",
+    "ja": "プロトコルを選択",
+    "ko": "프로토콜 선택"
+  },
+  "section.set.examplesLang": {
+    "zh-CN": "选形态",
+    "zh-TW": "選形態",
+    "en": "Form",
+    "ja": "形式を選択",
+    "ko": "형식 선택"
+  },
+  "section.set.lang.curl": {
+    "zh-CN": "命令行",
+    "zh-TW": "命令列",
+    "en": "curl",
+    "ja": "コマンドライン",
+    "ko": "명령줄"
+  },
+  "section.set.lang.python": {
+    "zh-CN": "Python",
+    "zh-TW": "Python 版",
+    "en": "Python 3",
+    "ja": "Python 版",
+    "ko": "Python 예제"
+  },
+  "section.set.lang.node": {
+    "zh-CN": "Node.js",
+    "zh-TW": "Node.js 版",
+    "en": "Node.js (fetch)",
+    "ja": "Node.js 版",
+    "ko": "Node.js 예제"
+  },
+  "section.set.dangerTitle": {
+    "zh-CN": "危险区",
+    "zh-TW": "危險區",
+    "en": "Danger zone",
+    "ja": "危険な操作",
+    "ko": "위험 구역"
+  },
+  "section.set.dangerDesc": {
+    "zh-CN": "重置只动存储里那一把 config 键，其余业务数据（账号池、对外密钥、事件、用量）一个字节都不动。",
+    "zh-TW": "重設只動儲存裡那一把 config 鍵，其餘業務資料（帳號池、對外金鑰、事件、用量）一個位元組都不動。",
+    "en": "Resetting touches only the stored config key; account pool, issued keys, events and usage data are left untouched.",
+    "ja": "リセットは保存された config キーのみを対象とし、アカウントプール・発行済みキー・イベント・利用統計には触れません。",
+    "ko": "초기화는 저장된 config 키만 대상으로 하며 계정 풀·발급 키·이벤트·사용량 데이터는 건드리지 않습니다."
+  },
+  "section.set.resetBtn": {
+    "zh-CN": "重置存储里那份配置",
+    "zh-TW": "重設儲存裡那份設定",
+    "en": "Reset the stored configuration",
+    "ja": "保存された設定をリセット",
+    "ko": "저장된 설정 초기화"
+  },
+  "section.set.resetTitle": {
+    "zh-CN": "重置配置",
+    "zh-TW": "重設設定",
+    "en": "Reset configuration",
+    "ja": "設定のリセット",
+    "ko": "설정 초기화"
+  },
+  "section.set.resetConfirm": {
+    "zh-CN": "这一步不可撤销：存储里那份配置会被整把抹掉，生效值回落到环境变量与内置默认值。",
+    "zh-TW": "這一步不可撤銷：儲存裡那份設定會被整把抹掉，生效值回落到環境變數與內建預設值。",
+    "en": "This cannot be undone: the stored configuration is wiped and effective values fall back to environment variables and built-in defaults.",
+    "ja": "この操作は取り消せません：保存された設定は消去され、実効値は環境変数と既定値に戻ります。",
+    "ko": "되돌릴 수 없습니다: 저장된 설정이 지워지고 실효 값은 환경 변수와 기본값으로 돌아갑니다."
+  },
+  "section.set.resetSafe": {
+    "zh-CN": "重置之后这份配置仍然装载得起来。",
+    "zh-TW": "重設之後這份設定仍然裝載得起來。",
+    "en": "After the reset the configuration will still load.",
+    "ja": "リセット後も設定は読み込めます。",
+    "ko": "초기화 후에도 설정은 로드됩니다."
+  },
+  "section.set.resetWillBreak": {
+    "zh-CN": "⚠️ 重置之后这份配置会装载不起来，原因如下：",
+    "zh-TW": "⚠️ 重設之後這份設定會裝載不起來，原因如下：",
+    "en": "⚠️ After the reset the configuration will fail to load, because:",
+    "ja": "⚠️ リセット後は設定を読み込めなくなります。理由：",
+    "ko": "⚠️ 초기화 후에는 설정을 로드할 수 없습니다. 이유:"
+  },
+  "section.set.resetDone": {
+    "zh-CN": "已重置。生效值回落到环境变量与内置默认值。",
+    "zh-TW": "已重設。生效值回落到環境變數與內建預設值。",
+    "en": "Reset done. Effective values fell back to environment variables and built-in defaults.",
+    "ja": "リセットしました。実効値は環境変数と既定値に戻りました。",
+    "ko": "초기화했습니다. 실효 값이 환경 변수와 기본값으로 돌아갔습니다."
+  },
+  "section.set.resetDoneLost": {
+    "zh-CN": "已重置。有 {n} 把凭据从此变成「未配置」—— 请立刻补回来，否则下一次冷启动会失败。",
+    "zh-TW": "已重設。有 {n} 把憑據從此變成「未設定」—— 請立刻補回來，否則下一次冷啟動會失敗。",
+    "en": "Reset done. {n} secret(s) are now unconfigured — put them back now or the next cold start will fail.",
+    "ja": "リセットしました。{n} 件のシークレットが未設定になりました —— すぐ入れ直さないと次回のコールドスタートが失敗します。",
+    "ko": "초기화했습니다. 비밀 값 {n}건이 미설정 상태가 되었습니다 — 즉시 복구하지 않으면 다음 콜드 스타트가 실패합니다."
+  },
+  "section.usg.title": {
+    "zh-CN": "使用统计",
+    "zh-TW": "使用統計",
+    "en": "Usage Statistics",
+    "ja": "利用統計",
+    "ko": "사용 통계"
+  },
+  "section.usg.refresh": {
+    "zh-CN": "刷新",
+    "zh-TW": "重新整理",
+    "en": "Refresh",
+    "ja": "更新",
+    "ko": "새로고침"
+  },
+  "section.usg.loading": {
+    "zh-CN": "正在读取…",
+    "zh-TW": "正在讀取…",
+    "en": "Loading…",
+    "ja": "読み込み中…",
+    "ko": "불러오는 중…"
+  },
+  "section.usg.loadFailedHttp": {
+    "zh-CN": "这一份统计没读出来（接口返回了错误）。屏幕上的破折号表示「不知道」，不是 0。",
+    "zh-TW": "這一份統計沒讀出來（介面回傳了錯誤）。畫面上的破折號表示「不知道」，不是 0。",
+    "en": "This report could not be read (the endpoint returned an error). The dashes mean “unknown”, not zero.",
+    "ja": "この統計を取得できませんでした（エンドポイントがエラーを返しました）。ダッシュは「不明」であり 0 ではありません。",
+    "ko": "이 통계를 읽지 못했습니다(엔드포인트가 오류를 반환). 대시는 “알 수 없음”이며 0이 아닙니다."
+  },
+  "section.usg.loadFailedNetwork": {
+    "zh-CN": "这一份统计没读出来（请求没发出去或没回来）。屏幕上的破折号表示「不知道」，不是 0。",
+    "zh-TW": "這一份統計沒讀出來（請求沒發出去或沒回來）。畫面上的破折號表示「不知道」，不是 0。",
+    "en": "This report could not be read (the request never completed). The dashes mean “unknown”, not zero.",
+    "ja": "この統計を取得できませんでした（リクエストが完了しませんでした）。ダッシュは「不明」であり 0 ではありません。",
+    "ko": "이 통계를 읽지 못했습니다(요청이 완료되지 않음). 대시는 “알 수 없음”이며 0이 아닙니다."
+  },
+  "section.usg.approxNote": {
+    "zh-CN": "所有计数都带 ≈：同一天里多个副本各写各的槽位，超过槽位数时会互相覆盖，统计只保证「不多报」。",
+    "zh-TW": "所有計數都帶 ≈：同一天裡多個副本各寫各的槽位，超過槽位數時會互相覆蓋，統計只保證「不多報」。",
+    "en": "Every count carries ≈: replicas write into a fixed number of per-day slots and overwrite each other beyond that, so these numbers are lower bounds.",
+    "ja": "すべての件数に ≈ が付きます：1 日あたりのスロット数を超えるとレプリカ同士が上書きするため、この数値は下限です。",
+    "ko": "모든 집계에 ≈ 가 붙습니다: 하루당 슬롯 수를 넘으면 복제본끼리 덮어쓰므로 이 수치는 하한값입니다."
+  },
+  "section.usg.incompleteNote": {
+    "zh-CN": "这份数字是不完整的：有一部分分片是畸形的，已经被丢掉。",
+    "zh-TW": "這份數字是不完整的：有一部分分片是畸形的，已經被丟掉。",
+    "en": "These numbers are incomplete: some shards were malformed and had to be discarded.",
+    "ja": "この数値は不完全です：一部のシャードが壊れており破棄されました。",
+    "ko": "이 수치는 불완전합니다: 일부 샤드가 손상되어 버려졌습니다."
+  },
+  "section.usg.card.requests": {
+    "zh-CN": "请求数",
+    "zh-TW": "請求數",
+    "en": "Requests",
+    "ja": "リクエスト数",
+    "ko": "요청 수"
+  },
+  "section.usg.card.successRate": {
+    "zh-CN": "成功率",
+    "zh-TW": "成功率",
+    "en": "Success rate",
+    "ja": "成功した割合",
+    "ko": "성공률"
+  },
+  "section.usg.card.errorRate": {
+    "zh-CN": "错误率",
+    "zh-TW": "錯誤率",
+    "en": "Error rate",
+    "ja": "エラー率",
+    "ko": "오류율"
+  },
+  "section.usg.card.avgLatency": {
+    "zh-CN": "平均延迟（只算成功请求）",
+    "zh-TW": "平均延遲（只算成功請求）",
+    "en": "Average latency (successful requests only)",
+    "ja": "平均レイテンシ（成功リクエストのみ）",
+    "ko": "평균 지연 시간(성공한 요청만)"
+  },
+  "section.usg.card.tokens": {
+    "zh-CN": "token 合计",
+    "zh-TW": "token 合計",
+    "en": "Total tokens",
+    "ja": "トークン合計",
+    "ko": "토큰 합계"
+  },
+  "section.usg.card.streaming": {
+    "zh-CN": "流式请求数",
+    "zh-TW": "串流請求數",
+    "en": "Streaming requests",
+    "ja": "ストリーミング要求数",
+    "ko": "스트리밍 요청 수"
+  },
+  "section.usg.cell.none": {
+    "zh-CN": "这一次读成功了，只是这一段没有可用的样本",
+    "zh-TW": "這一次讀成功了，只是這一段沒有可用的樣本",
+    "en": "The read succeeded; this window simply has no usable sample",
+    "ja": "読み取りは成功しましたが、この期間には使えるサンプルがありません",
+    "ko": "읽기는 성공했지만 이 구간에는 사용할 표본이 없습니다"
+  },
+  "section.usg.cell.noneNoShards": {
+    "zh-CN": "这段时间还没有任何分片落盘，「有没有样本」正是分不出来的那件事",
+    "zh-TW": "這段時間還沒有任何分片落盤，「有沒有樣本」正是分不出來的那件事",
+    "en": "No shard has been persisted for this window, so whether samples exist is exactly what we cannot tell",
+    "ja": "この期間はシャードが 1 つも保存されておらず、サンプルの有無こそが判別できない点です",
+    "ko": "이 구간에는 저장된 샤드가 하나도 없어, 표본 존재 여부 자체를 알 수 없습니다"
+  },
+  "section.usg.cell.unknown": {
+    "zh-CN": "这一块压根没读出来 —— 这是「不知道」，不是 0",
+    "zh-TW": "這一塊壓根沒讀出來 —— 這是「不知道」，不是 0",
+    "en": "This block could not be read at all — it means “unknown”, not zero",
+    "ja": "このブロックはまったく読み取れませんでした —— 「不明」であり 0 ではありません",
+    "ko": "이 블록은 전혀 읽지 못했습니다 — “알 수 없음”이지 0이 아닙니다"
+  },
+  "section.usg.msValue": {
+    "zh-CN": "{n} 毫秒",
+    "zh-TW": "{n} 毫秒",
+    "en": "{n} ms",
+    "ja": "{n} ミリ秒",
+    "ko": "{n} 밀리초"
+  },
+  "section.usg.metric": {
+    "zh-CN": "度量",
+    "zh-TW": "度量",
+    "en": "Metric",
+    "ja": "指標",
+    "ko": "지표"
+  },
+  "section.usg.metric.requests": {
+    "zh-CN": "请求",
+    "zh-TW": "請求",
+    "en": "Requests",
+    "ja": "リクエスト",
+    "ko": "요청"
+  },
+  "section.usg.metric.tokens": {
+    "zh-CN": "token",
+    "zh-TW": "權杖",
+    "en": "Tokens",
+    "ja": "トークン",
+    "ko": "토큰"
+  },
+  "section.usg.metric.errors": {
+    "zh-CN": "错误",
+    "zh-TW": "錯誤",
+    "en": "Errors",
+    "ja": "エラー",
+    "ko": "오류"
+  },
+  "section.usg.timeRange": {
+    "zh-CN": "时间范围",
+    "zh-TW": "時間範圍",
+    "en": "Time range",
+    "ja": "期間",
+    "ko": "기간"
+  },
+  "section.usg.range.d1": {
+    "zh-CN": "今天",
+    "zh-TW": "今天",
+    "en": "Today",
+    "ja": "本日",
+    "ko": "오늘"
+  },
+  "section.usg.range.d3": {
+    "zh-CN": "3 天",
+    "zh-TW": "3 天",
+    "en": "3 days",
+    "ja": "3 日間",
+    "ko": "3일"
+  },
+  "section.usg.range.d7": {
+    "zh-CN": "7 天",
+    "zh-TW": "7 天",
+    "en": "7 days",
+    "ja": "7 日間",
+    "ko": "7일"
+  },
+  "section.usg.range.d30": {
+    "zh-CN": "30 天",
+    "zh-TW": "30 天",
+    "en": "30 days",
+    "ja": "30 日間",
+    "ko": "30일"
+  },
+  "section.usg.chart.alt": {
+    "zh-CN": "按 UTC 日分组的{metric}柱状图，共 {n} 天",
+    "zh-TW": "按 UTC 日分組的{metric}長條圖，共 {n} 天",
+    "en": "Bar chart of {metric} grouped by UTC day, {n} days total",
+    "ja": "UTC 日ごとの{metric}棒グラフ、全 {n} 日",
+    "ko": "UTC 일 단위 {metric} 막대그래프, 총 {n}일"
+  },
+  "section.usg.chart.off": {
+    "zh-CN": "这个部署没有打开用量统计，所以根本没有在记账。",
+    "zh-TW": "這個部署沒有打開用量統計，所以根本沒有在記帳。",
+    "en": "Usage statistics are switched off in this deployment, so nothing is being recorded at all.",
+    "ja": "このデプロイでは利用統計が無効なため、そもそも記録されていません。",
+    "ko": "이 배포에서는 사용 통계가 꺼져 있어 아무것도 기록되지 않습니다."
+  },
+  "section.usg.chart.unavailable": {
+    "zh-CN": "这段时间的数据没读出来 —— 这不是「没有流量」。",
+    "zh-TW": "這段時間的資料沒讀出來 —— 這不是「沒有流量」。",
+    "en": "The data for this window could not be read — this is not “no traffic”.",
+    "ja": "この期間のデータを読み取れませんでした —— 「トラフィックが無い」という意味ではありません。",
+    "ko": "이 구간의 데이터를 읽지 못했습니다 — “트래픽 없음”이라는 뜻이 아닙니다."
+  },
+  "section.usg.chart.empty": {
+    "zh-CN": "这段区间里没有可以画的日子。",
+    "zh-TW": "這段區間裡沒有可以畫的日子。",
+    "en": "There is no day to plot in this window.",
+    "ja": "この期間には描画できる日がありません。",
+    "ko": "이 구간에는 그릴 날짜가 없습니다."
+  },
+  "section.usg.dailyTable": {
+    "zh-CN": "逐日汇总（点一行下钻）",
+    "zh-TW": "逐日彙總（點一行下鑽）",
+    "en": "Daily breakdown (click a row to drill down)",
+    "ja": "日別集計（行をクリックしてドリルダウン）",
+    "ko": "일별 집계(행을 클릭하면 드릴다운)"
+  },
+  "section.usg.col.date": {
+    "zh-CN": "日期（UTC）",
+    "zh-TW": "日期（UTC）",
+    "en": "Date (UTC)",
+    "ja": "日付（UTC）",
+    "ko": "날짜(UTC)"
+  },
+  "section.usg.col.requests": {
+    "zh-CN": "请求",
+    "zh-TW": "請求",
+    "en": "Req.",
+    "ja": "要求",
+    "ko": "요청"
+  },
+  "section.usg.col.success": {
+    "zh-CN": "成功",
+    "zh-TW": "成功",
+    "en": "OK",
+    "ja": "成功数",
+    "ko": "성공"
+  },
+  "section.usg.col.errors": {
+    "zh-CN": "错误",
+    "zh-TW": "錯誤",
+    "en": "Err.",
+    "ja": "エラー",
+    "ko": "오류"
+  },
+  "section.usg.col.tokens": {
+    "zh-CN": "token",
+    "zh-TW": "權杖",
+    "en": "Tokens",
+    "ja": "トークン",
+    "ko": "토큰"
+  },
+  "section.usg.col.streaming": {
+    "zh-CN": "流式",
+    "zh-TW": "串流",
+    "en": "Stream",
+    "ja": "ストリーム",
+    "ko": "스트림"
+  },
+  "section.usg.table.none": {
+    "zh-CN": "这段区间里没有可以列出的日子（读成功了，就是没有）。",
+    "zh-TW": "這段區間裡沒有可以列出的日子（讀成功了，就是沒有）。",
+    "en": "No day to list in this window (the read succeeded; there simply is none).",
+    "ja": "この期間に一覧できる日はありません（読み取りは成功、単に存在しません）。",
+    "ko": "이 구간에 나열할 날짜가 없습니다(읽기는 성공했고 단지 없습니다)."
+  },
+  "section.usg.table.unavailable": {
+    "zh-CN": "这张表读不出来 —— 这不是「这几天没有请求」。",
+    "zh-TW": "這張表讀不出來 —— 這不是「這幾天沒有請求」。",
+    "en": "This table could not be read — it does not mean “no requests on those days”.",
+    "ja": "この表は読み取れませんでした —— 「その期間にリクエストが無い」という意味ではありません。",
+    "ko": "이 표를 읽지 못했습니다 — “해당 기간에 요청이 없었다”는 뜻이 아닙니다."
+  },
+  "section.usg.drill.open": {
+    "zh-CN": "下钻查看 {date}",
+    "zh-TW": "下鑽檢視 {date}",
+    "en": "Drill into {date}",
+    "ja": "{date} をドリルダウン",
+    "ko": "{date} 드릴다운"
+  },
+  "section.usg.drill.title": {
+    "zh-CN": "{date} 的分维明细",
+    "zh-TW": "{date} 的分維明細",
+    "en": "Breakdown for {date}",
+    "ja": "{date} の内訳",
+    "ko": "{date} 세부 분해"
+  },
+  "section.usg.drill.close": {
+    "zh-CN": "收起",
+    "zh-TW": "收合",
+    "en": "Collapse",
+    "ja": "折りたたむ",
+    "ko": "접기"
+  },
+  "section.usg.drill.off": {
+    "zh-CN": "这个部署没有打开用量统计，这一天没有任何记账。",
+    "zh-TW": "這個部署沒有打開用量統計，這一天沒有任何記帳。",
+    "en": "Usage statistics are switched off in this deployment; nothing was recorded for this day.",
+    "ja": "このデプロイでは利用統計が無効で、この日の記録はありません。",
+    "ko": "이 배포에서는 사용 통계가 꺼져 있어 이 날짜의 기록이 없습니다."
+  },
+  "section.usg.drill.unavailable": {
+    "zh-CN": "这一天的明细没读出来 —— 四张表都是「不知道」，不是 0。",
+    "zh-TW": "這一天的明細沒讀出來 —— 四張表都是「不知道」，不是 0。",
+    "en": "The breakdown for this day could not be read — all four tables are “unknown”, not zero.",
+    "ja": "この日の内訳を読み取れませんでした —— 4 つの表はすべて「不明」であり 0 ではありません。",
+    "ko": "이 날짜의 분해를 읽지 못했습니다 — 네 개 표 모두 “알 수 없음”이며 0이 아닙니다."
+  },
+  "section.usg.drill.empty": {
+    "zh-CN": "这一维在这一天没有记录。",
+    "zh-TW": "這一維在這一天沒有記錄。",
+    "en": "This dimension has no record for that day.",
+    "ja": "この軸にはこの日の記録がありません。",
+    "ko": "이 축에는 해당 날짜의 기록이 없습니다."
+  },
+  "section.usg.dim.hours": {
+    "zh-CN": "按小时",
+    "zh-TW": "按小時",
+    "en": "By hour",
+    "ja": "時間別",
+    "ko": "시간별"
+  },
+  "section.usg.dim.hours.col": {
+    "zh-CN": "小时（UTC）",
+    "zh-TW": "小時（UTC）",
+    "en": "Hour (UTC)",
+    "ja": "時刻（UTC）",
+    "ko": "시각(UTC)"
+  },
+  "section.usg.dim.byModel": {
+    "zh-CN": "按模型",
+    "zh-TW": "按模型",
+    "en": "By model",
+    "ja": "モデル別",
+    "ko": "모델별"
+  },
+  "section.usg.dim.byModel.col": {
+    "zh-CN": "模型",
+    "zh-TW": "模型",
+    "en": "Model",
+    "ja": "モデル",
+    "ko": "모델"
+  },
+  "section.usg.dim.byProtocol": {
+    "zh-CN": "按协议",
+    "zh-TW": "按協定",
+    "en": "By protocol",
+    "ja": "プロトコル別",
+    "ko": "프로토콜별"
+  },
+  "section.usg.dim.byProtocol.col": {
+    "zh-CN": "协议",
+    "zh-TW": "協定",
+    "en": "Protocol",
+    "ja": "プロトコル",
+    "ko": "프로토콜"
+  },
+  "section.usg.dim.byApiKey": {
+    "zh-CN": "按密钥",
+    "zh-TW": "按金鑰",
+    "en": "By API key",
+    "ja": "API キー別",
+    "ko": "API 키별"
+  },
+  "section.usg.dim.byApiKey.col": {
+    "zh-CN": "对外 API 密钥",
+    "zh-TW": "對外 API 金鑰",
+    "en": "Outbound API key",
+    "ja": "発行済み API キー",
+    "ko": "발급한 API 키"
+  },
+  "section.usg.hourLabel": {
+    "zh-CN": "{h} 时",
+    "zh-TW": "{h} 時",
+    "en": "{h}:00",
+    "ja": "{h} 時台",
+    "ko": "{h}시대"
+  },
+  "section.usg.key.master": {
+    "zh-CN": "主口令（不是一把签发出去的密钥）",
+    "zh-TW": "主口令（不是一把簽發出去的金鑰）",
+    "en": "Master token (not an issued key)",
+    "ja": "マスタートークン（発行済みキーではありません）",
+    "ko": "마스터 토큰(발급된 키가 아님)"
+  },
+  "section.usg.key.unattributed": {
+    "zh-CN": "归不到任何一把密钥的流量",
+    "zh-TW": "歸不到任何一把金鑰的流量",
+    "en": "Traffic that could not be attributed to any key",
+    "ja": "どのキーにも紐づけられなかったトラフィック",
+    "ko": "어떤 키에도 귀속되지 않은 트래픽"
+  },
+  "section.usg.key.other": {
+    "zh-CN": "其它（已被合并的长尾）",
+    "zh-TW": "其他（已被合併的長尾）",
+    "en": "Other (merged long tail)",
+    "ja": "その他（まとめられたロングテール）",
+    "ko": "기타(병합된 롱테일)"
+  },
+  "section.usg.note.tier2Off": {
+    "zh-CN": "这个部署没有打开用量统计（Tier-2），所以根本没有在记账。",
+    "zh-TW": "這個部署沒有打開用量統計（Tier-2），所以根本沒有在記帳。",
+    "en": "Usage statistics (Tier-2) are off in this deployment, so nothing is being recorded.",
+    "ja": "このデプロイでは利用統計（Tier-2）が無効なため、記録されていません。",
+    "ko": "이 배포에서는 사용 통계(Tier-2)가 꺼져 있어 기록되지 않습니다."
+  },
+  "section.usg.note.clockUnavailable": {
+    "zh-CN": "服务端时钟给不出一个有限数字，这一段的区间无从算起。",
+    "zh-TW": "伺服器時鐘給不出一個有限數字，這一段的區間無從算起。",
+    "en": "The server clock did not yield a finite value, so the window cannot be computed.",
+    "ja": "サーバー時計が有限の値を返さず、期間を計算できません。",
+    "ko": "서버 시계가 유한한 값을 주지 못해 구간을 계산할 수 없습니다."
+  },
+  "section.usg.note.readFailed": {
+    "zh-CN": "读存储失败，这一整块数字都是「不知道」——去看容器日志。",
+    "zh-TW": "讀儲存失敗，這一整塊數字都是「不知道」——去看容器日誌。",
+    "en": "Reading storage failed; this entire block is “unknown” — check the container logs.",
+    "ja": "ストレージの読み取りに失敗しました。このブロック全体が「不明」です —— コンテナログを確認してください。",
+    "ko": "스토리지 읽기에 실패했습니다. 이 블록 전체가 “알 수 없음”입니다 — 컨테이너 로그를 확인하세요."
+  },
+  "section.usg.note.rangeClamped": {
+    "zh-CN": "你要的区间被缩小过：有一部分早于保留期，或者晚于服务端此刻。",
+    "zh-TW": "你要的區間被縮小過：有一部分早於保留期，或者晚於伺服器此刻。",
+    "en": "The requested window was narrowed: part of it falls outside the retention period or lies in the future.",
+    "ja": "要求した期間は縮められました：保持期間より前、またはサーバーの現在より先の部分があります。",
+    "ko": "요청한 구간이 축소되었습니다: 일부가 보존 기간 이전이거나 서버 현재보다 미래입니다."
+  },
+  "section.usg.note.dateOutOfRetention": {
+    "zh-CN": "这一天整个落在保留期之外 —— 不是那天没有请求，是那天已经不在了。",
+    "zh-TW": "這一天整個落在保留期之外 —— 不是那天沒有請求，是那天已經不在了。",
+    "en": "That day is entirely outside the retention period — it is not that there were no requests, the day is simply gone.",
+    "ja": "その日は保持期間の外です —— リクエストが無かったのではなく、その日自体が残っていません。",
+    "ko": "그 날짜는 보존 기간 밖입니다 — 요청이 없었던 것이 아니라 그 날짜 자체가 남아 있지 않습니다."
+  },
+  "section.usg.note.noShards": {
+    "zh-CN": "读成功了，但这段区间一条分片都还没落盘（可能没流量，也可能实例没活到一次落盘）。",
+    "zh-TW": "讀成功了，但這段區間一條分片都還沒落盤（可能沒流量，也可能實例沒活到一次落盤）。",
+    "en": "The read succeeded, but no shard has been persisted for this window (either no traffic, or no instance survived long enough to flush).",
+    "ja": "読み取りは成功しましたが、この期間のシャードが 1 つも保存されていません（トラフィックが無いか、インスタンスが書き込み前に終了した可能性）。",
+    "ko": "읽기는 성공했지만 이 구간에 저장된 샤드가 없습니다(트래픽이 없었거나 인스턴스가 저장 전에 종료됨)."
+  },
+  "section.usg.note.allMalformed": {
+    "zh-CN": "读到了分片，但每一个都是畸形的 —— 去查是谁往存储里写了这些东西。",
+    "zh-TW": "讀到了分片，但每一個都是畸形的 —— 去查是誰往儲存裡寫了這些東西。",
+    "en": "Shards were found but every one of them is malformed — find out who wrote them into storage.",
+    "ja": "シャードは見つかりましたがすべて壊れています —— 誰がストレージに書き込んだのか調べてください。",
+    "ko": "샤드를 찾았지만 모두 손상되었습니다 — 누가 스토리지에 기록했는지 확인하세요."
+  },
+  "section.usg.note.partialMalformed": {
+    "zh-CN": "一部分分片是畸形的，这份数字不完整 —— 去查是谁往存储里写了这些东西。",
+    "zh-TW": "一部分分片是畸形的，這份數字不完整 —— 去查是誰往儲存裡寫了這些東西。",
+    "en": "Some shards are malformed, so these numbers are incomplete — find out who wrote them into storage.",
+    "ja": "一部のシャードが壊れており、この数値は不完全です —— 誰が書き込んだのか調べてください。",
+    "ko": "일부 샤드가 손상되어 수치가 불완전합니다 — 누가 기록했는지 확인하세요."
+  },
+  "section.usg.note.noRequestDetail": {
+    "zh-CN": "这里给的是聚合，没有逐请求流水；要逐请求粒度请看容器 stdout。",
+    "zh-TW": "這裡給的是彙總，沒有逐請求流水；要逐請求粒度請看容器 stdout。",
+    "en": "Only aggregates are available here; for per-request detail read the container stdout.",
+    "ja": "ここでは集計のみを提供します。リクエスト単位の詳細はコンテナの stdout を参照してください。",
+    "ko": "여기서는 집계만 제공합니다. 요청 단위 상세는 컨테이너 stdout을 보세요."
+  },
+  "section.usg.note.unknown": {
+    "zh-CN": "后端报了一条面板还不认识的说明。",
+    "zh-TW": "後端回了一條面板還不認識的說明。",
+    "en": "The backend reported a note this panel does not recognise yet.",
+    "ja": "パネルがまだ認識していない注記がバックエンドから返されました。",
+    "ko": "패널이 아직 모르는 안내를 백엔드가 반환했습니다."
+  }
 };

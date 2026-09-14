@@ -1,11 +1,15 @@
 /*
- * 全站唯一的经典脚本：<head> 里同步执行、**不许加 defer / type="module"**。
+ * 全站唯一的经典脚本：`<head>` 里同步执行、**不许加 defer / type="module"**。
  *
  * 模块脚本天然 defer，会在 body 绘制之后才跑，于是每次刷新都能看见一次亮色闪白
  *（或一次错误的语言）。这条约束写在这里，改动前先读它。
  *
- * 它也是全站唯一允许在 CSS 之前加载的脚本——主题属性必须在样式表生效前落到
- * <html> 上，否则 :root[data-theme="dark"] 那一整组覆盖会晚一帧。
+ * 它也是全站唯一允许在 CSS 之前加载的脚本 —— 主题属性必须在样式表生效前落到
+ * `<html>` 上，否则 `[data-theme="dark"]` 那一整组覆盖会晚一帧。
+ *
+ * ⚠️ **下面那两个字面量是 `js/pure/storage-keys.mjs` 里 `THEME_STORE` / `LANG_STORE`
+ * 的必然副本**：经典脚本没有 `import`，抄不了那个模块。这条缺口不靠自觉，靠
+ * `src/webui/mod.rs` 的 `boot_js_storage_key_literals_match_the_module` 那一格兜住。
  */
 (function () {
   try {

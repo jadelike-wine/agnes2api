@@ -1,120 +1,199 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- ⚠️ 这个色值是 `css/base.css` 里亮色 `--bg-secondary` 的**第二份拷贝**（`js/theme.js`
+     里深色那一份是第三份）。**不能写成 `var(--bg-secondary)`**：`theme-color` 的
+     content 是给浏览器 chrome（移动端地址栏）读的字符串，不走 CSS 变量解析。
+     三份的对账由 `src/webui/mod.rs` 的 `theme_color_matches_the_css_token` 那格钉着
+     —— 改了 base.css 而忘了这里（或反过来）会当场红。 -->
 <meta name="theme-color" content="#f8fafc">
 <title>agnes2api 管理后台</title>
-<!-- 站点图标 = **项目门面那张图**（docs/logo.png）缩到 32×32 之后内联的 data URI。
-     六份 README 的头部块摆的就是那张图；面板用同一张，项目才只有一副面孔。
-     **必须内联、必须是 data URI**：独立的二进制（`.png` / `.ico`）连生成器都过不去
-     （scripts/build-ui.mjs 的扩展名白名单），独立的 `.svg` 会以 image/svg+xml 挂在
-     /admin/ 下变成同源文档——两条都写在 admin-ui/README.md 的硬规则 2 里。
-     `<link rel="icon">` 走的是 CSP 的 img-src，而 src/ui/serve.ts 里那条策略写的是
-     `img-src 'self' data:` ⇒ 这条 data URI 是被现有策略明确允许的那一种。
-     ⚠️ **这串字节不许手改，也不许换成别的图**：它由 `node scripts/check-png.mjs --emit 32`
-     生成，同一个脚本每次跑都会把它解回像素、与 docs/logo.png 降采样 4 倍的结果逐字节
-     对账（`auditUiLogos()`）——换了图不重生成这里，门禁当场红。
-     32×32 是按显示尺寸挑的：标签页图标是 16 CSS 像素，2 倍屏正好 32 物理像素。
-     品牌标记那张 64×64 在 admin-ui/css/shell.css 里，同一张图、同一道判据。 -->
-<link rel="icon" href="data:image/png;base64,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">
-<!-- 唯一的经典脚本，必须同步、必须在 CSS 之前：防闪白 / 闪错语言。 -->
+
+<!-- 🔴🔴 **这里刻意没有 `<base href="/admin/">`，而 kiro2api 的同一份文件有。**
+     理由是硬的（06 §7.4 / 裁定 P-7）：本仓的面板响应带 CSP，而那条策略里有
+     `base-uri 'none'` ⇒ `<base>` 会被浏览器**静默忽略** ⇒ `css/base.css` 这种相对
+     路径解析成 `/css/base.css`（不是 `/admin/css/base.css`）⇒ **整份 CSS 与 JS 全部
+     404，屏幕上是一张没有样式、没有行为的裸 HTML。**
+     ⚠️ 这个故障形态长得**很像一个"环境问题"**（agnes 在 `file://` 那条路径上撞过
+     一次一模一样的），排查时容易往别处找。
+     ⇒ **本文件里每一个 href/src 都必须以 `/admin/` 开头**（或者是 data: / 绝对 URL），
+     由 `src/webui/mod.rs` 的 `index_html_has_no_base_tag_and_only_absolute_refs` 钉着。 -->
+
+<!-- 站点图标 = 项目门面那张图。**独立的 `logo.png`，不再内联 data URI**（裁定 P-13）：
+     内联那条规则的理由是 TS 版生成器的扩展名白名单，换 `rust-embed` 之后这个理由
+     消失了；而**禁止独立 `.svg`** 的理由（`image/svg+xml` 挂在 `/admin/` 下 =
+     一份可执行脚本的**同源文档**）与生成器无关，仍然成立、仍然有判据钉着。
+     `/favicon.ico` 由服务端指向同一份字节（浏览器不看 HTML 也会去取那一条）。 -->
+<link rel="icon" type="image/png" href="/admin/logo.png">
+<link rel="apple-touch-icon" href="/admin/logo.png">
+
+<!-- 🔴 **全站唯一的经典脚本，必须同步、必须在 CSS 之前、不许加 defer/type=module。**
+     模块脚本天然 defer，会在 body 绘制之后才跑 ⇒ 每次刷新闪一次白（或闪一次错语言）。
+     主题属性也必须在样式表生效前落到 <html> 上，否则 [data-theme="dark"] 那一整组
+     覆盖会晚一帧。 -->
 <script src="/admin/js/boot.js"></script>
+
 <link rel="stylesheet" href="/admin/css/base.css">
-<link rel="stylesheet" href="/admin/css/shell.css">
 <link rel="stylesheet" href="/admin/css/sections.css">
+<link rel="stylesheet" href="/admin/css/sections-manage.css">
+<link rel="stylesheet" href="/admin/css/sections-stats.css">
+<link rel="stylesheet" href="/admin/css/sections-tools.css">
+<link rel="stylesheet" href="/admin/css/sections-registrar.css">
 </head>
 <body>
-<div class="gate" id="gate">
-  <form class="gate-card" id="gate-form">
-    <!-- 登录闸的品牌区与主题切换。**主题切换在登录之前就得有**：`js/boot.js` 已经
-         按 localStorage 把 data-theme 落到 <html> 上了，深色用户看到的登录闸本来就是
-         深色的，而在这里改不了它——顶栏那颗按钮要登录之后才够得着。
-         ⚠️ **这里刻意没有语言下拉**：`js/i18n.js` 在模块加载时就读 localStorage 定好了
-         语言，登录闸的每一句文案（含下面那些 data-i18n）都已经按那个语言渲染，
-         所以语言在闸上是**可用**的；不放下拉是因为它与顶栏那个是同一份状态的第二个
-         入口，而闸上五种语言的文案本来就齐全，看不懂的人换不换得了语言不取决于这里。 -->
-    <div class="gate-head">
-      <span class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">agnes2api</span>
+<div class="container">
+
+  <!-- ===== 顶栏 ===== -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark">
+        <img class="brand-img" src="/admin/logo.png" alt="" aria-hidden="true">
       </span>
-      <button id="gate-theme-btn" class="icon-btn" type="button" data-i18n-title="shell.theme"></button>
+      <span>agnes2api</span>
     </div>
-    <h1 data-i18n="gate.title">agnes2api 管理后台</h1>
-    <p class="sub" data-i18n="gate.sub">请输入管理口令（ADMIN_TOKEN）</p>
-    <label for="gate-key" data-i18n="gate.label">管理口令</label>
-    <input id="gate-key" type="password" autocomplete="current-password"
-           data-i18n-ph="gate.placeholder" placeholder="ADMIN_TOKEN">
-    <button type="submit" data-i18n="gate.submit">进入</button>
-    <div class="err" id="gate-err" role="alert"></div>
+    <div class="header-spacer"></div>
+    <div class="header-actions">
+      <!-- 服务状态徽章。**是一颗 `<button>`，点一下重新探**（U-8 的合并裁定：
+           kiro 的 20 秒轮询 + agnes 的可点重探 + agnes 的「初始不假称」）。
+           🔴 **初始文案是「状态未知」而不是「运行中」**：这一刻还没探过。 -->
+      <button id="serverStatus" class="status-badge is-unknown" type="button"
+              data-i18n-title="header.statusHint">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-text" data-i18n="header.statusUnknown">状态未知</span>
+      </button>
+
+      <!-- 仓库链接。**是 `<a>` 不是 `<button>`**：中键开新标签、复制链接地址
+           这些只有真链接才有。 -->
+      <a id="githubLink" class="icon-btn" href="https://github.com/xwteam/agnes2api"
+         target="_blank" rel="noopener noreferrer" data-i18n-title="header.repo">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M 12 2 C 6.48 2 2 6.58 2 12.25 c 0 4.53 2.87 8.37 6.84 9.73 c 0.5 0.1 0.68 -0.22 0.68 -0.49 c 0 -0.24 -0.01 -0.87 -0.01 -1.71 c -2.78 0.62 -3.37 -1.37 -3.37 -1.37 c -0.45 -1.18 -1.11 -1.49 -1.11 -1.49 c -0.91 -0.64 0.07 -0.63 0.07 -0.63 c 1 0.07 1.53 1.06 1.53 1.06 c 0.89 1.56 2.34 1.11 2.91 0.85 c 0.09 -0.66 0.35 -1.11 0.63 -1.37 c -2.22 -0.26 -4.56 -1.14 -4.56 -5.06 c 0 -1.12 0.39 -2.03 1.03 -2.75 c -0.1 -0.26 -0.45 -1.3 0.1 -2.71 c 0 0 0.84 -0.28 2.75 1.05 a 9.36 9.36 0 0 1 2.5 -0.34 c 0.85 0 1.71 0.12 2.5 0.34 c 1.91 -1.33 2.75 -1.05 2.75 -1.05 c 0.55 1.41 0.2 2.45 0.1 2.71 c 0.64 0.72 1.03 1.63 1.03 2.75 c 0 3.93 -2.35 4.79 -4.58 5.05 c 0.36 0.32 0.68 0.94 0.68 1.9 c 0 1.37 -0.01 2.47 -0.01 2.81 c 0 0.27 0.18 0.6 0.69 0.49 A 10.04 10.04 0 0 0 22 12.25 C 22 6.58 17.52 2 12 2 z"></path>
+        </svg>
+      </a>
+
+      <!-- 语言。**自绘下拉 + 母语名**（U-14 对标 kiro）：原生 `<select>` 的下拉面板
+           在深色下跟不了主题，而 agnes 原来那个 select 的选项还是语言**代码**
+           （`zh-CN` / `ja`），对用户不可读。菜单项由 `js/app.js` 填。 -->
+      <div class="lang-wrap">
+        <button id="langBtn" class="icon-btn" type="button"
+                data-i18n-title="header.language" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M 12 2 a 15.3 15.3 0 0 1 4 10 a 15.3 15.3 0 0 1 -4 10 a 15.3 15.3 0 0 1 -4 -10 a 15.3 15.3 0 0 1 4 -10 z"></path>
+          </svg>
+          <span class="lang-label">简体中文</span>
+        </button>
+        <div id="langMenu" class="lang-menu"></div>
+      </div>
+
+      <!-- 主题。**两枚图标都在按钮里，切换只改 `style.display`，不重建节点**。
+           图标由 `js/app.js` 用 `js/ui.js` 的 `svgIcon()` 插进来（全站唯一那份造
+           SVG 的实现），这里刻意是空的 —— 在 HTML 里再手抄一份 path 就是第二份真源。
+           ⚠️ **空标签本身曾经就是缺陷**：只有 `data-i18n-title` 时屏幕上是个空方块。 -->
+      <button id="themeToggleBtn" class="icon-btn theme-toggle" type="button"
+              data-i18n-title="header.theme"></button>
+
+      <button id="logoutBtn" class="icon-btn" type="button">
+        <span data-i18n="nav.logout">退出登录</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== 主体：侧栏 + 内容 ===== -->
+  <div class="main-content">
+    <aside id="sidebar" class="sidebar">
+      <nav>
+        <!-- 每个导航项 = 一颗 emoji + 一个**自己占一个 span** 的文字。
+             🔴 文字必须自己占一个 `<span data-i18n>`：`js/i18n.js` 的 `apply()` 对
+             `[data-i18n]` 写的是 `textContent`，标在按钮上会把 emoji 一起抹掉。
+             ⚠️ 顺序与 id 照 kiro（裁定 P-6），agnes 的 `overview`/`keys`/`events`
+             三个名字退场；注册机排**第 8**（logs 与 settings 之间）——
+             「设置恒在最后」是 kiro 侧栏唯一一条肉眼可见的排序规律。
+             ⚠️ 注册机的图标是 ♻️ 不是 agnes 原来的 🤖：🤖 已经被 models 占用了。 -->
+        <button class="nav-item active" type="button" data-section="dashboard"><span class="nav-icon" aria-hidden="true">📊</span><span data-i18n="nav.dashboard">仪表盘</span></button>
+        <button class="nav-item" type="button" data-section="accounts"><span class="nav-icon" aria-hidden="true">👤</span><span data-i18n="nav.accounts">账号管理</span></button>
+        <button class="nav-item" type="button" data-section="models"><span class="nav-icon" aria-hidden="true">🤖</span><span data-i18n="nav.models">支持模型</span></button>
+        <button class="nav-item" type="button" data-section="apikeys"><span class="nav-icon" aria-hidden="true">🔑</span><span data-i18n="nav.apikeys">API 管理</span></button>
+        <button class="nav-item" type="button" data-section="playground"><span class="nav-icon" aria-hidden="true">🧪</span><span data-i18n="nav.playground">调试台</span></button>
+        <button class="nav-item" type="button" data-section="usage"><span class="nav-icon" aria-hidden="true">📈</span><span data-i18n="nav.usage">使用统计</span></button>
+        <button class="nav-item" type="button" data-section="logs"><span class="nav-icon" aria-hidden="true">📜</span><span data-i18n="nav.logs">实时日志</span></button>
+        <button class="nav-item" type="button" data-section="registrar"><span class="nav-icon" aria-hidden="true">♻️</span><span data-i18n="nav.registrar">注册机</span></button>
+        <button class="nav-item" type="button" data-section="settings"><span class="nav-icon" aria-hidden="true">⚙️</span><span data-i18n="nav.settings">设置</span></button>
+      </nav>
+    </aside>
+
+    <main id="content" class="content">
+      <!-- 九个空壳。每份 `js/sec-<name>.js` 只填自己那一个节点。
+           🔴 **id 不许改名**：路由按 `sec-<data-section>` 找节点，而
+           `src/webui/mod.rs` 的 `nine_sections_line_up_three_ways` 把
+           「`data-section` 集合 ↔ `#sec-*` 集合 ↔ 字典里的 `nav.*` 键」三方对齐钉住了。 -->
+      <section id="sec-dashboard" class="section active"></section>
+      <section id="sec-accounts" class="section"></section>
+      <section id="sec-models" class="section"></section>
+      <section id="sec-apikeys" class="section"></section>
+      <section id="sec-playground" class="section"></section>
+      <section id="sec-usage" class="section"></section>
+      <section id="sec-logs" class="section"></section>
+      <section id="sec-registrar" class="section"></section>
+      <section id="sec-settings" class="section"></section>
+    </main>
+  </div>
+</div>
+
+<!-- 移动端侧栏：汉堡 + 遮罩（≤900px 侧栏变 off-canvas 抽屉，U-12 对标 kiro）。 -->
+<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+<button id="sidebarToggle" class="sidebar-toggle" type="button" data-i18n-title="nav.menu">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <line x1="3" y1="6" x2="21" y2="6"></line>
+    <line x1="3" y1="12" x2="21" y2="12"></line>
+    <line x1="3" y1="18" x2="21" y2="18"></line>
+  </svg>
+</button>
+
+<!-- ===== 登录闸 ===== -->
+<!-- 🔴 **初始就带 `active`（= 可见），由 `js/app.js` 在验过口令之后才摘掉。**
+     反过来写（初始隐藏、验不过再显示）会让每一次冷启动都先闪一眼后台壳层
+     —— 那是 fail open 的方向：还没验过就先把界面给出去了。 -->
+<div id="loginOverlay" class="login-overlay active">
+  <form class="login-card" id="loginForm">
+    <div class="login-brand">
+      <span class="brand-mark">
+        <img class="brand-img" src="/admin/logo.png" alt="" aria-hidden="true">
+      </span>
+      <span>agnes2api</span>
+      <!-- 🔴 **主题切换在登录之前就得有**（U-5，kiro 的登录卡上没有这颗）：
+           `js/boot.js` 已经按 localStorage 把 data-theme 落到 <html> 上了，深色用户
+           看到的登录闸本来就是深色的，而顶栏那颗要**登录之后**才够得着。
+           ⚠️ **这里刻意没有语言下拉**：语言在模块加载时就定好了，闸上每一句文案
+           都已按那个语言渲染 ⇒ 语言在闸上是**可用**的；再放一个下拉只是同一份状态的
+           第二个入口。 -->
+      <button id="loginThemeBtn" class="icon-btn" type="button" data-i18n-title="header.theme"></button>
+    </div>
+    <div class="login-title" data-i18n="login.title">请输入管理口令</div>
+    <div class="form-group">
+      <label class="form-label" for="loginKeyInput" data-i18n="login.label">管理口令（ADMIN_TOKEN）</label>
+      <input id="loginKeyInput" class="form-control" type="password" autocomplete="current-password"
+             data-i18n-ph="login.keyPlaceholder" placeholder="ADMIN_TOKEN">
+      <div id="loginError" class="login-error" role="alert"></div>
+    </div>
+    <button id="loginSubmitBtn" class="btn btn-primary btn-block btn-lg" type="submit" data-i18n="login.submit">进入</button>
+    <div class="login-hint" data-i18n="login.hint">口令来自部署时配置的环境变量 ADMIN_TOKEN</div>
   </form>
 </div>
 
-<div class="shell" id="shell">
-  <!-- 顶栏。品牌 / 语言 / 主题 / 退出登录 / 仓库链接都挂在这里，侧栏只剩导航。
-       ⚠️ **刻意没有「重启」按钮**（kiro2api 的顶栏上有一个）：本网关的 Worker 形态
-       压根没有可重启的进程（概览页那几格自己写着「无常驻进程」），Node / Docker 形态
-       也没有任何自重启接口。点了没反应的按钮比没有按钮更糟。
-       ⚠️ 两颗图标按钮的图标由 `js/app.js` 用 `svgIcon()` 插进来，**这里刻意是空的**：
-       图标一律内联 SVG（admin-ui/README.md 硬规则 2），而 `js/ui.js` 的 `svgIcon()` 是
-       全站唯一那份构造 SVG 的实现，在 HTML 里再手抄一份 path 就是第二份真源。
-       ⚠️ **空标签本身曾经就是缺陷**：这两颗按钮以前只有 `data-i18n-title`（悬停才有
-       提示），`innerHTML` 是空串 ⇒ 屏幕上是两个 32×32 的空方块。 -->
-  <header class="topbar">
-    <!-- 品牌标记是一个空的 <span>，图画在 admin-ui/css/shell.css 的 `.brand-mark`
-         背景上（那张图就是 docs/logo.png 缩到 64×64）。**刻意不是 <img>**：顶栏与
-         登录闸两处标记共用 CSS 里那一份 base64，写成 <img> 就要在 HTML 里各存一遍
-         同样的字节——体积预算多吃一份，还多一处会漂的真源。
-         `aria-hidden` 是因为它右边那个 .brand-name 已经把品牌名读出来了。 -->
-    <span class="brand">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-name">agnes2api</span>
-    </span>
-    <!-- 服务状态徽章。数据源是 `/health`（不鉴权、零存储 IO），三档：运行中 / 降级 /
-         状态未知。**初始文案就是「状态未知」**：这一刻还没探过，写成「运行中」等于
-         凭空断言一件没验过的事。它是一颗按钮，点一下重新探——徽章说的是「最近一次
-         探测」，不是「此刻」。 -->
-    <button id="health-badge" class="badge health-badge" type="button"
-            data-i18n="shell.status.unknown" data-i18n-title="shell.status.hint">状态未知</button>
-    <div class="topbar-actions">
-      <a class="topbar-link" href="https://github.com/xwteam/agnes2api"
-         target="_blank" rel="noopener noreferrer" data-i18n-title="shell.repo">GitHub</a>
-      <select id="lang-select" data-i18n-title="shell.lang"></select>
-      <button id="theme-btn" class="icon-btn" type="button" data-i18n-title="shell.theme"></button>
-      <button id="logout-btn" class="icon-btn" type="button" data-i18n-title="shell.logout"></button>
-    </div>
-  </header>
-  <aside class="side">
-    <nav>
-      <!-- 每个导航项 = 一颗 emoji + 一个带 data-i18n 的文字 span。
-           **文字必须自己占一个 span**：`js/i18n.js` 的 `apply()` 对 [data-i18n] 写的是
-           `el.textContent = t(key)`，标在按钮上会把图标一起抹掉。 -->
-      <button class="nav-item" data-section="overview"><span class="nav-ico" aria-hidden="true">📊</span><span data-i18n="nav.overview">概览</span></button>
-      <button class="nav-item" data-section="keys"><span class="nav-ico" aria-hidden="true">🔑</span><span data-i18n="nav.keys">Key 池</span></button>
-      <button class="nav-item" data-section="registrar"><span class="nav-ico" aria-hidden="true">🤖</span><span data-i18n="nav.registrar">注册机</span></button>
-      <button class="nav-item" data-section="events"><span class="nav-ico" aria-hidden="true">📜</span><span data-i18n="nav.events">事件</span></button>
-      <button class="nav-item" data-section="usage"><span class="nav-ico" aria-hidden="true">📈</span><span data-i18n="nav.usage">用量</span></button>
-      <button class="nav-item" data-section="models"><span class="nav-ico" aria-hidden="true">🧩</span><span data-i18n="nav.models">模型</span></button>
-      <button class="nav-item" data-section="playground"><span class="nav-ico" aria-hidden="true">🧪</span><span data-i18n="nav.playground">调试台</span></button>
-      <button class="nav-item" data-section="apikeys"><span class="nav-ico" aria-hidden="true">🎫</span><span data-i18n="nav.apikeys">API 密钥</span></button>
-      <button class="nav-item" data-section="settings"><span class="nav-ico" aria-hidden="true">⚙️</span><span data-i18n="nav.settings">设置</span></button>
-    </nav>
-  </aside>
-  <main class="main">
-    <section class="section" id="sec-overview"></section>
-    <section class="section" id="sec-keys"></section>
-    <section class="section" id="sec-registrar"></section>
-    <section class="section" id="sec-events"></section>
-    <section class="section" id="sec-usage"></section>
-    <section class="section" id="sec-models"></section>
-    <section class="section" id="sec-playground"></section>
-    <section class="section" id="sec-apikeys"></section>
-    <section class="section" id="sec-settings"></section>
-  </main>
-</div>
+<!-- toast 与通用弹窗的挂载点。两者的实现都在 `js/ui.js`（kiro 没有这一层，
+     后果是 `openModal` / `confirmModal` / `svgIcon` 各有 3 份**互不相同**的实现）。 -->
+<div id="toastContainer" class="toast-container" aria-live="polite"></div>
+<div id="modalRoot"></div>
 
-<div id="toast-host" class="toast-host" aria-live="polite"></div>
+<!-- 🔴 **全站只有这一条模块脚本**（ESM 单入口，裁定 P-8：不回退到 kiro 的
+     `window.K` 经典脚本 + 12 条 `<script>`）。九个板块由 `js/app.js` 按需动态
+     `import()`，所以这里不列 `sec-*.js` —— 加一个板块不必改 HTML。
+     🔴 **零内联脚本**：CSP 的 `script-src 'self'` 要求如此，由
+     `src/webui/mod.rs` 的 `no_inline_scripts_anywhere` 按属性边界匹配钉着。 -->
 <script type="module" src="/admin/js/app.js"></script>
 </body>
 </html>

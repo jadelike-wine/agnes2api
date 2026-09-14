@@ -7,12 +7,14 @@
 #   bash scripts/pretag.sh --remote <名字>  # 换一个远端名（默认 origin），只给夹具用
 #
 # **为什么有这个脚本。** 本仓的首个版本 v0.1.0 是这样出门的：tag 落在 `2a25550`，
-# 而那个提交的 `lint-and-test` 在 GitHub 上记着 **failure**（`.github/workflows/ci.yml`
-# 里 `pnpm/action-setup` 与 `packageManager` 两处都给了 pnpm 版本，
-# `Error: Multiple versions of pnpm specified` ⇒ 那十三步一步没跑；修完 pnpm 之后
-# 又当场露出 `tests/ui/dom` 那 7 份文件在 `node-version: 22` 上 119 格红 ——
-# 而 22 正是 `Dockerfile` 的 `node:22-alpine`，也就是真正出货的那个大版本）。
+# 而那个提交的 CI 在 GitHub 上记着 **failure** —— 那一串门禁一步都没跑起来
+# （起因是当时那份 workflow 自身配错了，细节随 v1.0.0 重写一起没了；
+# **留着的是结论，不是那次的技术细节**）。
 # 与此同时 `origin/main` 已经比那个 tag 多了两个提交。
+#
+# 📜 那次的具体成因今天已不可能重演（工具链版本只在 `rust-toolchain.toml` 一处），
+# **但这个脚本守的从来不是那一个成因**：它守的是「tag 只能落在一棵 CI 记着绿的树上」。
+# 成因会换，那条规则不换。
 #
 # ⚠️ **`.github/workflows/docker-publish.yml` 只有 checkout + buildx + push，
 #    一道测试、一道门禁都不跑** —— 它认的只是「有人推了一个 `v*` 标签」。

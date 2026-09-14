@@ -7,12 +7,12 @@
 <p>一套代码同时兼容 OpenAI / Anthropic / OpenAI-Responses / Gemini 四大 AI SDK，由 Agnes AI 后端统一供给对话与图片、视频生成，Docker 一条命令快速部署。</p>
 
 <p>
-  <img src="https://img.shields.io/badge/TypeScript-7.0-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Rust-1.90-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Hono-4.13-E36002?style=flat-square&logo=hono&logoColor=white" alt="Hono">
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4285F4?style=flat-square&logo=linux&logoColor=white" alt="Arch">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v0.4.0-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.0-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -61,11 +61,11 @@
 
 | 日期 | 更新内容 |
 |------|----------|
+| 2026-09-14 | v1.0.0 - 🦀 **整个网关用 Rust 重写**：对外契约逐格不变、`store.json` 一个字节没改，升级就是换镜像。另加：注册机 15 个配置项进设置页（改完不必重启）、「立即补池」有了冷却与日额度；另修：面板改完不生效、关着注册机的部署永不对账索引 |
 | 2026-09-10 | v0.4.0 - ✂️ **砍掉 Cloudflare Worker 形态**（破坏性变更）：只剩 Docker 一种。Worker 上注册机铸不出 key（上游限流按 IP），`waitUntil` 还会静默取消整轮后台活。另修：面板把子密钥吊销上界多报了 1 分钟（6 → 5 分钟） |
 | 2026-09-10 | v0.3.1 - 🔍 **审计收口**：v0.3.0 之后跑了一轮六轴审计，36 条发现经对抗式复核确认 20 条，本版全修。含两条 critical —— 安全文档把「没有 reveal 端点」当成保证写着（而那正是 v0.3.0 加的），以及 `/v1/responses` 流式让官方 SDK 崩在自己内部 |
 | 2026-09-10 | v0.3.0 - 🚀 **面向使用者的大修**（含破坏性变更）：模型目录 4 → 12（从前漏掉唯一能对话的那个）、面板补上响应式（从前一个断点都没有）、凭据可在面板显示明文并复制、新增逐模型连通性测试，另修一批实测缺陷 |
 | 2026-09-09 | v0.2.2 - 🐛 **修好「立即补池」**（含破坏性变更）：这颗按钮以前回 202「已开始」之后整轮被 Cloudflare 静默取消，池子不动、历史不加行，还会把补池锁泄漏一刻钟、连定时轮一起挡掉。现在改成跑完再返回 200 并带上真实结果；手动轮有了自己那一族上限（单轮 1 把 / 等码 60 秒 / 锁 3 分钟） |
-| 2026-09-09 | v0.2.1 - 🧾 **发版后收口**：v0.2.0 的审计发现修在了 tag 之后，等于没发出去，这一版真正发出去 —— LICENSE 恢复成纯 MIT（那段重复的 Required Notice 让 GitHub 与 GHCR 都判成 NOASSERTION）、README 的「八个板块」改成实际的九个、一批「话说得比事实满」的订正，以及 26 处过期的 /health 示例 |
 
 > 完整更新日志请查看 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -114,7 +114,7 @@
 
 ### ⚡ 高性能架构
 
-- 基于 **TypeScript + Hono**，一棵路由树装配四条协议、媒体转发与 `/admin` 子树
+- 基于 **Rust + axum**，一棵路由树装配四条协议、媒体转发与 `/admin` 子树
 - 上游响应以流式转发为主；非流式请求原样以 `stream:false` 发给上游，网关解析上游那份 JSON 再翻译成你用的协议形状
 - 端口层与适配层分离（存储、抓取、日志、邮箱都是可替换的 port），契约测试直接打真装配出来的那棵路由树
 - 多阶段 Docker 构建、非 root 运行、多架构镜像（amd64 / arm64）、健康检查
@@ -226,7 +226,7 @@ docker compose logs -f
 ```bash
 # 健康检查（不鉴权）。前面挂了域名就换成你自己的地址
 curl http://localhost:8080/health
-# {"status":"ok","version": "0.4.0"}
+# {"status":"ok","version": "1.0.0"}
 
 # 查看可用模型
 curl http://localhost:8080/v1/models \
@@ -595,5 +595,5 @@ agnes2api 主要由个人维护，欢迎通过代码、文档、修复或 PR 参
 ---
 
 <div align="center">
-  <sub>Built with TypeScript + Hono + Docker | Powered by Agnes AI</sub>
+  <sub>Built with Rust + axum + Docker | Powered by Agnes AI</sub>
 </div>

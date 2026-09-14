@@ -7,12 +7,12 @@
 <p>One codebase that speaks all four mainstream AI SDK dialects — OpenAI / Anthropic / OpenAI-Responses / Gemini — backed by Agnes AI for chat plus image and video generation, with a one-command Docker deployment.</p>
 
 <p>
-  <img src="https://img.shields.io/badge/TypeScript-7.0-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Rust-1.90-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Hono-4.13-E36002?style=flat-square&logo=hono&logoColor=white" alt="Hono">
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4285F4?style=flat-square&logo=linux&logoColor=white" alt="Arch">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v0.4.0-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.0-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -60,11 +60,11 @@
 
 | Date | What changed |
 |------|--------------|
+| 2026-09-14 | v1.0.0 - 🦀 **The whole gateway rewritten in Rust**: the external contract is unchanged cell for cell and `store.json` did not move a byte, so upgrading is swapping the image. Added: 15 registrar settings on the settings page (no restart needed), a cooldown and a daily budget for "top up now". Fixed: panel edits that never took effect, and a pool index that was never reconciled while the registrar was off |
 | 2026-09-10 | v0.4.0 - ✂️ **Cloudflare Worker support removed** (breaking): Docker only. The registrar could not mint keys on Workers, and `waitUntil` silently kills long rounds |
 | 2026-09-10 | v0.3.1 - 🔍 **Audit close-out**: 36 findings, 20 confirmed adversarially, all fixed. Two critical: a stale guarantee in SECURITY.md, and `/v1/responses` streaming crashing the SDK |
 | 2026-09-10 | v0.3.0 - 🚀 **User-facing overhaul** (breaking): model catalog 4 → 12, the panel finally has breakpoints, credentials can be revealed and copied, per-model connectivity test |
 | 2026-09-09 | v0.2.2 - 🐛 **Manual refill actually works** (breaking): it returned 202, then Cloudflare silently killed the round and leaked the lock 15 min. Now returns 200 with the outcome |
-| 2026-09-09 | v0.2.1 - 🧾 **Post-release cleanup**: v0.2.0's audit fixes landed after the tag, so nobody could get them. LICENSE back to plain MIT, plus 26 stale /health samples |
 
 > The full changelog lives in [CHANGELOG.md](../../CHANGELOG.md).
 
@@ -113,7 +113,7 @@
 
 ### ⚡ High-performance architecture
 
-- Built on **TypeScript + Hono**, with one routing tree carrying the four protocols, the media endpoints and the `/admin` subtree
+- Built on **Rust + axum**, with one routing tree carrying the four protocols, the media endpoints and the `/admin` subtree
 - Upstream responses are forwarded as streams by default; a non-streaming request goes upstream with `stream:false` as-is, and the gateway parses that upstream JSON and translates it into the shape of the protocol you called
 - Ports are separated from adapters (storage, fetch, logging and mailbox are all replaceable ports), and the contract tests drive the real assembled routing tree
 - Multi-stage Docker build, non-root runtime, multi-architecture images (amd64 / arm64), health check
@@ -187,7 +187,7 @@ docker compose logs -f
 ```bash
 # Health check (unauthenticated). Swap in your own address if you put a domain in front
 curl http://localhost:8080/health
-# {"status":"ok","version": "0.4.0"}
+# {"status":"ok","version": "1.0.0"}
 
 # List the available models
 curl http://localhost:8080/v1/models \
@@ -486,5 +486,5 @@ This project is not affiliated with Agnes AI. It comes with no warranty and no s
 ---
 
 <div align="center">
-  <sub>Built with TypeScript + Hono + Docker | Powered by Agnes AI</sub>
+  <sub>Built with Rust + axum + Docker | Powered by Agnes AI</sub>
 </div>

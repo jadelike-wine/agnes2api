@@ -1,0 +1,1604 @@
+/* kiro2api Admin UI v2 — sections-manage.css
+   Styles for the management sections: Accounts, API Keys, Settings.
+   Uses only the CSS custom properties defined in base.css
+   (--primary, --bg-*, --text-*, --border-color, --radius-*, --shadow-*,
+    --success/-10, --danger/-10, --warning/-15, --info/-10, --transition).
+   No external assets and no remote urls. Shared components (.btn, .badge,
+   .modal, .data-table, .form-*, .card, .toast) come from base.css.
+
+   🔴 **P-3e（裁定与四个簇的全表见 `base.css` 文件头第 8 条）：本文件是那四个簇
+   最密的一片 —— 全站约 110 处正文级违反里有 ~70 处在这里。**
+   本轮把它们逐条从**装饰色**改指到**正文色**。底（tint / 边框 / 图标）一律不动，
+   只换字。同一条色阶上下挪档，**没有换过一个色系**。逐簇现算（亮色；括号里是深色）：
+
+     `--warning`  → `--warning-text`   2.15 → **7.09**  （8.76 → 8.76，深色本来就够）
+        费用/额度那一族数字全在这一簇：`.acct-stat-cost` `.key-usg-cost` `.us-n.us-cost`
+        `.ubm-cost` `.ur-cost` `.rec-cost` `.acct-stat-card.{warn,credits} .acct-stat-num`
+        `.account-stat.warn .stat-n` `.key-stat.warn .key-stat-num` `#accountsFreshness.is-stale`
+     `--success`  → `--success-text`   2.54 → **5.48**  （7.61 → 9.60）
+     `--danger`   → `--danger-text`    3.76 → **6.47**  （5.29 → 7.71）
+     `--info`     → `--info-text`      3.68 → **6.70**  （5.75 → 8.11）
+     `--primary`  → `--primary-strong` 3.77 → **5.48**  （7.61 → 7.61）
+        —— 🔴 这一格正是 P-3 那条「`--primary` 只做装饰」的裁定**被违反**的地方：
+        `.bb-count` `.us-n.us-credits` `.ur-credits` `.current-pill` `.model-tag`
+        `.device-code` 全都拿它当正文字色，而 P-3 的判据只验了 token 本身、
+        **从没验过这半句**。
+
+   ⚠️ 压在 tint 上的那几处（`.current-pill` / `.model-tag` / `.add-menu button:hover`
+   / `.model-chip:hover` 走 `--primary-10`，`.rex-head` / `.acct-icon-btn.is-danger:hover`
+   走 `--danger-10`）比值要**把 tint 合成到卡片面之后再算**，写在各自规则旁。
+   ⚠️ 另外还有 ~30 处走 `--text-tertiary`（`.cell-sub` / `.modal-desc` /
+   `.mng-inline-note` / 所有表格 meta）：**规则本身不用改**，
+   它们的深色值在 `base.css` 里从 `#64748b`（3.07:1）抬到了 `#94a3b8`（5.71:1）。 */
+
+/* ============================================================
+   Shared: management toolbars, mini utility bits
+   ============================================================ */
+.mng-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.mng-toolbar .mng-spacer { flex: 1 1 auto; }
+
+.mng-search {
+  min-width: 180px;
+  max-width: 280px;
+}
+
+.mng-inline-note {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  margin: 0.25rem 0 0;
+}
+
+/* section heading inside a modal body (e.g. the recent-records heading in the
+   standalone usage dialog) */
+.mng-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 1rem 0 0.5rem;
+}
+.mng-section-title:first-child {
+  margin-top: 0;
+}
+
+/* small key/value chip used inside tables & cards */
+.kv-mono {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+/* muted secondary line under a primary label in a table cell */
+.cell-sub {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-top: 0.15rem;
+}
+
+/* health / status dot */
+/* 🔴 **P-3e 的显式豁免之三：这一族走的是 `background` 不是 `color`，是非文字元素。**
+   8px 的圆点，`index.html` 里写着 `aria-hidden="true"`，`js/sec-registrar.js` 建它时
+   也不给任何可访问名 —— 它说的那句话**整条由紧挨着的徽章文字承担**
+   （`.status-badge` 那颗连文案带 `.is-degraded` / `.is-offline` 的底色一起换）。
+   ⇒ 纯装饰、且语义有冗余承担，1.4.11 对这一类写明排除。
+   ⚠️ 现算如实写：亮色 `.healthy` `#10b981` 压在卡片面白底上 **2.54:1**、
+   `.warning` `#f59e0b` **2.15:1**、`.unhealthy` `#ef4444` **3.76:1**、
+   裸态 `--text-tertiary` **4.76:1**；深色（卡片面 `#1e293b`）分别是
+   7.61 / 8.76 / 5.29 / 5.71。**前两格连 3:1 都不到，靠的是上面那条排除，不是达标。**
+   要真收，该动的是 `--success` / `--warning` 这两个**装饰**值，而那会连坐
+   整套 tint 与图标 chip ⇒ 明确不在本轮，已如实登记。 */
+.status-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+  background: var(--text-tertiary);
+}
+.status-dot.healthy { background: var(--success); }
+.status-dot.warning { background: var(--warning); }
+.status-dot.unhealthy { background: var(--danger); }
+.status-dot.muted { background: var(--text-tertiary); }
+
+/* ============================================================
+   Accounts — TOP SECTION: summary stat cards + toolbar
+   (clean-room port of the reference dashboard credentials view)
+   ============================================================ */
+.accounts-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin: 1rem 0 1.25rem;
+}
+.acct-stat-card {
+  padding: 0.85rem 1rem;
+  transition: var(--transition);
+}
+.acct-stat-card.is-clickable { cursor: pointer; }
+.acct-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--primary-20);
+}
+.acct-stat-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin-bottom: 0.35rem;
+}
+.acct-stat-num {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+.acct-stat-card.ok .acct-stat-num { color: var(--success-text); }
+.acct-stat-card.warn .acct-stat-num { color: var(--warning-text); }
+.acct-stat-card.credits .acct-stat-num { color: var(--warning-text); }
+.acct-stat-sub {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  margin-top: 0.3rem;
+}
+.acct-stat-cost {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--warning-text);
+  margin-top: 0.15rem;
+}
+.acct-stat-meter {
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+  margin-top: 0.4rem;
+}
+.acct-stat-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--warning);
+  transition: width 0.3s ease;
+}
+
+/* toolbar: batch actions bar (appears when rows are selected) */
+.accounts-batchbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 0.9rem;
+  border: 1px solid var(--primary-20);
+  border-radius: var(--radius-lg);
+  background: var(--primary-10);
+}
+/* 🔴 P-3e：**P-3 那条「`--primary` 只做装饰」在这里逐字不成立** ——
+   这是「已选 N 项」那个计数，`.85rem / 600` 的**正文**。
+   ⚠️ 底不是卡片面：`.accounts-batchbar` 自己铺着 `--primary-10`，
+   合成到卡片面之后亮色是 `#e6f4f0`。`--primary` 在那张面上 **3.33:1**
+   → `--primary-strong` **4.85:1**（深色 6.24，两档同值故不变）。 */
+.accounts-batchbar .bb-count {
+  font-weight: 600;
+  color: var(--primary-strong);
+  font-size: 0.85rem;
+}
+.accounts-batchbar .bb-spacer { flex: 1 1 auto; }
+
+/* per-row selection checkbox */
+.account-row-select {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.25rem;
+}
+.account-row-select input {
+  width: 16px; height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.account-row.is-selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary-20);
+}
+
+/* ============================================================
+   Accounts — paginated list (one account per row)
+   ============================================================ */
+.accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.account-row {
+  background: var(--bg-primary);
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.account-row:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--primary-20);
+}
+.account-row.is-current {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+.account-row.is-disabled { opacity: 0.6; }
+
+/* left: info column */
+.account-row-info {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.account-row-idline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.account-row-id {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+.account-row-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.9rem;
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+}
+.account-row-meta .meta-k {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.account-row-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1.1rem;
+  font-size: 0.8rem;
+}
+.account-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.account-stat .stat-k {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+}
+.account-stat .stat-n {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.account-stat.ok .stat-n { color: var(--success-text); }
+.account-stat.bad .stat-n { color: var(--danger-text); }
+.account-stat.warn .stat-n { color: var(--warning-text); }
+.account-stat.info .stat-n { color: var(--info-text); }
+.account-stat.muted .stat-n { color: var(--text-secondary); }
+.account-stat.is-link { cursor: pointer; }
+.account-stat.is-link:hover .stat-n { text-decoration: underline; }
+
+/* 🔴 P-3e：`.7rem / 700`（**远不到大文本那一档**）压在 `--primary-10` 上。
+   `--primary` 在 tint 合成出的 `#e6f4f0` 上亮色 **3.33:1** → `--primary-strong` **4.85:1**；
+   深色（tint 合成到 `#1e293b` 上得 `#203a44`）6.24:1，两档同值故不变。
+   底与形状一律不动，只换字。 */
+.current-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--primary-10);
+  color: var(--primary-strong);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+/* right: action cluster — icon toggle switch + icon buttons (the reference panel card) */
+.account-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+}
+
+/* ---- CSS icon toggle switch (enable/disable) ----
+   Replicates the reference panel's Radix Switch: 44x24 track, 20px thumb,
+   checked = blue, thumb slides +20px. */
+.acct-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 24px;
+  padding: 0;
+  margin-right: 0.35rem;
+  border: 2px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  transition: background-color 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  vertical-align: middle;
+}
+.acct-switch:hover:not(:disabled) { background: var(--border-hover); }
+.acct-switch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--primary);
+}
+.acct-switch.is-on {
+  background: var(--primary);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.acct-switch.is-on:hover:not(:disabled) { background: var(--primary-hover); }
+.acct-switch:disabled { cursor: not-allowed; opacity: 0.5; }
+.acct-switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 1px rgba(0, 0, 0, 0.12);
+  transform: translate(0, -50%);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.acct-switch.is-on .acct-switch-thumb { transform: translate(20px, -50%); }
+
+/* ---- icon action buttons (Wallet / FileText / Pencil / RefreshCw / Trash2) ---- */
+.acct-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.acct-icon-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.acct-icon-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.acct-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.acct-icon-btn.is-danger { color: var(--danger-text); }
+.acct-icon-btn.is-danger:hover:not(:disabled) {
+  background: var(--danger-10);
+  color: var(--danger-text);
+}
+
+/* generic info row (reused inside balance modal) */
+.account-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.account-info-row:last-child { border-bottom: none; }
+.account-info-label {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.account-info-value {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: right;
+  word-break: break-word;
+}
+
+/* ---- pagination controls ---- */
+.accounts-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.1rem;
+}
+.accounts-page-indicator {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  min-width: 8rem;
+  text-align: center;
+}
+
+/* add-account split button + dropdown menu */
+.add-menu-wrap { position: relative; display: inline-block; }
+.add-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 0.4rem;
+  z-index: 40;
+  display: none;
+}
+.add-menu.open { display: block; }
+.add-menu-label {
+  padding: 0.4rem 0.7rem 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+.add-menu-label + .add-menu-label { margin-top: 0.25rem; }
+.add-menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: var(--transition);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.add-menu button:hover { background: var(--primary-10); color: var(--primary-strong); }
+.add-menu button .sub {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+.add-menu button:hover .sub { color: var(--primary-strong); }
+
+/* ============================================================
+   Interactive-login modal (device code / callback / token import)
+   ============================================================ */
+.login-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 1.1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.login-tab {
+  padding: 0.55rem 0.9rem;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: var(--transition);
+}
+.login-tab:hover { color: var(--text-primary); }
+/* P-3：主色在这里是**正文字色** ⇒ `--primary-strong`。
+   `font-weight: 700` 是 WCAG 1.4.1 要的那条**非颜色**线索（kiro 的选中态只有
+   颜色差，而 `.login-tab` 本身已经是 600）；由 `state_is_not_color_only` 那格钉着。
+   ⚠️ `[aria-selected="true"]` 那一支是给注册机的 `.reg-tab` 用的（06 §2.12）：
+   读屏器读的是那个属性，不是 `.active` 这个类名。两种写法同时支持。 */
+.login-tab.active,
+.login-tab[aria-selected="true"] {
+  color: var(--primary-strong);
+  border-bottom-color: var(--primary);
+  font-weight: 700;
+}
+
+.login-pane { display: none; }
+.login-pane.active { display: block; }
+
+.device-code-box {
+  text-align: center;
+  padding: 1.25rem;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  margin: 0.75rem 0;
+}
+/* P-3e：这一格 `1.6rem / 700` = 25.6px，**真的够得上 WCAG 的大文本档（3:1）**，
+   `--primary` 的 3.77:1 按规范本来就过。仍然改成 `--primary-strong`（**5.48:1**），
+   理由是 P-3 自己写着的那句：这条裁定按**角色**走（主色当正文字色 ⇒ 用 strong），
+   不按字号走 —— 「把字号调大就算大文本」正是它点名不许用的绕法。
+   ⚠️ 设备码是运维要**照着念给另一个人**的那串字符，宽容度只该更高不该更低。 */
+.device-code {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--primary-strong);
+  user-select: all;
+}
+.device-code-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+.waiting-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-top: 0.75rem;
+}
+
+/* per-account refresh error list */
+.refresh-errors {
+  margin-top: 0.75rem;
+  border: 1px solid var(--danger-10);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.refresh-errors .rex-head {
+  padding: 0.6rem 0.9rem;
+  background: var(--danger-10);
+  color: var(--danger-text);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.refresh-errors .rex-item {
+  padding: 0.55rem 0.9rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.82rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.refresh-errors .rex-item .rex-acct {
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.refresh-errors .rex-item .rex-reason {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* ============================================================
+   Balance / usage modal bits
+   ============================================================ */
+.meter {
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+.meter > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+.meter.hot > span { background: var(--danger); }
+.meter.warm > span { background: var(--warning); }
+
+/* ============================================================
+   API keys — clean-room replica of the reference panel's ApiKeysPanel
+   (service-info card, status stat cards, sort/search toolbar,
+    bound/global grouped key cards, create/edit dialog, showcase)
+   ============================================================ */
+
+/* ---- service connection info card ---- */
+.svc-card { padding: 1rem 1.1rem; }
+.svc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  margin-bottom: 0.75rem;
+}
+.svc-card-head .svc-ico { width: 16px; height: 16px; }
+.svc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+}
+.svc-row + .svc-row { border-top: 1px solid var(--border-color); }
+.svc-row-left { min-width: 0; }
+.svc-row-label {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  margin-bottom: 0.15rem;
+}
+.svc-row-val {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+/* ---- status stat cards ---- */
+.key-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.key-stat {
+  padding: 0.85rem 1rem;
+  transition: var(--transition);
+}
+.key-stat:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--primary-20);
+}
+.key-stat-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin-bottom: 0.35rem;
+}
+.key-stat-num {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+.key-stat.ok .key-stat-num { color: var(--success-text); }
+.key-stat.bad .key-stat-num { color: var(--danger-text); }
+.key-stat.warn .key-stat-num { color: var(--warning-text); }
+.key-stat.muted .key-stat-num { color: var(--text-secondary); }
+
+/* ---- sort segment in toolbar ---- */
+.key-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.key-sort .key-sort-ico { width: 16px; height: 16px; color: var(--text-tertiary); }
+.btn .btn-ico { width: 15px; height: 15px; margin-right: 0.3rem; vertical-align: -2px; }
+.btn.btn-primary .btn-ico { color: currentColor; }
+
+/* ---- search box ---- */
+.key-search-wrap {
+  position: relative;
+  margin: 0.5rem 0 1rem;
+}
+.key-search-wrap .key-search-ico {
+  position: absolute;
+  left: 0.7rem; top: 50%;
+  transform: translateY(-50%);
+  width: 16px; height: 16px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.key-search { padding-left: 2.1rem; }
+
+/* ---- grouped key lists ---- */
+.key-list { display: flex; flex-direction: column; gap: 1.5rem; }
+.key-group { display: flex; flex-direction: column; gap: 0.5rem; }
+.key-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+.key-group-head.is-bound { color: #7c3aed; }
+.key-group-head .key-group-ico { width: 16px; height: 16px; }
+.key-group-count { font-size: 0.78rem; font-weight: 400; color: var(--text-tertiary); }
+.key-cards { display: flex; flex-direction: column; gap: 0.5rem; }
+
+/* ---- key card ---- */
+.key-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: 0.75rem 0.9rem;
+  transition: var(--transition);
+}
+.key-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--primary-20);
+}
+.key-card.is-bound:hover {
+  border-color: color-mix(in srgb, #7c3aed 45%, var(--border-color));
+}
+.key-card.is-dim { opacity: 0.6; }
+.key-card.is-bound {
+  border-color: color-mix(in srgb, #7c3aed 35%, var(--border-color));
+  background: color-mix(in srgb, #7c3aed 5%, var(--bg-primary));
+}
+.key-card-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.key-card-info { min-width: 0; flex: 1 1 auto; }
+
+.key-line1 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.key-serial {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+}
+.key-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.key-bound-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, #7c3aed 12%, transparent);
+  color: #7c3aed;
+  border: 1px solid color-mix(in srgb, #7c3aed 25%, transparent);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.key-bound-chip .chip-ico { width: 12px; height: 12px; flex: 0 0 12px; }
+.key-bound-chip .chip-sep { opacity: 0.4; }
+
+.key-line2, .key-line3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.85rem;
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+.key-mono {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+}
+.key-line2 .meta-k { color: var(--text-secondary); }
+.key-limit { display: inline-flex; align-items: center; gap: 0.25rem; }
+.key-limit .meta-ico { width: 12px; height: 12px; }
+
+.key-usg-item { display: inline-flex; align-items: center; gap: 0.25rem; }
+.key-usg-item .usg-ico { width: 12px; height: 12px; }
+.key-usg-rpm { color: var(--info-text); font-weight: 500; }
+.key-usg-io { color: var(--text-tertiary); }
+.key-usg-cost { font-weight: 600; color: var(--warning-text); }
+
+.key-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex: 0 0 auto;
+}
+/* 🔴 **`.is-mini` 装的全是文字，不是图标 —— 它不能沿用 `.acct-icon-btn` 那个
+   固定 22×22 + `padding: 0` 的方框。**
+   全站三处用法一个 svg 都没有：`js/ui.js` 的 `revealControls()` 那两颗
+   （`t("reveal.show")` / `t("common.copy")`）与 `js/sec-logs.js` 的 `×`，
+   **前两颗的文案整条来自 i18n 字典，长度按语言变**：
+   en `Show` / `Copy` 塞得进 22px，ko `평문 보기` / `복사`、ja `平文表示`、
+   zh `显示明文` 塞不进 ⇒ 在 22px 的盒子里被折成**竖排**，
+   再顶穿 22px 的高度压到下一行 `.account-row-meta` 上（韩语下最明显，实机可见）。
+   ⇒ 这里改成**按内容定宽**：22px 只当下限（图标那一天仍是 22×22），
+   `white-space: nowrap` 挡住竖排，`min-height` 而不是 `height` 挡住溢出。
+   ⚠️ **别改回 `width`/`height` 定值**，那正是这个缺陷本身；也别去 `js/` 那边
+   给文案设上限 —— 截断一句「显示明文」比排版乱更难发现。
+   ⚠️ 这一类「某种语言下布局炸掉」的问题，改完要在 en/zh/ja/ko/ru 五种语言下
+   都验一遍：只盯着报上来的那一种语言修，另外四种里的同一处照样是坏的。 */
+.acct-icon-btn.is-mini {
+  width: auto;
+  min-width: 22px;
+  height: auto;
+  min-height: 22px;
+  padding: 0 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.acct-icon-btn.is-mini svg { width: 13px; height: 13px; }
+
+/* ---- detail modal sub-bits ---- */
+.key-sub-h {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  margin: 1rem 0 0.5rem;
+}
+.key-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.5rem;
+}
+.key-model-card { padding: 0.6rem 0.8rem; }
+.key-model-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.key-model-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.7rem;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+}
+
+/* ---- purge dialog ---- */
+.purge-list {
+  max-height: 15rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+.purge-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+/* ============================================================
+   API-key create/edit dialog — segmented controls, chips,
+   quota inputs, credential multi-select (the reference panel replica)
+   ============================================================ */
+/* Modal header: title + subtitle grouped in a left column, above the
+   header's bottom divider; close button aligns to the top-right. */
+.modal-header { align-items: flex-start; }
+.modal-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.modal-desc {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--text-tertiary);
+  margin: 0;
+  padding: 0;
+}
+.key-form { display: flex; flex-direction: column; gap: 1rem; }
+/* 🔴 P-3e：`.75rem` 的**表单校验错误**。`--danger` 亮色只有 **3.76:1** ——
+   一条「这个字段填错了」的话，字号已经是全站最小的一档，颜色还不达标。
+   `--danger-text`：亮 **6.47:1**、深 **7.71:1**。 */
+.form-error {
+  font-size: 0.75rem;
+  color: var(--danger-text);
+  margin-top: 0.25rem;
+}
+.form-label-mt { margin-top: 0.75rem; display: block; }
+
+/* segmented control (mode / unit toggles) */
+.seg-group {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+.seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.seg-btn:hover { border-color: var(--primary); color: var(--primary-strong); }
+/* P-3：实心底 + 白字 ⇒ `--primary-strong`。
+   `font-weight: 700` 同上，是那条非颜色线索（`.seg-btn` 本身是 500）。 */
+.seg-btn.is-active {
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+  color: #fff;
+  font-weight: 700;
+}
+.seg-btn .seg-ico { width: 14px; height: 14px; }
+
+/* quick-choice chips (durations, quota presets) */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+.chip-btn {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.chip-btn:hover { border-color: var(--primary); color: var(--primary-strong); }
+/* P-3：实心底 + 白字 ⇒ `--primary-strong`；`font-weight` 是非颜色线索（U-16）。 */
+.chip-btn.is-active {
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* custom duration / quota input row */
+.dur-custom {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.dur-num { width: 7rem; }
+.quota-prefix { font-size: 0.85rem; color: var(--text-secondary); }
+
+.form-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+.form-hint .hint-ico { width: 12px; height: 12px; flex: 0 0 12px; }
+
+/* credential multi-select dropdown */
+.cred-ms { position: relative; margin-top: 0.5rem; }
+.cred-ms-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.cred-ms-trigger:hover { background: var(--bg-secondary); }
+.cred-ms-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cred-ms-ph { color: var(--text-tertiary); font-size: 0.85rem; }
+.cred-ms-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, #7c3aed 12%, transparent);
+  color: #7c3aed;
+  border: 1px solid color-mix(in srgb, #7c3aed 25%, transparent);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.cred-ms-x { cursor: pointer; }
+.cred-ms-x:hover { color: var(--danger-text); }
+.cred-ms-chev { color: var(--text-tertiary); transition: transform 0.2s ease; }
+.cred-ms-chev.is-open { transform: rotate(180deg); }
+.cred-ms-panel {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  left: 0; right: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.cred-ms-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border-color);
+}
+/* Constrain the inline search icon so it renders at ~16px instead of
+   blowing up to the SVG's intrinsic size. */
+.cred-ms-search .key-search-ico {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.cred-ms-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  outline: none;
+}
+.cred-ms-options { max-height: 12rem; overflow-y: auto; padding: 0.25rem; }
+.cred-ms-opt {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.cred-ms-opt:hover { background: var(--bg-secondary); }
+.cred-ms-opt.is-sel { background: color-mix(in srgb, #7c3aed 8%, transparent); }
+.cred-ms-check {
+  width: 16px; height: 16px;
+  flex: 0 0 16px;
+  margin-top: 0.1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cred-ms-opt.is-sel .cred-ms-check {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: #fff;
+}
+.cred-ms-check .check-ico { width: 12px; height: 12px; }
+.cred-ms-meta { min-width: 0; flex: 1 1 auto; }
+.cred-ms-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.cred-ms-name { font-size: 0.85rem; font-weight: 500; color: var(--text-primary); }
+.cred-ms-id { font-size: 0.72rem; color: var(--text-tertiary); }
+.cred-ms-off { font-size: 0.72rem; color: var(--danger-text); }
+.cred-ms-empty, .cred-ms-panel .empty-state {
+  padding: 0.6rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
+}
+
+.created-key-box {
+  margin: 0.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--primary-20);
+  border-radius: var(--radius-lg);
+  background: var(--primary-10);
+}
+.created-key-box .cka-key {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  word-break: break-all;
+  margin: 0.5rem 0 0.75rem;
+  user-select: all;
+}
+
+.bound-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+/* multi-select for bound accounts */
+.multiselect {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 0.4rem;
+  background: var(--bg-secondary);
+}
+.multiselect label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+.multiselect label:hover { background: var(--bg-tertiary); }
+.multiselect input { width: 16px; height: 16px; accent-color: var(--primary); }
+
+/* usage summary strip inside modals */
+.usage-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.usage-strip .us-item {
+  padding: 0.75rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+.usage-strip .us-n {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.usage-strip .us-k {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  margin-top: 0.15rem;
+}
+.usage-strip .us-sub {
+  font-size: 0.7rem;
+  color: var(--success-text);
+  margin-top: 0.15rem;
+}
+/* colored summary-card value accents */
+/* 🔴 P-3e：这两格是**钱和额度的数字本身**，是这张卡上唯一有信息量的东西。
+   改前：`--warning` 亮色 **2.15:1**（全站最低的一档）、`--primary` **3.77:1**。
+   改后：`--warning-text` **7.09:1**、`--primary-strong` **5.48:1**。
+   `.us-n.us-today` 的 `#06b6d4` 是登记在案的「跳出 emerald 的语义色标」，不在本簇。 */
+.usage-strip .us-n.us-cost    { color: var(--warning-text); }
+.usage-strip .us-n.us-credits { color: var(--primary-strong); }
+.usage-strip .us-n.us-today   { color: #06b6d4; }
+
+/* ---- ACCOUNT USAGE dialog: by-model breakdown (current page) ---- */
+.usage-bymodel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.usage-bymodel-card {
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+.usage-bymodel-card .ubm-model {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.usage-bymodel-card .ubm-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.75rem;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+}
+.usage-bymodel-card .ubm-cost { color: var(--warning-text); font-weight: 600; }
+
+/* model name color accents — shared by by-model cards + records table */
+.model-opus   { color: #9333ea; }   /* purple */
+.model-sonnet { color: #2563eb; }   /* blue   */
+.model-haiku  { color: #16a34a; }   /* green  */
+.model-muted  { color: var(--text-tertiary); }
+
+/* ---- ACCOUNT USAGE dialog: request-log header + records table ---- */
+.usage-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.usage-log-count {
+  margin-left: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+.usage-records-table th.ta-right,
+.usage-records-table td.ta-right { text-align: right; }
+.usage-records-table .ur-time,
+.usage-records-table .ur-ip { font-size: 0.75rem; color: var(--text-tertiary); white-space: nowrap; }
+.usage-records-table .ur-acct {
+  font-size: 0.75rem; color: var(--text-tertiary);
+  max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.usage-records-table .ur-model { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+.usage-records-table .ur-tokens { font-size: 0.75rem; }
+.usage-records-table .ur-tok-line { line-height: 1.4; }
+.usage-records-table .ur-tok-line.tok-cache { color: var(--success-text); }
+.usage-records-table .ur-tok-line.tok-sum   { font-weight: 600; }
+.usage-records-table .ur-tok-v { font-variant-numeric: tabular-nums; }
+.usage-records-table .ur-cost {
+  font-variant-numeric: tabular-nums; font-weight: 600; color: var(--warning-text); white-space: nowrap;
+}
+.usage-records-table .ur-credits {
+  font-variant-numeric: tabular-nums; font-weight: 600; color: var(--primary-strong); white-space: nowrap;
+}
+.usage-records-table .ur-cred-check { color: var(--success-text); font-size: 0.75rem; }
+.usage-records-table .ur-cred-saved { color: var(--success-text); font-size: 0.72rem; }
+
+/* ---- ACCOUNT USAGE dialog: pagination ---- */
+.usage-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.usage-page-indicator { font-size: 0.82rem; color: var(--text-tertiary); }
+/* summary-card accent colors (mirror the reference detail page) */
+.usage-strip .us-n.us-cost { color: var(--warning-text); }
+.usage-strip .us-n.us-credits { color: var(--info-text); }
+.usage-strip .us-sub {
+  font-size: 0.7rem;
+  color: var(--success-text);
+  margin-top: 0.1rem;
+}
+
+/* ---- per-key detail: model-name color coding (opus/sonnet/haiku) ---- */
+.model-opus { color: #9333ea; }      /* purple-600 */
+.model-sonnet { color: #2563eb; }    /* blue-600 */
+.model-haiku { color: #16a34a; }     /* green-600 */
+.model-default { color: var(--text-tertiary); }
+
+/* ---- per-key detail: request-log header (title + count + refresh) ---- */
+.key-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.key-log-head .key-sub-h { margin-bottom: 0.35rem; }
+.key-log-count {
+  margin-left: 0.35rem;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+/* ---- per-key detail: request-log table cells ---- */
+.data-table td.rec-time,
+.data-table td.rec-ip { font-size: 0.75rem; color: var(--text-tertiary); white-space: nowrap; }
+.data-table td.rec-acct {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-table td.rec-model {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.75rem;
+}
+.data-table td.rec-cost { font-weight: 600; color: var(--warning-text); text-align: right; white-space: nowrap; }
+.data-table td.rec-credits { font-weight: 600; color: var(--info-text); text-align: right; white-space: nowrap; }
+.rec-credit-ok { color: var(--success-text); font-size: 0.75rem; }
+.rec-credit-saved { color: var(--success-text); font-size: 0.72rem; }
+.rec-tok-box { display: flex; flex-direction: column; gap: 0.1rem; font-size: 0.75rem; }
+.rec-tok-line { white-space: nowrap; }
+.rec-tok-v { font-variant-numeric: tabular-nums; }
+.rec-tok-line.rec-tok-cache .rec-tok-k,
+.rec-tok-line.rec-tok-cache .rec-tok-v { color: var(--success-text); }
+.rec-tok-line.rec-tok-total { font-weight: 600; }
+
+/* ============================================================
+   Settings — stacked panels
+   ============================================================ */
+/* 2-column responsive card grid: side-by-side on md+, single column below. */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 768px) {
+  .settings-grid { grid-template-columns: 1fr; }
+}
+
+/* ── `.field-grid` —— **卡内字段**那一层的两列（06 §2.11 的唯一一条 agnes 保留布局）。
+   上面的 `.settings-grid` 管的是**卡与卡**之间；这一条管的是**一张卡内部**的字段。
+
+   ⚠️ **它与 `.settings-grid` 是两套「两列」实现，这件事如实登记在案**（06 R-6）。
+   保留它的理由是密度：agnes 的设置页有 **25 个可编辑项**，kiro 的设置页只有两组
+   —— `repeat(2, minmax(0,1fr))` 那条简单公式**从没面对过这个密度**，在窄卡里会挤。
+
+   这条公式是 agnes 那边**量出来**的，别"顺手简化"：
+     minmax(min(100%, max(180px, 40%)), 1fr)
+   · `40%` 那个下界保证「够宽恒两列、不够恒一列」，**中间没有第三种排布**，
+     而且这个结论不随卡宽变（纯 `minmax(180px,1fr)` 会在某些卡宽下蹦出三列）；
+   · `min(100%, …)` 保证容器比 180px 还窄时不溢出（`max()` 单独用会顶穿）。 */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(180px, 40%)), 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+/* ── 设置页单个字段的三态左色条（agnes 保留项，U-16）。
+   🔴 **颜色 + 非颜色双信号**：色条本身是颜色，`.is-locked` 另配一个 🔒 前缀
+   （由 `sec-settings.js` 插），`.is-invalid` 另配一行 `.form-error` 文案。
+   只留颜色就违反 WCAG 1.4.1。 */
+.field-state { padding-left: 0.75rem; border-left: 2px solid var(--border-color); }
+.field-state.is-changed { border-left-color: var(--success); }
+.field-state.is-invalid { border-left-color: var(--danger); }
+/* 被环境变量锁死的字段：不可编辑，且**必须说清是被谁锁的**。 */
+.field-state.is-locked { border-left-style: dashed; opacity: 0.85; }
+
+/* ── 危险区。
+   🔴 **别让销毁凭据的按钮变成横贯整卡的红色大条** —— agnes 为这条踩过：
+   真机截图上整页最抢眼的就是三颗销毁按钮。按钮 `align-self: flex-start`，
+   整卡只用一条 2px 左边框表明这是危险区。 */
+.danger-zone { border-left: 2px solid var(--danger); }
+.danger-zone .btn { align-self: flex-start; }
+/* legacy single-column stack (retained for back-compat) */
+.settings-stack { display: flex; flex-direction: column; gap: 1.25rem; }
+.settings-card-desc {
+  font-size: 0.82rem;
+  color: var(--text-tertiary);
+  margin: -0.25rem 0 1rem;
+}
+.readonly-value {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.readonly-value .rv-text {
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.model-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.model-chip {
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.model-chip:hover { color: var(--primary-strong); border-color: var(--primary); background: var(--primary-10); }
+
+/* ============================================================
+   Models — standalone supported-models page (table + tags)
+   ============================================================ */
+.models-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.models-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.models-table th,
+.models-table td {
+  padding: 0.6rem 0.9rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.85rem;
+}
+.models-table thead th {
+  font-weight: 600;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  white-space: nowrap;
+}
+.models-table tbody tr:last-child td { border-bottom: none; }
+.models-table tbody tr.model-row:hover { background: var(--bg-secondary); }
+.models-table .ta-right { text-align: right; }
+.models-table .tabular {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.models-table .model-cell-id code {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.models-table .model-cell-name {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.models-table .model-cell-owner { color: var(--text-secondary); }
+.models-table .models-state-row td { padding: 0; }
+.models-table .models-state-row .empty-state {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+/* reference-style model tag */
+/* 🔴 P-3e：`.72rem / 600` 的**模型名**压在 `--primary-10` 上 —— 又一处
+   「`--primary` 当正文字色」。`#e6f4f0` 面上亮色 **3.33 → 4.85:1**（深色 6.24 不变）。
+   `--primary-20` 那条边框留着不动：边框是装饰，受 1.4.11 的 3:1 管。 */
+.model-tag {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: var(--radius-full);
+  background: var(--primary-10);
+  color: var(--primary-strong);
+  border: 1px solid var(--primary-20);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+@media (max-width: 768px) {
+  .mng-search { max-width: none; flex: 1 1 100%; }
+
+  /* accounts: 2-col stat cards on narrow screens */
+  .accounts-stat-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* accounts: stack info over actions, let actions wrap full-width */
+  .account-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+  .account-row-name { max-width: none; white-space: normal; }
+  .account-row-actions {
+    justify-content: flex-start;
+  }
+
+  /* api keys: 2-col stats, stacked key cards */
+  .key-stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .key-card-main { flex-direction: column; align-items: stretch; gap: 0.6rem; }
+  .key-card-actions { justify-content: flex-end; }
+  .key-name { max-width: none; white-space: normal; }
+}
+
+/* 迷你图标按钮(设置页主 Key 的显示/复制等) */
+.icon-mini {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0;
+  background: transparent; border: none; border-radius: var(--radius-md);
+  color: var(--text-secondary); cursor: pointer;
+  transition: var(--transition);
+}
+.icon-mini:hover { background: var(--bg-tertiary); color: var(--primary-strong); }
+
+/* ---- Account form additions (parity with reference add/edit dialogs) ---- */
+/* required-field asterisk on form labels */
+.req-star { color: var(--danger-text); font-weight: 700; }
+
+/* inline priority editor inside an .account-stat (click-to-edit) */
+.acct-inline-input {
+  width: 3.5rem;
+  height: 1.5rem;
+  padding: 0 0.3rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.acct-inline-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-10);
+}
+
+/* file-upload row inside local-cache dialog (hidden input + trigger button) */
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+/* ---- Integration examples (settings): protocol × language snippets ---- */
+.int-card .card-body { display: flex; flex-direction: column; gap: 0.5rem; }
+.int-card .seg-group { margin-top: 0.25rem; }
+.int-codewrap { position: relative; margin-top: 0.5rem; }
+.int-copy { position: absolute; top: 0.5rem; right: 0.5rem; z-index: 1; }
+.int-code {
+  margin: 0;
+  background: var(--code-bg);
+  color: var(--code-text);
+  border-radius: var(--radius-md);
+  padding: 0.9rem 1rem;
+  padding-right: 4.75rem;            /* room for the copy button */
+  overflow-x: auto;
+  font-family: 'SFMono-Regular', ui-monospace, 'Menlo', 'Consolas', monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
+}
+.int-code code { font-family: inherit; background: none; color: inherit; padding: 0; }
+
+/* 账号列表的新鲜度提示。超过两拍还没刷新成功即转为警示色 —— 陈旧快照不该冒充实时数据,
+   运维照着过时的徽章判断,比没有徽章更糟。 */
+#accountsFreshness.is-stale {
+  color: var(--warning-text);
+}

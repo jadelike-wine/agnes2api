@@ -7,12 +7,12 @@
 <p>ひとつのコードベースで OpenAI / Anthropic / OpenAI-Responses / Gemini という 4 大 AI SDK の方言をすべて話し、Agnes AI をバックエンドに対話と画像・動画の生成をまとめて供給します。Docker ならコマンド 1 つでデプロイできます。</p>
 
 <p>
-  <img src="https://img.shields.io/badge/TypeScript-7.0-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Rust-1.90-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Hono-4.13-E36002?style=flat-square&logo=hono&logoColor=white" alt="Hono">
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4285F4?style=flat-square&logo=linux&logoColor=white" alt="Arch">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v0.4.0-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.0-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -60,11 +60,11 @@
 
 | 日付 | 更新内容 |
 |------|----------|
+| 2026-09-14 | v1.0.0 - 🦀 **ゲートウェイ全体を Rust で書き直し**：外部契約は一つ残らずそのまま、`store.json` も 1 バイトも変わらないので、アップグレードはイメージの入れ替えだけです。追加：レジストラの設定 15 項目を設定ページへ（再起動不要）、「今すぐ補充」にクールダウンと 1 日の上限。修正：パネルで変更しても効かない問題、レジストラがオフの間インデックスが照合されない問題 |
 | 2026-09-10 | v0.4.0 - ✂️ **Cloudflare Worker 形態を削除**（破壊的変更）：Docker のみ。Worker ではレジストラーが key を発行できず（上流の制限は IP 単位）、`waitUntil` は長いラウンドを無言で打ち切ります。ほか、パネルが失効上限を 1 分多く表示（6 → 5 分） |
 | 2026-09-10 | v0.3.1 - 🔍 **監査の締め**：36 件の指摘を対抗的レビューで 20 件確認し、本版で全て修正。critical 2 件 —— SECURITY.md が v0.3.0 で失われた保証をそのまま記載、`/v1/responses` のストリーミングが公式 SDK 内部でクラッシュ |
 | 2026-09-10 | v0.3.0 - 🚀 **利用者向けの大改修**（破壊的変更あり）：モデル目録 4 → 12、パネルにブレークポイントを追加、認証情報の平文表示とコピー、モデル別の疎通テスト。ほか実測不具合を一括修正 |
 | 2026-09-09 | v0.2.2 - 🐛 **「今すぐ補充」を修正**（破壊的変更あり）：202 を返した後にラウンド全体が Cloudflare に無言で打ち切られ、ロックが 15 分漏れて定時ラウンドまで塞いでいました。今は完了を待って 200 と実際の結果を返します |
-| 2026-09-09 | v0.2.1 - 🧾 **リリース後の後始末**：v0.2.0 の監査結果はタグの後に直したため誰も受け取れませんでした。本版で実際に出します —— LICENSE を純粋な MIT に戻し、README のセクション数を訂正し、実装より多くを主張していた文言を一式直しました |
 
 > 変更履歴の全文は [CHANGELOG.md](../../CHANGELOG.md) にあります。
 
@@ -113,7 +113,7 @@
 
 ### ⚡ 高性能アーキテクチャ
 
-- **TypeScript + Hono** を土台に、1 本のルーティングツリーが 4 つのプロトコル・メディア転送・`/admin` サブツリーを担います
+- **Rust + axum** を土台に、1 本のルーティングツリーが 4 つのプロトコル・メディア転送・`/admin` サブツリーを担います
 - 上流のレスポンスは既定でストリームのまま転送します。非ストリーミングのリクエストは `stream:false` のまま上流へ送り、ゲートウェイが上流の JSON を解析して、呼び出したプロトコルの形に翻訳します
 - ポート層とアダプター層は分かれており（ストレージ、フェッチ、ログ、メールボックスはいずれも差し替え可能なポート）、契約テストは実際に組み立てたルーティングツリーを直接叩きます
 - マルチステージの Docker ビルド、非 root 実行、マルチアーキテクチャのイメージ（amd64 / arm64）、ヘルスチェック
@@ -187,7 +187,7 @@ docker compose logs -f
 ```bash
 # ヘルスチェック（認証不要）。前段にドメインを置いたなら自分のアドレスに置き換える
 curl http://localhost:8080/health
-# {"status":"ok","version": "0.4.0"}
+# {"status":"ok","version": "1.0.0"}
 
 # 使えるモデルを確かめる
 curl http://localhost:8080/v1/models \
@@ -486,5 +486,5 @@ agnes2api はほぼ 1 人で維持しています。コード、ドキュメン�
 ---
 
 <div align="center">
-  <sub>Built with TypeScript + Hono + Docker | Powered by Agnes AI</sub>
+  <sub>Built with Rust + axum + Docker | Powered by Agnes AI</sub>
 </div>

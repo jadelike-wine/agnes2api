@@ -1231,7 +1231,8 @@ curl -OJ http://localhost:8080/admin/api/events/download \
 Reads the configuration currently in effect. Credential fields report only whether they are configured, never their value.
 
 > [!NOTE]
-> On a field that was never saved, `stored` is **absent, not `null`**: it carries the raw value out of the stored `config` object, and `undefined` does not survive JSON. The example below is a fresh deployment — compare it with the `PUT` response, where the same field has a `stored` of its own.
+> On a field that was never saved, `stored` is **`null`**: the quad always has four slots, and the missing one says "not in storage" with `null`.
+> (Before v1.0.0 the slot was **omitted entirely** — an artefact of the previous implementation language, where `undefined` does not survive JSON, not a deliberate shape. Readers should treat both as "never configured".) The example below is a fresh deployment — compare it with the `PUT` response, where the same field has a `stored` of its own.
 
 **Request**:
 

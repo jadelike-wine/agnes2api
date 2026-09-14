@@ -1,0 +1,122 @@
+/* agnes2api Admin UI — sections-registrar.css
+   注册机板块（`#sec-registrar`）。**kiro2api 没有这个板块，也没有任何可参照物。**
+
+   造法遵守 06 §2.12 的五条（R1–R5）：
+     R1 先找现成的 —— 下面每一块都先写明「复用了谁」；
+     R2 新造的类进这份文件、统一 `.reg-` 前缀，**不往 base.css 里塞**；
+     R3 取值只从 base.css 的 token 与两条标度里取，**零硬编码色值 / 零新字号 / 零新间距**；
+     R4 卡片 hover 抬起 + 边框换 `--primary-20` + 过渡走 `--transition`；
+     R5 状态不许只由颜色表达（WCAG 1.4.1）。
+
+   ⚠️ 这份文件只定义**注册机独有**的那几块。池子四格用 `.accounts-stat-grid` +
+   `.acct-stat-*`、补池历史表用 `.table-container` + `.data-table`、域名台账用
+   `.key-stat-grid` + `.key-stat`、退避状态用 `.status-badge` 的三态形态、
+   「立即补池」确认弹窗用 `.modal` + `.modal-desc` —— 全是现成的，这里一条都不重写。 */
+
+/* ── 顶部两页 TAB（运行状态 / 设置）。
+   🔴 **复用 `.login-tabs/.login-tab/.login-pane` 的规格，只换前缀**（06 §2.12）：
+   kiro 已经有一个一模一样的组件（底边一条线，选中项用 2px 主色下边框把那条线顶开），
+   别新造第二套。
+   ⚠️ 选择器钉的是 `aria-selected="true"` 而**不是** `.active` 类：读屏器读的就是
+   那个属性；类名对它不可见。非颜色线索（`font-weight: 700`）与 `.login-tab` 同款。 */
+.reg-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 1.1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.reg-tab {
+  padding: 0.55rem 0.9rem;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: var(--transition);
+}
+.reg-tab:hover { color: var(--text-primary); }
+.reg-tab[aria-selected="true"] {
+  color: var(--primary-strong);
+  border-bottom-color: var(--primary);
+  font-weight: 700;
+}
+.reg-pane { display: none; }
+.reg-pane[aria-hidden="false"] { display: block; }
+
+/* ── 两张完全对称的通道卡。
+   🔴 **不许出现任何 `[data-channel="…"]` 选择器**（agnes 设计 §10.3 第 2 条）：
+   两条邮箱通道必须完全平级，一旦样式按通道名分叉，"哪条是首选"这件事就被
+   偷偷写进了 CSS。卡内用 `.svc-card/.svc-row/.svc-row-label/.svc-row-val`（现成的）。
+   **等高由 grid 天然给** —— agnes 现在靠 `.card-row > .card + .card { margin-top: 0 }`
+   打补丁，换 grid 之后那个补丁不需要了。 */
+.reg-channels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+@media (max-width: 768px) {
+  .reg-channels { grid-template-columns: 1fr; }
+}
+
+/* ── 通道连通性测试结果行。
+   🔴 **恒占一行高度**（`min-height`），哪怕还没测过：不占位的话，测完一条之后
+   两张对称的卡会一高一低，而"哪条更高"在视觉上就是一次排序暗示。 */
+.reg-test-result {
+  min-height: 1.2em;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+/* 🔴 **`.8rem` 是正文，门槛是 AA 的 4.5:1，不是 1.4.11 的 3:1。**
+   `--success-text` 原本是 `#059669` —— **与 kiro 的 `--primary` 逐字节同值**，
+   正是 P-3 立 `--primary-strong` 要躲开的那一个，换了个名字又走了回来：
+   卡片底 `#ffffff` 上现算 **3.77:1**。
+   ⚠️ P-3 那条裁定**只按名字覆盖了 `--primary`**，够不到 `--success-text`。
+   已在 `base.css` 把亮色这一档降到 `#047857`（同一条 emerald 色阶下一档）⇒ 现算 **5.48:1**；
+   深色 `#6ee7b7` 本来就够（卡片底 9.60:1），不动。 */
+.reg-test-result.is-ok { color: var(--success-text); }
+/* 失败态另配一个非颜色线索（前缀符号由 JS 插），色条只是加强。
+   `--danger-text` 亮色同批从 `#dc2626`（白底 4.83:1，但压在 `--danger-bg` 上只有 4.24:1）
+   降到 `#b91c1c` ⇒ 白底 **6.47:1**；深色 `#fca5a5` 卡片底 **7.71:1**。 */
+.reg-test-result.is-bad { color: var(--danger-text); font-weight: 600; }
+
+/* ── 补池历史里的一行原因说明（表格单元格内的小字）。 */
+.reg-reason { font-size: 0.78rem; color: var(--text-tertiary); }
+
+/* ── 退避提示条：说明"下一次自动补池最早什么时候"。
+   这里只加一条上边距，形态由 JS 给的另一个类决定。
+
+   🔴 **注释与 JS 曾经对不上，登记在此**：这条注释原本写的是"套 `.mng-inline-note`"，
+   而 `js/sec-registrar.js` 实际给的是 `class: "banner-warn reg-backoff-note"` ——
+   拿到的是 `.banner-warn` 的琥珀底 + `--text-primary` 字色 + 4px 左色条 + `1rem` 下外边距，
+   与注释描述的"小字三级灰"完全是两种形态。**注释不是规格，它当时只是错的。**
+
+   ⚠️ **裁定：该改的是 JS，不是这条注释。** 三条理由，都不是审美：
+   1. **同一张卡里它有两个同类兄弟**（`sec-registrar.js:590-597`：冷却 `section.reg.cooldown`、
+      锁定 `section.reg.locked`），两条都是 `.mng-inline-note`。三条说的是同一件事
+      ——"下一次最早什么时候"——却一条吼两条低语，而**被吼的那条（退避）恰恰是三者里最轻的**：
+      `lockedUntil` 比 `backoff` 严重。**音量排序与事实排序反了。**
+   2. **`.banner` 是板块级组件**（06 §4 的 U-3：降级横幅、用量口径提示，位置在
+      `.section-header` 之下、统计卡之上），塞进卡片内部是混了高度层级；
+      而且它自带 `margin-bottom: 1rem`，作为卡片最后一个子元素会顶出一圈
+      比卡片自身 padding 更大的空白。
+   3. `.banner` 的 `display:flex; gap:.6rem; align-items:flex-start` 是为"图标 + 文字"两栏
+      准备的，而 JS 只塞了一段文字 ⇒ 那三条声明全是空转。
+   ⇒ `js/sec-registrar.js:603` 的 `"banner-warn reg-backoff-note"` 应改成
+     `"mng-inline-note reg-backoff-note"`。**那个文件不在 `admin-ui/css` 的归属里，
+     留给主线派。** 在它改之前，下面这条 `margin-top` 对两种形态都成立（`.mng-inline-note`
+     自带的是 `margin: .25rem 0 0`，这里把上边距提到 `.5rem`）。
+   ℹ️ 对比度现算，两种形态各记一笔：
+      · 今天的 `.banner-warn` 字色刻意是 `--text-primary` 而**不是** warning 色，
+        `#0f172a` 压在 `--warning-15` 合成出的 `#fef0da` 上 **15.92:1**（深色 9.63:1）—— 过。
+      · 换成 `.mng-inline-note` 之后是 `--text-tertiary`：亮色 `#64748b` 画在卡片底上
+        **4.76:1**（过），🔴 **但深色下 `--text-tertiary` 仍是 `#64748b`，画在
+        `--bg-primary: #1e293b` 上只有 3.07:1 —— 不过 AA。**
+      ⚠️ 后面这一条**不是这次换类引入的**：`--text-tertiary` 在深色下当正文用的地方
+      全仓有 50+ 处（`.form-hint` / `.modal-desc` / `.cell-sub` / 各种表格小字都是），
+      全都是这同一个 3.07:1。**它是一条独立的系统性欠账，需要单独一次裁定，
+      不该被夹带在这条换类里悄悄改掉。** 理由与取证见本次交付说明。 */
+.reg-backoff-note { margin-top: 0.5rem; }

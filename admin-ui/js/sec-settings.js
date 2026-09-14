@@ -1,1302 +1,970 @@
 /**
- * 配置表单。屏幕上它分成**两个挂载点**：
- * · **设置页**（`settingsSection`）：认证密钥 / 上游与冷却 + 集成示例 + 危险区
- *   （最后一张是设计里不带编号的那一节「重置到底重置了什么」）；
- * · **注册机板块的「设置」分页**（`registrarConfigPanel`）：注册机那张卡。
+ * 设置板块（`settings`）。
  *
- * ⚠️ **「设置页上有几张卡」这个数是五份 ADMIN.md 设置卡那张表的行数真源，
- * 而它数的是 `settingsSection` 那一段、不是整份文件**：注册机那张卡的代码住在这里，
- * 挂却挂在别的板块上。由 `tests/unit/docs-parity.test.ts` 的
- * 「五份 ADMIN.md 里五张表的行数，逐张等于屏幕那边对应的那个计数」钉着，
- * 搬出去的卡在那边有一张双向查的登记表。
+ * 外观**照 kiro**（06 §3.2 ⑨）：`.settings-grid` 两列放卡、集成示例走
+ * `.int-card/.int-codewrap/.int-copy/.int-code`、危险区一条 2px 左红边。
+ * 功能**照 agnes**（它强得多）：逐字段四元组 + provenance + 干跑校验 +
+ * 凭据清空 + 一键重置 + 三态左色条。
  *
- * 板块契约（设计文档 §9.3）：`{ init?, onShow?, onHide? }`，见 admin-ui/js/app.js
- * 的 showSection。**板块内不许监听 langchange**——框架层会 apply(document) 之后
- * 重跑一次 onShow()。
+ * # 🔴 一条不可妥协的产品原则：**成功提示不得早于回读**
  *
- * ── 四条纪律 ────────────────────────────────────────────────────────────────
+ * `PUT /admin/api/config` 的回执**就是从存储回读出来的那一份**
+ * （`src/admin/config.rs` 纪律 ④：不是把 handler 自己算出来的 `next` 换个形状交回去）。
+ * ⇒ 面板必须：`await api.put()` → **拿回执重画整页** → 才允许出现任何「已保存」的迹象。
+ * 🔴 **而且不许说「已保存并生效」**：`appliedAt` 是「服务器落盘的那一刻」，
+ * 不是「所有实例都看见了」。本文件说的是两句话 ——
+ *   ① 「已写入，回读到这几个字段真的变了」（高亮 `changed`）；
+ *   ② 「其余实例最多 N 秒后看到」（`propagation.visibilityUpperBoundMs`）。
  *
- * ① **一切来自接口的内容一律 textContent**（四元组里的 `stored` 可能是任何东西，
- *    包括被外部写坏的字符串）。
- * ② **取值决策一律不写在这里**，全在 `js/pure/settings.mjs` 里
- *    （admin-ui/README.md 硬规则 1）。
- * ③ ⚠️⚠️ **成功提示不得早于回读**（设计 §5.3：「本设计唯一一条不可妥协的产品原则」）。
- *    这条在本文件的落点是 `save()` 里那一行 `const res = await api.put(...)`——
- *    **任何「已保存」的迹象都必须排在它之后**。把提示挪到 `await` 之前，
- *    `tests/ui/dom/settings-save.test.ts` 的
- *    「回读还没落定之前，界面上不许出现任何成功迹象」会变红。
- *    **并且不弹「已保存并生效」**（设计 §5.3 明令），而是回读 `effective`
- *    并把变化的字段高亮。
- * ④ **没有自动刷新。** 这个板块每刷新一次要付 1 次存储读，而配额账把面板的读
- *    算成「人点一下才发生」。
+ * # 🔴 三条贯穿本文件的纪律
+ *
+ * ① **来源推导一个字都不在这里做。** 「谁压过谁」全在后端
+ *    (`crate::core::config::resolve_config`)，四元组里的 `effective` 是**真跑一次**
+ *    取回来的。⚠️ 「有 env 就显示 env，否则显示存储」那条推法**在一个具体分支上
+ *    会说假话**：存储值非法时网关用的是默认值，而推出来的那份会把那个非法值
+ *    显示成「生效值」—— 两份实现之间的差，恰好落在最需要面板说实话的那一格上。
+ * ② 🔴 **凭据只写不读。** `GET` 永不返回明文（只有 `{configured, hint, lockedBy}`）；
+ *    `PUT` 时凭据字段**空串 = 不改**，清空只有 `POST /config/secrets/clear` 一条路。
+ *    ⚠️ 把空串实现成清空的后果：运维保存一次设置页就抹掉 `gatewayToken`，
+ *    而热实例因为持有者保留上一份快照**当场看不出任何异常**，直到下一次重启才整个停摆。
+ * ③ **一切来自接口的内容一律 `textContent`**（`el()` / `elI18n()` 内部就是它），
+ *    全文件零 `innerHTML`。
+ *
+ * # ⚠️ 密度：25 个可编辑项那条论证，与今天的 12 格
+ *
+ * 06 §2.11 保留 `.field-grid`（agnes 量出来的那条网格公式）的理由是「设置页有
+ * **25 个可编辑项**」。🔴 **那是 TS 版的数**：本仓 `src/admin/config.rs::FIELDS`
+ * 今天只有 **12 格**（10 个可编辑 + 2 个 `ReadOnly`），注册机那 15 格**随注册机
+ * 子树一起来**（`GatewayConfig` 里没有那棵树，硬编一份出来就是在面板层另写一套
+ * 来源推导）。⇒ 本文件照旧用 `.field-grid`（卡内两列），字段表**从响应现读**
+ * （`fields` / `credentials` / `editable` / `secrets` 四格），
+ * **面板不另存一份字段清单** —— 注册机那 15 格落地那天，这里零改动就长出来。
+ *
+ * # ⚠️ 板块内不许监听 `langchange`：框架层会 `apply(document)` 之后重跑 `onShow()`。
  */
 import { api } from "./api.js";
 import { t } from "./i18n.js";
 import { el, elI18n, toast, openModal, copy } from "./ui.js";
-import { fmtDash, fmtDuration } from "./pure/format.mjs";
-// 第 3 张卡（集成示例）。**模型清单直接复用模型板块那份窄化**，不在 examples.mjs 里
-// 再写一遍——同一份响应的同一个字段，两份窄化就是两份会分叉的判据。
-import { catalogModels } from "./pure/models.mjs";
-import {
-  EXAMPLE_LANGS, KEY_PLACEHOLDER, exampleProtocols, allExamples, langLabel,
-} from "./pure/examples.mjs";
-// **顺序的唯一真源在 `registrar.mjs`**，本文件把它传给 `channelFields()`，
-// `settings.mjs` 里不重新声明一份（见那里的说明）。
-import { CHANNELS, channelLabelKey, channelAddressFactKey } from "./pure/registrar.mjs";
-import {
-  CARD_AUTH, CARD_UPSTREAM, CARD_REGISTRAR, ADVANCED_FIELDS, MASTER_KEY_PATH, masterKeyView,
-  channelFields, fieldLabelKey, fieldView, credentialView,
-  buildPatch, localErrors, changedFields, changedSecrets, propagationView,
-  errorRows, clearResultView, displayValue, clearWarning, isDiagnostic, loadBlockedRows, loadBlockedKey,
-  loadNoticeRows,
-  isSaveReceipt, touchesLiveField, touchesBuildTimeField,
-  // 第 4 张卡（危险区）。**取值决策一律在纯函数里**，见本文件纪律 ②。
-  DANGER_ACTIONS, resetWarnings, poolSizeOf, purgeConfirmed, purgeResultView, isPoolSizeChanged,
-} from "./pure/settings.mjs";
+
+/* ============================================================
+   字段分组 —— **只管「画在哪张卡、叫什么名字」，不管「有没有、能不能改」**
+   ============================================================ */
 
 /**
- * 表单的全部节点。**一份 `fields` + 一张 `hosts` 名单。**
+ * 卡片分组。
  *
- * ⚠️⚠️ **为什么是「一份表单、两个宿主」而不是「两份表单」，这一段是本文件最要紧的取舍。**
- * 注册机那张配置卡从设置页搬到了注册机板块的「设置」分页（`registrarConfigPanel`），
- * 而 `GET/PUT /admin/api/config` 管的是**同一把配置**：
- * · 各写一份表单机制 ⇒ 建控件、四元组渲染、锁定、诊断态、错误行、回读高亮、
- *   保存顺序（设计 §5.3 那条不可妥协的产品不变式）全都要抄第二份，
- *   而两份实现里绿的那一份会赢——这正是本仓 `js/ui.js` 文件头点名反对的形态；
- * · 一份表单、两个宿主 ⇒ **同一个字段在整个面板里只有一个控件**，
- *   `buildPatch` 看到的仍然是一张完整的表单，「两处各写各的」在结构上不成立。
- *
- * `fields` 是路径 → 控件，两个宿主共用；`hosts` 是「每个挂载点自己的那几行状态」
- *（保存按钮、降级横幅、装载失败清单、错误行、回读行、传播说明）——**这几样必须
- * 按宿主各有一份**：运维站在注册机的「设置」分页上按保存，错误行画到设置页那份
- * 节点上等于**屏幕上什么都没发生**。`render()` / `showErrors()` 一族因此逐个宿主写一遍。
- *
- * `examples` / `dangerResult` 只属于设置页那个宿主，注册机那边**没有**这两张卡
- * ⇒ 它们可以是 `null`，碰它们的地方一律先判空。
+ * 🔴 **这张表不是字段清单的第二份真源**：
+ *   · 「这个字段存不存在」由响应里的 `fields` / `credentials` 决定；
+ *   · 「能不能改」由响应里的 `editable` + 那一格的 `lockedBy` 决定；
+ *   · 本表只回答「画在哪张卡、标题写什么」。
+ * ⚠️ 响应里出现一个本表不认识的字段时**照样画出来**（落进 `other` 那张卡，
+ * 标题就是它的路径）——**不许静默丢弃**：那会让一个新加的旋钮在面板上消失，
+ * 而运维以为这个部署没有它。反向（表里有、响应里没有）则跳过，不画空格子。
  */
-let nodes = null;
-let abort = null;
-/**
- * 运维**真的动过**的那些字段路径。
- *
- * ⚠️ **它只在「这一格没有基线可比」时才起作用**（诊断态下后端把 `fields` 整个给
- * `null`）。没有基线时「变没变」这个问题没有答案，而凭空替运维送一个值的后果
- * 是「面板做了他没要求的事，然后显示成功」——见 `buildPatch` 里那段 ⚠️⚠️。
- * 每次重新渲染都清空：渲染之后表单里的值就是服务端的当前状态，谈不上「动过」。
- */
-let touched = new Set();
-/** 最近一次成功的 `GET /admin/api/config` 响应；`null` = 还没有过一次成功。 */
-let data = null;
+const GROUPS = [
+  { id: "upstream", titleKey: "section.set.group.upstream", fields: ["agnesBaseUrl", "upstreamTimeoutMs", "upstreamSyncTimeoutMs"] },
+  { id: "resilience", titleKey: "section.set.group.resilience", fields: ["maxStrikes", "cooldownRateLimitMs", "cooldownPaymentMs", "cooldownStrikeMs"] },
+  { id: "pool", titleKey: "section.set.group.pool", fields: ["poolCacheTtlMs", "poolTouchIntervalMs"] },
+  // 注册机分三组：**开关与节奏 / 两条通道的凭据 / 铸号细节**。
+  // ⚠️ 两条通道**字母序**（moemail 在前），与注册机板块那两张卡同一条规矩：
+  // 任何顺序都会被读成排名，字母序是唯一可辩护的中立规则。
+  { id: "registrar", titleKey: "section.set.group.registrar",
+    fields: ["registrar.enabled", "registrar.channel", "registrar.targetKeys", "registrar.tendIntervalMs"] },
+  { id: "registrarChannels", titleKey: "section.set.group.registrarChannels",
+    fields: ["registrar.moemail.baseUrl", "registrar.moemail.apiKey",
+             "registrar.yyds.baseUrl", "registrar.yyds.apiKey"] },
+  { id: "registrarMint", titleKey: "section.set.group.registrarMint",
+    fields: ["registrar.mintBatch", "registrar.mintDelayMinMs", "registrar.mintDelayMaxMs",
+             "registrar.codeTimeoutMs", "registrar.maxDomainAttempts",
+             "registrar.tokenName", "registrar.agnesPlatformUrl"] },
+  { id: "readonly", titleKey: "section.set.group.readonly", fields: ["degraded", "usageStatsEnabled"] },
+];
 
-// ───────────────────────────────────────────────────────────────────────────
-// 第 3 张卡：集成示例（设计 §10.4）的那几格状态
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * 窄化之后的协议目录（`{ protocols, models }`）。`null` = 还没读到 / 读不出来。
- * **成功读到一次就不再读**：这份目录是静态的（`src/core/admin/protocol-catalog.ts`
- * 全部是模块级常量），重读一遍只会换来一次「这次可能失败」的机会。
- */
-let exCatalog = null;
-/**
- * 这一刻有没有一条目录读在飞。
- *
- * ⚠️ **它不是可有可无的**：`onShow()` 是隐式入口，读还没回来时切走再切回来，
- * `exCatalog` 仍是 `null` ⇒ 没有这条早退就会发出第二条链，而**一条晚到的失败会把
- * 已经画好的示例卡抹掉**（`admin-ui/js/sec-models.js` 的文件头记着这个缺陷的实测过程，
- * 那里两条链并存的后果是 `rowsAfterLateFailure=0`）。
- */
-let exInFlight = false;
-/** 当前选中的协议 id；空串 = 还没选过，渲染时落到真源给的第一条。 */
-let exProto = "";
-/** 当前选中的语言。**默认取 `EXAMPLE_LANGS` 的第一档，不写第二份字面量。** */
-let exLang = EXAMPLE_LANGS[0];
-/**
- * 示例里的 base URL。
- *
- * ⚠️⚠️ **它是运行期读来的，一个字面量都不许写死**（全局约束 4 / 11）：面板部署在哪个
- * 域名下，示例里的地址就该是哪个。**这一行必须留在板块文件里**——`js/pure/` 下禁止
- * 出现浏览器那两个顶层全局（`scripts/build-ui.mjs` 的三条静态校验，含注释里的字样），
- * 所以纯函数只收一个 `origin` 参数，读它是板块文件的活。
- */
-let exOrigin = "";
+/** 逐字段的说明文案。认不出来的字段不画说明（**不编一句**）。 */
+const FIELD_LABEL = {
+  agnesBaseUrl: "section.set.field.agnesBaseUrl",
+  upstreamTimeoutMs: "section.set.field.upstreamTimeoutMs",
+  upstreamSyncTimeoutMs: "section.set.field.upstreamSyncTimeoutMs",
+  maxStrikes: "section.set.field.maxStrikes",
+  cooldownRateLimitMs: "section.set.field.cooldownRateLimitMs",
+  cooldownPaymentMs: "section.set.field.cooldownPaymentMs",
+  cooldownStrikeMs: "section.set.field.cooldownStrikeMs",
+  poolCacheTtlMs: "section.set.field.poolCacheTtlMs",
+  poolTouchIntervalMs: "section.set.field.poolTouchIntervalMs",
+  degraded: "section.set.field.degraded",
+  usageStatsEnabled: "section.set.field.usageStatsEnabled",
+  gatewayToken: "section.set.field.gatewayToken",
+  "registrar.enabled": "section.set.field.registrar.enabled",
+  "registrar.channel": "section.set.field.registrar.channel",
+  "registrar.targetKeys": "section.set.field.registrar.targetKeys",
+  "registrar.tendIntervalMs": "section.set.field.registrar.tendIntervalMs",
+  "registrar.mintBatch": "section.set.field.registrar.mintBatch",
+  "registrar.mintDelayMinMs": "section.set.field.registrar.mintDelayMinMs",
+  "registrar.mintDelayMaxMs": "section.set.field.registrar.mintDelayMaxMs",
+  "registrar.codeTimeoutMs": "section.set.field.registrar.codeTimeoutMs",
+  "registrar.maxDomainAttempts": "section.set.field.registrar.maxDomainAttempts",
+  "registrar.tokenName": "section.set.field.registrar.tokenName",
+  "registrar.agnesPlatformUrl": "section.set.field.registrar.agnesPlatformUrl",
+  "registrar.moemail.baseUrl": "section.set.field.channel.moemailBaseUrl",
+  "registrar.moemail.apiKey": "section.set.field.channel.moemailApiKey",
+  "registrar.yyds.baseUrl": "section.set.field.channel.yydsBaseUrl",
+  "registrar.yyds.apiKey": "section.set.field.channel.yydsApiKey",
+};
 
 /**
- * 一格字段。**公开字段与凭据长得不一样，但都由这一个函数建出来**——
- * 两条代码路径迟早会分叉（一边有锁徽标、一边忘了加），而分叉的那一边正好是
- * 凭据这一边时，后果是运维在一个被 env 锁死的口令框里改了半天。
+ * 逐字段错误码 → 文案键。
+ *
+ * 🔴 **面板靠 `code` 选五语言文案，绝不解析 `message`**（后端那句是中文的、
+ * 是给日志看的）。
+ * ⚠️ 认不出来的 code 走 `section.set.err.unknown`，**把原始 code 一起画出来**
+ * —— 「面板还不认识这条」比一句含糊的「保存失败」有用得多。
+ *
+ * ⚠️⚠️ **这张表刻意只收今天真的发得出来的那 13 条**，
+ * 而 `src/core/config_errors.rs::ConfigErrorCode::ALL` 有 22 条 ——
+ * 少的那 9 条（`not_a_boolean` / `too_long` / `not_a_channel` / `channel_required` /
+ * `delay_min_gt_max` / `channel_credentials_missing` / `legacy_*` 三条）
+ * **今天没有任何路径能产出**：它们的字段全在注册机子树里，而那棵树不存在。
+ * 🔴 **提前把它们翻译进字典，正是 `FIELDS` 那段注释点名的漂移起点**
+ * 「面板字典里有一条永远选不到的文案」—— 一条没人看得到的文案既不会被审核、
+ * 也不会被发现写错。注册机落地那天它们会以
+ * 「面板还不认识这条错误码：channel_required」的形态**自己喊出来**，那是想要的信号。
  */
-function buildField(path, secret) {
-  const wrap = el("div", { class: "cfg-field", "data-field": path });
-  const label = elI18n("label", fieldLabelKey(path), { class: "cfg-label" });
-  wrap.appendChild(label);
+const ERR_KEY = {
+  unknown_field: "section.set.err.unknownField",
+  locked_by_env: "section.set.err.lockedByEnv",
+  not_an_integer: "section.set.err.notAnInteger",
+  below_min: "section.set.err.belowMin",
+  not_a_string: "section.set.err.notAString",
+  empty: "section.set.err.empty",
+  not_a_url: "section.set.err.notAUrl",
+  gateway_token_required: "section.set.err.gatewayTokenRequired",
+  whitespace_padded: "section.set.err.whitespacePadded",
+  not_sendable: "section.set.err.notSendable",
+  too_short: "section.set.err.tooShort",
+  same_as_admin_token: "section.set.err.sameAsAdminToken",
+  config_unloadable: "section.set.err.configUnloadable",
+  // 📜 这几条曾经被刻意留空，理由是「它们的字段全在注册机子树里，而那棵树不存在」。
+  // 子树进了配置面（`FIELDS` 27 格），**它们现在真的发得出来** ⇒ 翻译补上。
+  // ⚠️ `channel_required` / `legacy_channel_env` **仍然没有产生点**，
+  // 如实不收 —— 收了就是那段注释点名的「漂移起点」。
+  not_a_boolean: "section.set.err.notABoolean",
+  too_long: "section.set.err.tooLong",
+  not_a_channel: "section.set.err.notAChannel",
+  delay_min_gt_max: "section.set.err.delayMinGtMax",
+  channel_credentials_missing: "section.set.err.channelCredentialsMissing",
+  legacy_channel_key: "section.set.err.legacyChannelKey",
+  legacy_fallback_ignored: "section.set.err.legacyFallbackIgnored",
+};
 
-  const input = secret
-    ? el("input", { type: "password", autocomplete: "new-password", "data-i18n-ph": "set.secretPlaceholder" })
-    : el("input", { type: "text" });
-  if (secret) input.setAttribute("placeholder", t("set.secretPlaceholder"));
-  wrap.appendChild(input);
+/**
+ * 集成示例的三种语言。**只有形态差别，请求本身是同一条。**
+ *
+ * ⚠️⚠️ **文案键一律写成字面量，不许用模板串拼**：`src/webui/mod.rs` 的
+ * `referenced_keys()` 扫的是**双引号字面量**，拼出来的 key 它一个都看不见 ⇒
+ * 那几条词条会被「字典里每个 key 都被引用过」那一格判成孤儿而当场红。
+ */
+const SAMPLE_LANGS = [
+  { id: "curl", labelKey: "section.set.lang.curl" },
+  { id: "python", labelKey: "section.set.lang.python" },
+  { id: "node", labelKey: "section.set.lang.node" },
+];
 
-  // 四元组那三格（`stored` / `env` / `effective`）与锁定说明各自一行。
-  const meta = el("p", { class: "muted note cfg-meta" });
-  wrap.appendChild(meta);
-  const lock = el("p", { class: "muted note cfg-lock" });
-  lock.style.display = "none";
-  wrap.appendChild(lock);
+/* ============================================================
+   状态
+   ============================================================ */
 
-  let clear = null;
-  if (secret) {
-    clear = elI18n("button", "set.clearSecret", { type: "button", class: "cfg-clear danger" });
-    clear.addEventListener("click", () => { confirmClear(path); });
-    wrap.appendChild(clear);
-  }
-  return { wrap, input, meta, lock, clear, path, secret };
+const state = {
+  /** `GET /admin/api/config` 的整包。`null` = 还没拉到 / 上一次失败。 */
+  config: null,
+  /** 拉取失败时那句话的 key。 */
+  failedKey: null,
+  /** 用户改过的那些格子：`path → 原始输入串`。**只有它们进 patch。** */
+  dirty: new Map(),
+  /** 上一次保存回读出来真的变了的字段（高亮用）。 */
+  changed: [],
+  /** 逐字段错误：`path → {code, params}`。`""` 这个 path 装的是整体性错误。 */
+  errors: new Map(),
+  /** 集成示例卡。`null` = 还没拉到目录（那张卡就不画，**不画一张空的**）。 */
+  catalog: null,
+  sampleProtocol: null,
+  sampleLang: "curl",
+  busy: false,
+};
+
+let ctl = null;
+const nodes = {};
+
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+function langOf() { return document.documentElement.lang || "zh-CN"; }
+
+function fmtSeconds(ms) {
+  return t("section.set.seconds", { n: String(Math.round(ms / 100) / 10) });
 }
 
-/**
- * 通道下拉。**初始是占位符，两条通道都不预选**（设计 §10.3 第 1 条）。
- *
- * **控件仍是 `<select>`，刻意不改成 radio**：换成 radio 要在 `addField`/`fieldView`
- * 开一条新分支 + 新 DOM + 逐项 disabled 回填 + 重写全部摸 select 的用例，
- * 还要吃体积预算，而收益只是「更像单选」。占位符「未选择」在二选一里更是必须的
- *（未选 = 注册机不跑）。选项顺序仍取 `CHANNELS`（字母序）—— 字母序在这里额外还
- * 一笔账：它让「第一个 = 主」这个读法从一开始就不成立。
- */
-function buildChannelSelect(path) {
-  const wrap = el("div", { class: "cfg-field", "data-field": path });
-  wrap.appendChild(elI18n("label", fieldLabelKey(path), { class: "cfg-label" }));
-  const select = el("select");
-  // 占位符本身是一个**有意义的选项**（「未选择」），不是空白项。
-  select.appendChild(el("option", { value: "" }, t("reg.none")));
-  for (const c of CHANNELS) {
-    select.appendChild(el("option", { value: c }, t(channelLabelKey(c))));
-  }
-  // **显式写死初始值**，不靠「第一个 option 恰好是占位符」这个巧合。
-  select.value = "";
-  wrap.appendChild(select);
-  const meta = el("p", { class: "muted note cfg-meta" });
-  wrap.appendChild(meta);
-  const lock = el("p", { class: "muted note cfg-lock" });
-  lock.style.display = "none";
-  wrap.appendChild(lock);
-  return { wrap, input: select, meta, lock, clear: null, path, secret: false };
+/* ============================================================
+   骨架
+   ============================================================ */
+
+function build(node) {
+  clear(node);
+
+  const head = el("div", { class: "section-header" });
+  head.appendChild(elI18n("h2", "section.set.title", { class: "section-title" }));
+  const actions = el("div", { class: "section-actions" });
+  nodes.reloadBtn = elI18n("button", "section.set.reload", { type: "button", class: "btn btn-sm btn-outline" });
+  nodes.reloadBtn.addEventListener("click", () => load());
+  actions.appendChild(nodes.reloadBtn);
+  head.appendChild(actions);
+  node.appendChild(head);
+
+  nodes.banners = el("div");
+  node.appendChild(nodes.banners);
+
+  nodes.grid = el("div", { class: "settings-grid" });
+  node.appendChild(nodes.grid);
+
+  // ⚠️ **保存条有自己的容器**，不是每次 `render()` 现插一个 ——
+  //    `insertBefore` 版本每重画一次就多一条保存条（改一格字段就多一条），
+  //    而多出来的那几条各自绑着旧的 `nodes.saveBtn`，点哪一条都可能是上一轮的状态。
+  nodes.barHost = el("div");
+  node.appendChild(nodes.barHost);
+
+  // 集成示例与危险区都是**整行**的卡，不进两列栅格。
+  nodes.examples = el("div");
+  node.appendChild(nodes.examples);
+
+  nodes.danger = el("div");
+  node.appendChild(nodes.danger);
 }
 
-/** 注册机开关。布尔字段用 checkbox，别的都是文本框。 */
-function buildToggle(path) {
-  const wrap = el("div", { class: "cfg-field", "data-field": path });
-  wrap.appendChild(elI18n("label", fieldLabelKey(path), { class: "cfg-label" }));
-  const input = el("input", { type: "checkbox" });
-  wrap.appendChild(input);
-  const meta = el("p", { class: "muted note cfg-meta" });
-  wrap.appendChild(meta);
-  const lock = el("p", { class: "muted note cfg-lock" });
-  lock.style.display = "none";
-  wrap.appendChild(lock);
-  return { wrap, input, meta, lock, clear: null, path, secret: false };
-}
+/* ============================================================
+   取数
+   ============================================================ */
 
-/**
- * 卡 1 顶上那一行「主 API 密钥」：掩码 + 状态 + 一颗按钮。**只读，不是第二个输入框**
- * ——能改它的那个框就在同一张卡里，同一把凭据给两个入口迟早会分叉。
- *
- * ⚠️⚠️ **那颗按钮复制的是占位符，不是口令**（面板拿不到明文，理由在
- * `pure/settings.mjs` 的 `masterKeyView()` 上方）：照抄一颗「复制密钥」的结果是往剪贴板里
- * 塞一个空串而 toast 照样说「已复制」——**静默给出错误答案的按钮比没有按钮坏**。
- */
-function buildMasterRow() {
-  const wrap = el("div", { class: "cfg-field", "data-master-key": MASTER_KEY_PATH });
-  wrap.appendChild(elI18n("div", "set.master.label", { class: "cfg-label" }));
-  const value = el("div", { class: "mono cfg-master-value" }, fmtDash(null));
-  wrap.appendChild(value);
-  const state = el("span", { class: "muted note cfg-master-state" });
-  wrap.appendChild(state);
-  const btn = elI18n("button", "set.master.copy", { type: "button", class: "cfg-master-copy" });
-  btn.addEventListener("click", () => { copy(KEY_PLACEHOLDER); });
-  wrap.appendChild(btn);
-  wrap.appendChild(elI18n("p", "set.master.note", { class: "muted note" }));
-  return { wrap, value, state };
-}
-
-function card(titleKey) {
-  const wrap = el("div", { class: "card block" });
-  wrap.appendChild(elI18n("h3", titleKey));
-  const body = el("div");
-  wrap.appendChild(body);
-  return { wrap, body };
-}
-
-/**
- * 建 `nodes`。**两个宿主谁先被打开都要能建起来**，所以它是幂等的：
- * 面板可能先进注册机板块的「设置」分页，那时设置板块还没 `init()` 过。
- */
-function ensureNodes() {
-  if (nodes === null) {
-    nodes = {
-      fields: {}, hosts: [], examples: null, dangerResult: null, master: null,
-      // 两张通道凭据子卡上那一行「本次使用 / 未使用」。**按通道名存**，
-      // 因为它是逐通道渲染的，而不是逐字段。
-      channelUse: {},
-    };
-  }
-}
-
-/**
- * 一个挂载点的「状态行」成套建出来并登记。**成套**是关键：
- * 少建一样（比如漏了错误行）在那个宿主上就是**保存失败时屏幕上什么都不显示**，
- * 而另一个宿主照旧正常 ⇒ 这种缺陷只有站在那一页上才看得见。
- * 返回值里那颗保存按钮由调用方自己挂进工具条（两个宿主的工具条形状不同）。
- */
-function addHost(container, saveBtn) {
-  const degraded = elI18n("p", "set.degraded", { class: "danger-text" });
-  degraded.style.display = "none";
-  container.appendChild(degraded);
-
-  /**
-   * **不拦人的常驻提示**（存量的主备旧键怎么读的、丢了什么）。
-   *
-   * ⚠️ **它在顶上、和「装不起来」那块分开**：那块是红的、说的是「有东西挡着」，
-   * 这块说的是「一切照常跑，只是有句话得告诉你」。两句混在同一块里，运维会把
-   * 一条不拦人的提示读成一次故障。
-   */
-  const notices = el("div", { class: "cfg-notices muted note" });
-  notices.style.display = "none";
-  container.appendChild(notices);
-
-  const host = { save: saveBtn, degraded, notices, blocked: null, errors: null, readback: null, propagation: null, propagationBuildTime: null };
-  nodes.hosts.push(host);
-  return host;
-}
-
-/**
- * 一个挂载点**底部**那几行（装载失败清单 / 错误行 / 回读行 / 两句传播说明）。
- * 与 `addHost()` 分成两步，纯粹是因为它们在页面上一个在顶、一堆在底。
- */
-function addHostFooter(container, host) {
-  const blocked = el("div", { class: "cfg-blocked danger-text" });
-  blocked.style.display = "none";
-  container.appendChild(blocked);
-  host.blocked = blocked;
-
-  const errors = el("div", { class: "cfg-errors danger-text" });
-  errors.style.display = "none";
-  container.appendChild(errors);
-  host.errors = errors;
-
-  const readback = el("p", { class: "muted note cfg-readback" });
-  readback.style.display = "none";
-  container.appendChild(readback);
-  host.readback = readback;
-
-  const propagation = el("p", { class: "muted note" });
-  container.appendChild(propagation);
-  host.propagation = propagation;
-
-  // 上面那句的**例外分支**：这次保存碰到了建实例时读一次的字段。
-  // ⚠️ **它是保存回执，不是又一条常驻说明**——常驻的那句在卡 2 底下
-  //（`set.card.upstreamNote`，改之前就该看见）。默认藏着，由 `render()` 按
-  // `touchesBuildTimeField()` 打开，见那里那一段。
-  // 走 `elI18n` 而不是 `t()`：它不带占位符 ⇒ 切语言时框架层的 `apply(document)`
-  // 刷得动它（`set.propagation` 带 `{bound}`，刷不动，只能等 `onShow()` 重画）。
-  const propagationBuildTime = elI18n("p", "set.propagation.buildTime", { class: "muted note" });
-  propagationBuildTime.style.display = "none";
-  container.appendChild(propagationBuildTime);
-  host.propagationBuildTime = propagationBuildTime;
-}
-
-/** 建一格并登记进 `nodes.fields`，两处都不许漏——漏了那一格永远不会被渲染。 */
-function addField(container, path, kind) {
-  const built = kind === "select"
-    ? buildChannelSelect(path)
-    : (kind === "toggle" ? buildToggle(path) : buildField(path, kind === "secret"));
-  container.appendChild(built.wrap);
-  nodes.fields[path] = built;
-  // **两种事件都收**：文本框走 `input`，下拉与开关走 `change`。
-  // 漏掉任一种，那一类控件在诊断态下就再也提交不上去（那条发现的反面）。
-  for (const type of ["input", "change"]) {
-    built.input.addEventListener(type, () => { touched.add(path); });
-  }
-  return built;
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// 渲染
-// ───────────────────────────────────────────────────────────────────────────
-
-function renderOne(built) {
-  const path = built.path;
-  if (built.secret) {
-    const v = credentialView(data, path);
-    built.meta.textContent = v.present === false
-      ? t("set.meta.unreadable")
-      : t("set.meta.secret", {
-        state: t(v.configured === true ? "set.secretSet" : "set.secretUnset"),
-        hint: v.hint === null ? "—" : v.hint,
-      });
-    setLock(built, v.locked, v.lockedBy);
-    // **凭据框永远是空的**：它没有明文可回填（设计 §8.6），占位符说「留空则不修改」。
-    built.input.value = "";
-    // 锁定的凭据框不许可编辑（评审发现）。**由这里显式决定**，见 `setLock` 上面那段。
-    built.input.disabled = v.locked === true;
-    // ⚠️ **清空按钮不跟着 `locked` 一起禁用，这一行是订正。**
-    // 它清的是**存储里那一份**，而 env 锁定恰恰是「清掉存储那份最安全」的状态
-    //（生效值回落到环境变量，纹丝不动）。第一版跟着 `locked` 禁用，
-    // 与 `src/core/admin/config-validate.ts` 的 `clearSecret` 里写着的理由
-    //（「环境变量提供口令的部署想清掉存储里那份多余的旧口令时无路可走」）自相矛盾——
-    // 后端从来没拦过它，`configClearSecretHandler` 里那个 `stillConfigured` 分支
-    // 就是专门为这个状态写的，只有前端把它挡死了。
-    // 判据改成「有东西可清才让点」：`configured` 为假时清空是纯粹的空操作。
-    if (built.clear !== null) built.clear.disabled = v.configured !== true;
-    return;
-  }
-
-  const v = fieldView(data, path);
-  if (v.present === false) {
-    built.meta.textContent = t("set.meta.unreadable");
-    // ⚠️⚠️ **诊断态下**（存储里那份配置装载不起来）**不许把输入框置灰**：
-    // 那会把「关掉注册机 / 把那把 key 填回去」这两条自救路径在 UI 上堵死，
-    // 而后端明明放行。只有「这一格单独没读到」才置灰——那时改它也没有意义。
-    //
-    // ⚠️ **史实订正（复评发现）**：改动前这一行写的是 `disabled = true`，
-    // 但下面那句 `setLock(built, false, null)` 会把它抹回 `false`（那行已删，
-    // 见 `setLock` 上面那段）⇒ **诊断态从来没被置灰过**，真正没生效的是
-    // 「单独一格没读到」那一半。这一行是让两种状态**第一次分得开**，
-    // 不是在修一个「被置灰」的缺陷。
-    built.input.disabled = !isDiagnostic(data);
-    setLock(built, false, null);
-    return;
-  }
-  built.meta.textContent = t("set.meta.quad", {
-    stored: displayValue(v.stored),
-    env: displayValue(v.env),
-    effective: displayValue(v.effective),
-  });
-  // 被 env 锁定的字段置灰（评审发现）。**由这里显式决定**，见 `setLock` 上面那段。
-  built.input.disabled = v.locked === true;
-  // 输入框里回填**存储层**那个值（面板真正在改的就是那一层）；存储里没有就留空，
-  // 生效值另在上面那一行里写着。
-  if (built.input.getAttribute("type") === "checkbox") {
-    built.input.checked = v.stored === true || (v.stored === null && v.effective === true);
-  } else {
-    built.input.value = v.stored === null || v.stored === undefined ? "" : String(v.stored);
-    // **框里空着的时候，占位符显示当前生效值**：框里回填的是存储层那个值，而全新
-    // 部署下存储层是空的 ⇒ 一整页空框。占位符把「现在实际在用的是什么」放回框里，
-    // 而它**不是**一个会被提交的值（留空 = 这次不改这一格，见 `buildPatch`）。
-    built.input.setAttribute("placeholder", displayValue(v.effective));
-  }
-  setLock(built, v.locked, v.lockedBy);
-}
-
-/**
- * 锁定字段：**输入框置灰 + 一句怎么轮换的说明**（设计 §5.3 UI 规则 / §10.4 卡 1）。
- *
- * ⚠️ **说明必须说清「怎么改」，不是只说「被锁了」**：环境变量锁定时，面板上改
- * 一百遍都不会生效，运维要知道去改的是部署那一侧。
- */
-function setLock(built, locked, lockedBy) {
-  // ⚠️⚠️ **这个函数不再碰 `disabled`，那一行是死代码，而且它杀过别人。**
-  //
-  // 原来这里写着 `built.input.disabled = locked === true;`，而它**紧跟在调用方
-  // 刚设好的 `disabled` 之后执行** ⇒ 把调用方的决定整个覆盖掉。后果具体：
-  // 「这一格没读到」那一支里的 `built.input.disabled = true` **从落地那天起就没
-  // 生效过**（`setLock(built, false, null)` 立刻把它抹回 `false`）。
-  // 这条是本任务补「诊断态下表单必须还能用」的对照用例时挖出来的——
-  // 一个**看起来在生效、实际从来没生效**的赋值。
-  // ⇒ `disabled` 由**调用方**显式决定（三处各有各的判据），这里只管锁的视觉与说明。
-  built.lock.style.display = locked === true ? "" : "none";
-  built.lock.textContent = locked === true
-    ? t("set.lockedBy", { env: String(lockedBy || "").replace(/^env:/, "") })
-    : "";
-  built.wrap.classList.toggle("locked", locked === true);
-}
-
-/**
- * 主密钥那一行。**三档不许合并**：配了 / 没配 / 整份读不到。把第三档并进「未配置」
- * 是当面说一句我们并不知道的话，而运维照着它填一把新口令，会把一台其实配好了的网关的
- * 口令换掉。**只在设置页那个宿主上有**（注册机分页没有卡 1）⇒ 先判空。
- */
-function renderMaster() {
-  if (nodes.master === null) return;
-  const v = masterKeyView(data);
-  nodes.master.value.textContent = v.masked === null ? fmtDash(null) : v.masked;
-  nodes.master.state.textContent = t(
-    v.configured === null ? "set.meta.unreadable" : (v.configured ? "set.secretSet" : "set.secretUnset"),
-  );
-}
-
-/**
- * 两张通道凭据子卡顶上那一行：**这一条本次用不用得到。**
- *
- * 判据是**生效值**（`fieldView(...).effective`），不是表单里正在编辑的值：
- * 这一行说的是「网关现在按哪条通道在跑」，而不是「你正打算改成哪条」。
- * 两条通道都读不出来时两张卡都显示「未使用」——那时注册机多半整个关着，
- * 而「关着时两张卡都说未配置」是本轮如实登记、刻意不修的一处既有缺口。
- */
-function renderChannelUse() {
-  const current = fieldView(data, "registrar.channel").effective;
-  for (const channel of Object.keys(nodes.channelUse)) {
-    nodes.channelUse[channel].textContent = t(
-      current === channel ? "reg.channel.inUse" : "reg.channel.idle",
-    );
-  }
-}
-
-function render() {
-  // 渲染之后表单里的值就是服务端的当前状态，之前那些「动过」的痕迹全部作废。
-  touched = new Set();
-  renderMaster();
-  for (const path of Object.keys(nodes.fields)) renderOne(nodes.fields[path]);
-
-  const p = propagationView(data);
-  // ── 传播说明：两句话，各自有各自的前提───────────────────────────────────────
-  //
-  // `set.propagation` 逐字说的是「**本实例已经生效**；别的副本最长 {bound} 之后才看得到」，
-  // 而 `BUILD_TIME_FIELDS` 那两格是建实例时读一次的（`src/http/wire.ts`）⇒
-  // 只改那两格时这句话是**当面说反话**：本实例没生效，而且等多久都没用。
-  // ⚠️ **判据从 `BUILD_TIME_FIELDS` 派生**，这里不许写 `if (path === "poolCacheTtlMs" || …)`。
-  // ⚠️ **两句不是互斥的**：混合保存时两句都要出现，见 `touchesLiveField()` 上面那段。
-  //
-  // `saved === null` = 这份数据不是保存回执（只是读了一次 / 清空凭据回来的）⇒
-  // 那时 `set.propagation` 讲的是**这个部署的传播上界**这件事实本身，照旧渲染；
-  // 而「这次改动」那句回执**一个字都不说**（无中生有的回执与假回执一样坏）。
-  const saved = isSaveReceipt(data) ? changedFields(data).concat(changedSecrets(data)) : null;
-
-  // ⚠️⚠️ **回到读取态时，上一次保存的回读行与各格高亮必须一起作废**（复评发现）。
-  //
-  // 复评实测出来的形状：保存了一个旋钮（屏幕上正确地说「本实例也还没生效」）之后，
-  // 运维**点一下这个面板自己的「刷新」**去看生效没有 ⇒ `load()` 拿回一份 GET（没有
-  // `changed`）⇒ `saved === null` ⇒ 上面那句 buildTime 藏起来、`set.propagation` 回来。
-  // 光是这一句本身讲的是这个部署的传播上界（读取态照旧要显示，见下），**但它不是一个人
-  // 站在那里**：`nodes.readback` 还挂着「已回读生效值，1 个字段发生了变化（已高亮）」、
-  // 那一格还带着 `.changed` —— 三个信号一起指向刚才那次保存，运维读到的就是
-  // 「你刚改的那格本实例已经生效」，而那是假的。早先那次「屏幕上编出一个状态码」是同一个形状。
-  // 切板块回来、切语言（`admin-ui/js/app.js` 的 `langchange` 兜底）走的都是同一个 `load()`。
-  //
-  // ⚠️ **修的是放大器，不是那句话本身**：`set.propagation` 的措辞是早先论证出来的、
-  // 五语言 DEPLOY.md 对用户的承诺，本任务不许改（读取态下它必须在，由
-  // `tests/ui/dom/settings-save.test.ts`
-  // 「④ 只是读了一次配置（还没保存过）：重启那句不出现，传播上界照常在」钉着；
-  // 本段这条清理由同文件「⑤ 保存旋钮之后回到读取态：回读行与高亮一并作废」钉着）。
-  //
-  // ⚠️ **边界：这里只清这两样。** 错误行（`nodes.errors`）与 `.invalid` 归 `clearMarks()`
-  // 管（每次保存前清），读取态不动它们——那是**上一次保存失败**留下的东西，与这句
-  // 传播说明不发生任何组合，扩到这里就是一次没被评审过的行为改动。这条边界如实登记在
-  // 遗留待办里，别把它读成「读取态会把屏幕清干净」。
-  if (saved === null) clearReadback();
-
-  // ⚠️⚠️ **危险区那一行回执同样必须在这里作废**（复评回填）。
-  //
-  // 它与上面那段是**同一个形状的第二例**，而它逃过了上面那段：上面清的是
-  // `nodes.readback`，判据是「这份数据是不是保存回执」；危险区那一行由 `doReset()` /
-  // `doPurge()` 直接写 `textContent`，`render()` 与 `load()` 从前一个字都不碰它。
-  // 复评实测：清空 7 把 key 成功之后，点面板自己的「刷新」、切板块再切回来、
-  // 甚至**把语言切成 en**，屏幕上一直挂着那句中文「已删掉 7 把 key；回读之后池子是空的。」
-  // ——它描述的是一次早已过去的操作，而且 `t()` 出来的文本框架层
-  // `apply(document)` 刷不动（本文件末尾 `set.propagation.buildTime` 那段注释写着这条陷阱）。
-  //
-  // ⚠️ **`doReset()` 在 `render()` 之后才写这一行**，所以这里无条件清不会把它自己刚说的话清掉；
-  // `doPurge()` 根本不调 `render()`，它那一行由下一次 `render()` / `clearMarks()` 清。
-  clearDangerResult();
-
-  const showLive = p.visibilityUpperBoundMs !== null && (saved === null || touchesLiveField(saved));
-  const degraded = data !== null && data.configDegraded === true;
-  // 装载不起来时：一条横幅 + 逐条列出缺什么。**表单仍然可编辑**（见 renderOne）。
-  const blocked = loadBlockedRows(data);
-  const notices = loadNoticeRows(data);
-
-  renderChannelUse();
-
-  // **逐个宿主画一遍**，理由与 `showErrors()` 上方那段相同。
-  for (const h of nodes.hosts) {
-    h.notices.textContent = "";
-    h.notices.style.display = notices.length === 0 ? "none" : "";
-    for (const r of notices) {
-      // 表外的码**原样显示出来**，不冒充任何一档已知原因（与下面那块同一条纪律）。
-      const text = r.key === null ? t("set.err.unknown", { code: r.code }) : t(r.key, r.params);
-      h.notices.appendChild(el("p", null, text));
-    }
-    h.propagation.textContent = showLive
-      ? t("set.propagation", { bound: fmtDuration(p.visibilityUpperBoundMs) })
-      : "";
-    h.propagation.style.display = showLive ? "" : "none";
-    h.propagationBuildTime.style.display = saved !== null && touchesBuildTimeField(saved) ? "" : "none";
-    h.degraded.style.display = degraded ? "" : "none";
-    h.blocked.textContent = "";
-    h.blocked.style.display = blocked.length === 0 ? "none" : "";
-    if (blocked.length > 0) {
-      // ⚠️⚠️ **三档文案，选键的逻辑住在 `loadBlockedKey()` 里，不许在这里写三元。**
-      // `set.loadBlocked.fatal` 那句写着「下一次重启 / isolate 回收会失败」——
-      // 那**只对整份配置装不起来的那一档成立**。注册机装不起来时网关照常跑、
-      // 照常重启得起来，拿那句话去吓人是把「面板不撒谎」换个地方违反一次。
-      // 第三档（**注册机关着但仍然有 blocker**）是评审回填补的：原来那句
-      // `isDiagnostic(data) ? … : …` 会让它走进「注册机开着」那条文案。
-      h.blocked.appendChild(elI18n("p", loadBlockedKey(data)));
-      for (const r of blocked) {
-        const label = nodes.fields[r.field] === undefined ? r.field : t(fieldLabelKey(r.field));
-        // 表外的码**原样显示出来**，不冒充任何一档已知原因。
-        const text = r.key === null ? t("set.err.unknown", { code: r.code }) : t(r.key, r.params);
-        h.blocked.appendChild(el("p", null, `${label}: ${text}`));
-      }
-    }
-  }
-  for (const r of blocked) {
-    if (nodes.fields[r.field] !== undefined) nodes.fields[r.field].wrap.classList.add("invalid");
-  }
-}
-
-/**
- * 第 3 张卡的卡内内容，整块重画。
- *
- * ── **本函数里没有任何一条端点路径、请求体形状或协议名** ──────────────────────
- * 核心设计决定（全局约束 15）：四个消费者只许有一份「怎么调这个网关」的知识。
- * 协议 id 与展示名、方法、路径模板、鉴权头、最小请求体全部来自
- * `GET /admin/api/models` 的响应，拼代码那一步在 `admin-ui/js/pure/examples.mjs` 里；
- * 这里只负责选哪一档、把它画出来。
- * ⚠️ `api.get("/models")` 这条 **admin** 路径不算第二份端点知识，边界与
- * `admin-ui/js/sec-models.js` 文件头「`api.get("/models")` 这条 admin 路径为什么不算
- * 第二份端点知识」那一段逐字相同。
- *
- * ⚠️ **代码块一律 `textContent`**：示例里全是引号与花括号，而 CSP 的 `script-src 'self'`
- * 要求零内联脚本（`src/ui/serve.ts`）。`el()` 走的就是 `textContent`。
- *
- * ⚠️ **「一条协议都没有」在这张卡上折进「读不出来」那一档，这是明写的取舍**：
- * 真源里那份协议清单是模块级常量、今天恒有四条，响应里它变成空数组只可能意味着
- * 这份响应被改过——那正是「读不出来」本身。别把这条推广到别的板块（模型板块的
- * 「一个模型都没有」是真会发生的一档，它在那里单独有话说）。
- */
-function renderExamples() {
-  const host = nodes.examples;
-  host.textContent = "";
-  if (exCatalog === null || exCatalog.protocols.length === 0) {
-    host.appendChild(elI18n("p", "set.examples.unavailable", { class: "danger-text" }));
-    return;
-  }
-  // 占位口令的取值来自纯函数模块，**不在文案里再抄一份**。
-  host.appendChild(el("p", { class: "muted note" }, t("set.examples.desc", { key: KEY_PLACEHOLDER })));
-
-  const rows = allExamples(exCatalog.protocols, exCatalog.models, exOrigin);
-  // 选中的协议不在这份目录里（第一次渲染，或目录变了）⇒ 落到真源给的第一条。
-  // **顺序照响应给的顺序，不在这里重排**——重排就是又一份知识。
-  if (!rows.some((r) => r.protocol === exProto)) exProto = exCatalog.protocols[0].id;
-
-  const protoBar = el("div", { class: "btn-group examples-bar" });
-  protoBar.appendChild(elI18n("span", "set.examples.proto", { class: "muted" }));
-  for (const p of exCatalog.protocols) {
-    // 展示名走响应里的 `label`（协议的专名，刻意不进 i18n）。三条都不许走：
-    // 本地再写一张映射、把 id 拼进一个 i18n key、直接渲染裸 id。
-    // `aria-pressed` 与 `.active` 同生同死（`.active` 只改颜色 + 一条加粗，读屏拿不到）。
-    const btn = el("button", {
-      type: "button", class: "btn-toggle", "data-ex-protocol": p.id,
-      "aria-pressed": exProto === p.id ? "true" : "false",
-    }, p.label);
-    btn.classList.toggle("active", exProto === p.id);
-    btn.addEventListener("click", () => { if (exProto !== p.id) { exProto = p.id; renderExamples(); } });
-    protoBar.appendChild(btn);
-  }
-  host.appendChild(protoBar);
-
-  const langBar = el("div", { class: "btn-group examples-bar" });
-  langBar.appendChild(elI18n("span", "set.examples.lang", { class: "muted" }));
-  for (const lang of EXAMPLE_LANGS) {
-    // 表外的语言**照实显示原值**，不冒充任何一档已知语言（`langLabel()` fail-open）。
-    const label = langLabel(lang);
-    const btn = el("button", {
-      type: "button", class: "btn-toggle", "data-ex-lang": lang,
-      "aria-pressed": exLang === lang ? "true" : "false",
-    }, label === null ? lang : label);
-    btn.classList.toggle("active", exLang === lang);
-    btn.addEventListener("click", () => { if (exLang !== lang) { exLang = lang; renderExamples(); } });
-    langBar.appendChild(btn);
-  }
-  host.appendChild(langBar);
-
-  const row = rows.find((r) => r.protocol === exProto && r.lang === exLang);
-  // ⚠️ **`code === null` 绝不能退化成「照拼一段」**：那一档的意思是「这条协议的路径要一个
-  //    模型，而目录里没有任何模型支持它」，硬拼出来的是一条长得像真的、按着抄一定打不通的
-  //    地址。如实说这里没有示例。
-  if (row === undefined || row.code === null) {
-    host.appendChild(elI18n("p", "set.examples.noModel", { class: "muted note" }));
-    return;
-  }
-  host.appendChild(el("pre", { class: "mono examples-code" }, row.code));
-  const copyBtn = elI18n("button", "common.copy", { type: "button", class: "examples-copy" });
-  copyBtn.addEventListener("click", () => { copy(row.code); });
-  host.appendChild(copyBtn);
-}
-
-/**
- * 拉一次协议目录。**零存储读**（`src/http/admin/handlers/models.ts` 全部来自模块级常量），
- * 所以它不进配额账，也不违反本板块「没有自动刷新」那条纪律。
- *
- * ⚠️ **两个不同的失败落到同一档**：HTTP 失败（`api.get` 抛）与「读得回来但形状不对」
- * （窄化交出 `null`）在卡上都是「读不出来」。少了后一半的话，一份被中间件改过形状的响应
- * 会让这张卡画出一段**结构自洽而内容缺斤少两**的示例——而运维会照着它抄。
- *
- * ⚠️ **没有「再读一次」按钮，这是刻意的**：`exCatalog` 为 `null` 时每一次 `onShow()`
- * 都会重来一遍，切走再切回来就是重试入口。代价如实写：**停在设置页不动的话，这张卡
- * 不会自己好起来**。
- */
-async function loadCatalog() {
-  if (exCatalog !== null) { renderExamples(); return; }
-  if (exInFlight) return;
-  exInFlight = true;
+async function load() {
+  if (ctl) ctl.abort();
+  ctl = new AbortController();
+  const mine = ctl;
+  state.dirty.clear();
+  state.errors.clear();
   try {
-    const body = await api.get("/models");
-    const protocols = exampleProtocols(body);
-    const models = catalogModels(body);
-    exCatalog = protocols === null || models === null ? null : { protocols, models };
+    const body = await api.get("/config", { signal: mine.signal });
+    if (mine !== ctl) return;
+    state.config = body;
+    state.failedKey = null;
   } catch (e) {
-    exCatalog = null;
-  } finally {
-    exInFlight = false;
+    if (mine !== ctl) return;
+    if (e && e.status === 401) return;
+    state.config = null;
+    state.failedKey = e && typeof e.status === "number" && e.status > 0
+      ? "section.set.loadFailedHttp"
+      : "section.set.loadFailedNetwork";
   }
-  // ⚠️ **这里不判 `nodes !== null`，上面那条早退也不判——两条路径对同一个不变量
-  //    必须给出同一个表态**（评审点出来的：上一版一条判一条不判，
-  //    而「一处判空」会被下一个人读成「这里真的可能是 null」）。
-  //    不变量与它的出处：`loadCatalog()` 只有 `onShow()` 一个调用方，而
-  //    `admin-ui/js/app.js` 的 `showSection` 是**先 init 再 onShow**
-  //    （`if (!s.__inited) { s.init(...); s.__inited = true; } s.onShow && s.onShow();`），
-  //    而 `nodes = { fields: {} }` 是本板块 `init()` 里**紧跟在标题那两行之后**就执行的，
-  //    此后再没有任何地方把它写回 null。
-  //    ⚠️ 上一版这里写的是「`init()` 第一行」——不确切（前面还有清空 section 与加标题两行）。
-  //    一句不确切的位置描述会让下一个人去那一行找、找不到、然后不再信这一整段。
+  render();
+  // 集成示例的目录**单独拉、失败不影响设置页主体**：它是一张说明卡，
+  // 不是这个板块存在的理由。⚠️ 刻意不 `await` 进上面那条路径。
+  loadCatalog();
+}
+
+async function loadCatalog() {
+  if (state.catalog) { renderExamples(); return; }
+  const mine = ctl;
+  try {
+    const body = await api.get("/models", { signal: mine ? mine.signal : undefined });
+    if (mine !== ctl) return;
+    state.catalog = body;
+    if (!state.sampleProtocol && Array.isArray(body.protocols) && body.protocols.length > 0) {
+      state.sampleProtocol = body.protocols[0].id;
+    }
+  } catch (e) {
+    // 🔴 **不弹 toast、不画一张空卡**：拉不到目录只是少一张说明卡。
+    if (mine !== ctl) return;
+    state.catalog = null;
+  }
   renderExamples();
 }
 
-/**
- * 上一次保存留下的**回读行与各格高亮**一并作废。
- *
- * ⚠️ **抽成函数是因为它有三个调用点**（`render()` 的读取态那一支、`clearMarks()`、
- * `doReset()`），而抄三份的话迟早有一份忘了清其中一样——复评那次
- * 「三个信号一起指向一次没有发生的变化」就是漏清其中一样的后果。
- */
-function clearReadback() {
-  for (const h of nodes.hosts) {
-    h.readback.textContent = "";
-    h.readback.style.display = "none";
-  }
-  for (const path of Object.keys(nodes.fields)) nodes.fields[path].wrap.classList.remove("changed");
+/* ============================================================
+   渲染 —— 横幅
+   ============================================================ */
+
+function errText(e) {
+  const key = ERR_KEY[e.code];
+  if (!key) return t("section.set.err.unknown", { code: String(e.code) });
+  return t(key, e.params || {});
 }
 
-/**
- * 危险区那一行回执作废。**一次早已过去的操作不许挂在屏幕上**，理由见 `render()` 里那段。
- */
-function clearDangerResult() {
-  // ⚠️ **必须判空**：危险区只在设置页那个宿主上，而注册机板块的「设置」分页可以在
-  // 设置板块从没被打开过的情况下先跑起来（`showSection` 只 init 当前那个板块）。
-  if (nodes.dangerResult === null) return;
-  nodes.dangerResult.textContent = "";
-  nodes.dangerResult.style.display = "none";
+/** 一条逐字段错误画成一行：`字段名：这句话`。字段为空时只画那句话。 */
+function errLine(e) {
+  const label = e.field && FIELD_LABEL[e.field] ? t(FIELD_LABEL[e.field]) : e.field;
+  return label ? `${label}：${errText(e)}` : errText(e);
 }
 
-/** 把上一次保存留下的高亮与错误全部清掉。**每次保存前都要清**，否则会越积越多。 */
-function clearMarks() {
-  for (const path of Object.keys(nodes.fields)) {
-    nodes.fields[path].wrap.classList.remove("invalid");
-  }
-  for (const h of nodes.hosts) {
-    h.errors.textContent = "";
-    h.errors.style.display = "none";
-  }
-  // ⚠️ **不清 `nodes.blocked`**：它讲的是「存储里那份配置现在装不装得起来」这个
-  // **当前状态**，不是上一次保存留下的痕迹；由 `render()` 按最新响应重算。
-  clearReadback();
-  // ⚠️ **保存失败那一支不走 `render()`**（`save()` 的 `catch` 里只画错误行），
-  // 所以危险区那一行必须在这里也清一次，否则一次失败的保存之后它还挂着。
-  clearDangerResult();
-}
-
-function showErrors(rows) {
-  // ⚠️ **每个宿主都画一遍，不是「画在当前可见的那个上」**：判断「现在站在哪一页」
-  // 要么读 DOM 的可见性、要么让本模块记住板块切换——两条都是在这里重造一份路由状态。
-  // 一次保存最多产生几行错误，多写一份的代价可以忽略，而漏写那一份的代价是
-  // **站在那一页上的人什么都看不见**。
-  for (const h of nodes.hosts) {
-    h.errors.textContent = "";
-    for (const r of rows) {
-      const line = el("p");
-      const label = nodes.fields[r.field] === undefined ? r.field : t(fieldLabelKey(r.field));
-      // 表外的码**原样显示出来**，不冒充任何一档已知原因。
-      const text = r.key === null ? t("set.err.unknown", { code: r.code }) : t(r.key, r.params);
-      line.textContent = `${label}: ${text}`;
-      h.errors.appendChild(line);
-    }
-    h.errors.style.display = rows.length === 0 ? "none" : "";
-  }
-  for (const r of rows) {
-    if (nodes.fields[r.field] !== undefined) nodes.fields[r.field].wrap.classList.add("invalid");
-  }
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// 保存
-// ───────────────────────────────────────────────────────────────────────────
-
-/** 把当前表单读成 `{ 路径: 值 }`。下拉与开关也在这里归一。 */
-function readForm() {
-  const raw = {};
-  for (const path of Object.keys(nodes.fields)) {
-    const f = nodes.fields[path];
-    if (f.input.disabled) continue;
-    raw[path] = f.input.getAttribute("type") === "checkbox" ? f.input.checked === true : f.input.value;
-  }
-  return raw;
-}
-
-/**
- * 保存。**这个函数的顺序就是设计 §5.3 那条产品不变式本身。**
- *
- * ⚠️⚠️ **`await api.put(...)` 之前不许出现任何成功迹象。**
- * 后端那一半是「响应体里没有任何一个『成功了』字段，只有回读出来的 `fields`」，
- * 前端这一半就是这个 `await` 的位置。挪到它前面 ⇒
- * `tests/ui/dom/settings-save.test.ts` 的
- * 「回读还没落定之前，界面上不许出现任何成功迹象」变红。
- */
-async function save() {
-  clearMarks();
-  const raw = readForm();
-
-  // 前端只做四条最轻量的即时提示（设计 §10.4），其余全靠渲染后端错误码。
-  const local = localErrors(raw, data);
-  if (local.length > 0) {
-    showErrors(local.map((e) => ({ field: e.field, code: e.code, key: `set.err.${e.code}`, params: {} })));
+function renderBanners() {
+  const host = nodes.banners;
+  clear(host);
+  if (state.failedKey) {
+    const b = el("div", { class: "banner banner-danger" });
+    b.appendChild(elI18n("span", state.failedKey));
+    host.appendChild(b);
     return;
   }
+  const c = state.config;
+  if (!c) return;
 
-  const patch = buildPatch(raw, data, touched);
-  if (Object.keys(patch).length === 0) {
-    // **不是成功，也不是失败**：一次「什么都没改」的保存要如实说出来，
-    // 弹一句「已保存」是这个面板最不该说的那句话。
-    toast(t("set.nothingToSave"), "warn");
-    return;
+  // 🔴 **`fields === null` = 诊断视图**：存储里那份读得出来、却构造不出一份合法
+  //    配置。后端刻意**降级成诊断视图而不是 500** —— 那是运维唯一的出路
+  //    （在它之前，配置一旦装载不起来，「把口令重新填回去」这条自救路径自己也走不通）。
+  if (c.fields === null || c.fields === undefined) {
+    const b = el("div", { class: "banner banner-danger" });
+    b.appendChild(elI18n("span", "section.set.diagnostic"));
+    host.appendChild(b);
+  } else if (c.configDegraded) {
+    // 降级 ≠ 装不起来：有字段回落到了默认值，网关照常跑。
+    const b = el("div", { class: "banner banner-warn" });
+    b.appendChild(elI18n("span", "section.set.degraded"));
+    host.appendChild(b);
   }
 
-  for (const h of nodes.hosts) h.save.disabled = true;
-  try {
-    // ★★ 这一行之前，界面上不许有任何「保存成功」的迹象。
-    const res = await api.put("/config", { patch });
-    // ★★ 回读落定了，从这里开始才允许说话——而且**说的是回读结果本身**：
-    // 设计 §5.3 明令不弹「已保存并生效」，改成把变化的字段高亮 + 显示生效值。
-    data = res;
-    render();
-    const changed = changedFields(res);
-    const secrets = changedSecrets(res);
-    for (const path of changed) {
-      if (nodes.fields[path] !== undefined) nodes.fields[path].wrap.classList.add("changed");
-    }
-    for (const path of secrets) {
-      if (nodes.fields[path] !== undefined) nodes.fields[path].wrap.classList.add("changed");
-    }
-    for (const h of nodes.hosts) {
-      h.readback.textContent = changed.length === 0 && secrets.length === 0
-        ? t("set.readback.none")
-        : t("set.readback", { count: String(changed.length + secrets.length) });
-      h.readback.style.display = "";
-    }
-  } catch (e) {
-    const rows = errorRows(e && e.body);
-    if (rows.length > 0) showErrors(rows);
-    else toast(t("set.saveFailed"), "warn", { sticky: true });
-  } finally {
-    for (const h of nodes.hosts) h.save.disabled = false;
+  for (const e of c.loadBlocked || []) {
+    const b = el("div", { class: "banner banner-danger" });
+    b.appendChild(el("span", null, errLine(e)));
+    host.appendChild(b);
+  }
+  // ⚠️ **`loadNotices` 今天恒为空**（它唯一的一族属于注册机子树），但字段是对外
+  //    契约的一格 —— 🔴 **别把「今天没有」读成「这里没有东西要说」**，照画。
+  for (const e of c.loadNotices || []) {
+    const b = el("div", { class: "banner banner-info" });
+    b.appendChild(el("span", null, errLine(e)));
+    host.appendChild(b);
   }
 }
+
+/* ============================================================
+   渲染 —— 一个字段
+   ============================================================ */
 
 /**
- * `agnesPlatformUrl` 的二次确认（设计 §8.6 第二行）。
- *
- * **它是注册凭据的去向**：改成自己的服务器就能收走每次注册的邮箱 + 密码 + 验证码。
- * 所以它折在「高级」折叠区里，改动它要单独确认一次——与主表单那颗保存按钮分开，
- * 免得一次普通的「调个超时」顺手把它一起改了。
+ * 三档状态的左色条：**锁定 / 变化 / 非法**。
+ * 🔴 **颜色 + 非颜色双信号**（WCAG 1.4.1）：`.is-locked` 另配一个 🔒 前缀与
+ * `disabled`，`.is-invalid` 另配一行 `.form-error` 文案，`.is-changed` 另配一句
+ * 「刚刚变了」。只留颜色就违反 1.4.1，`state_is_not_color_only` 那格钉的是同一条线。
  */
-function confirmAdvanced() {
-  const body = el("div");
-  body.appendChild(elI18n("p", "set.advanced.warn", { class: "danger-text" }));
-  openModal("set.advanced.confirmTitle", body, [
-    { labelKey: "common.cancel" },
-    { labelKey: "common.confirm", danger: true, onClick: () => { save(); } },
-  ]);
+function fieldNode(path, quad, editable) {
+  const locked = quad.lockedBy !== null && quad.lockedBy !== undefined;
+  // 「能不能改」= 后端说它可编辑 **且** 没被 env 锁住。两条缺一不可：
+  // `editable` 排掉 `ReadOnly`，`lockedBy` 排掉被环境变量钉死的。
+  const canEdit = editable && !locked;
+  const err = state.errors.get(path);
+
+  const wrap = el("div", { class: "form-group field-state" });
+  if (locked) wrap.classList.add("is-locked");
+  if (err) wrap.classList.add("is-invalid");
+  if (state.changed.includes(path)) wrap.classList.add("is-changed");
+
+  const inputId = `set-${path}`;
+  const label = el("label", { class: "form-label", for: inputId });
+  if (locked) label.appendChild(el("span", { "aria-hidden": "true" }, "🔒 "));
+  label.appendChild(el("span", null, FIELD_LABEL[path] ? t(FIELD_LABEL[path]) : path));
+  wrap.appendChild(label);
+
+  // ⚠️ **输入控件的类型从 `effective` 的 JS 类型推**，不在面板里再抄一份
+  //    `src/admin/config.rs::FIELDS` 的 `Spec`（纪律 ① 的同一条线：第二份表必漂）。
+  const eff = quad.effective;
+  const isBool = typeof eff === "boolean";
+  const isNum = typeof eff === "number";
+
+  if (!canEdit) {
+    // 只读呈现：**画生效值**，不画一个改不动的输入框。
+    const rv = el("div", { class: "readonly-value" });
+    rv.appendChild(el("code", { class: "rv-text", id: inputId },
+      eff === null || eff === undefined ? "—" : String(eff)));
+    wrap.appendChild(rv);
+  } else if (isBool) {
+    // 🔴 **开关就画成开关。** 画成文本框的话，运维要手打 `true` 这个词，
+    //    而打错一个字母拿到的是一条 `not_a_boolean` —— 一个本来不该存在的错误。
+    // ⚠️ `.form-check` 是**容器**类（样式挂在 `.form-check input` 上），
+    //    直接扣在 input 上拿不到尺寸与配色。
+    const box = el("div", { class: "form-check" });
+    const input = el("input", { id: inputId, type: "checkbox" });
+    input.checked = state.dirty.has(path) ? state.dirty.get(path) === "true" : eff === true;
+    input.addEventListener("change", () => {
+      state.dirty.set(path, input.checked ? "true" : "false");
+      state.changed = state.changed.filter((p) => p !== path);
+      wrap.classList.remove("is-changed");
+      paintSaveBar();
+    });
+    box.appendChild(input);
+    wrap.appendChild(box);
+  } else {
+    const input = el("input", {
+      id: inputId,
+      class: "form-control",
+      type: isNum ? "number" : "text",
+      value: state.dirty.has(path) ? state.dirty.get(path) : String(eff ?? ""),
+    });
+    input.addEventListener("input", () => {
+      state.dirty.set(path, input.value);
+      // 改过之后那条「刚刚变了」的高亮就不再成立了 —— 它说的是**上一次回读**。
+      state.changed = state.changed.filter((p) => p !== path);
+      wrap.classList.remove("is-changed");
+      paintSaveBar();
+    });
+    wrap.appendChild(input);
+  }
+
+  // 出处（provenance）。🔴 **锁定的那一格必须说清是被哪个环境变量锁的** ——
+  // 否则运维会一直改存储、一直没效果，然后去 compose 里 grep 一个搜不到的名字。
+  const hint = el("div", { class: "form-hint" });
+  if (locked) {
+    hint.appendChild(el("span", null, t("section.set.lockedBy", { by: String(quad.lockedBy) })));
+  } else if (!editable) {
+    // 🔴 **判据是「后端说它不可编辑」，不是「它是个布尔」。**
+    //    早一版写的是 `isBool` —— 那时候仓里唯一的两个布尔恰好都是只读的
+    //    （`degraded` / `usageStatsEnabled`），于是两条判据看起来等价。
+    //    `registrar.enabled` 进来之后它当场变成一句假话：一个真能改的开关，
+    //    底下印着「这一格是装载的产物，不是旋钮」。
+    hint.appendChild(elI18n("span", "section.set.readOnlyField"));
+  } else {
+    const stored = quad.stored === null || quad.stored === undefined
+      ? t("section.set.storedNone")
+      : String(quad.stored);
+    hint.appendChild(el("span", null, t("section.set.storedIs", { v: stored })));
+  }
+  wrap.appendChild(hint);
+
+  if (err) {
+    // `.form-error` 是那条**非颜色**线索：一句写出来的话，不是一根红边。
+    wrap.appendChild(el("div", { class: "form-error" }, errText(err)));
+  }
+  return wrap;
 }
 
-/** 清空一把凭据的二次确认（设计 §8.6：清空只能走显式动作）。 */
-function confirmClear(path) {
+/* ============================================================
+   渲染 —— 凭据卡（纪律 ②）
+   ============================================================ */
+
+function credentialCard(path, cred) {
+  const card = el("div", { class: "card" });
+  const header = el("div", { class: "card-header" });
+  header.appendChild(el("h3", null, FIELD_LABEL[path] ? t(FIELD_LABEL[path]) : path));
+  header.appendChild(el("span", {
+    class: cred.configured ? "badge badge-success" : "badge badge-muted",
+  }, t(cred.configured ? "section.set.secretConfigured" : "section.set.secretMissing")));
+  card.appendChild(header);
+
+  card.appendChild(elI18n("p", "section.set.secretDesc", { class: "settings-card-desc" }));
+
+  const locked = cred.lockedBy !== null && cred.lockedBy !== undefined;
+
+  // 🔴 **只画末 4 位的提示，永不画明文**（后端 `GET` 根本不发明文）。
+  //    ⚠️ 短于 5 位的口令后端一律不给 `hint` —— 对一把 4 位的口令，
+  //    末 4 位就是全部，那不叫提示，那叫 reveal。
+  const rv = el("div", { class: "readonly-value field-state" });
+  if (locked) rv.classList.add("is-locked");
+  rv.appendChild(el("code", { class: "rv-text" },
+    cred.configured ? (cred.hint ? `••••${cred.hint}` : t("section.set.secretNoHint")) : "—"));
+  card.appendChild(rv);
+
+  const group = el("div", { class: "form-group" });
+  const inputId = `set-secret-${path}`;
+  group.appendChild(el("label", { class: "form-label", for: inputId },
+    t(locked ? "section.set.secretLockedLabel" : "section.set.secretNewLabel")));
+  const input = el("input", {
+    id: inputId, class: "form-control", type: "password", autocomplete: "new-password",
+  });
+  input.disabled = locked;
+  input.addEventListener("input", () => {
+    // ⚠️ **空串一律不进 patch**（纪律 ②：空串 = 不改，不是清空）。
+    if (input.value === "") state.dirty.delete(path);
+    else state.dirty.set(path, input.value);
+    paintSaveBar();
+  });
+  group.appendChild(input);
+  const hint = el("div", { class: "form-hint" });
+  hint.appendChild(el("span", null, locked
+    ? t("section.set.lockedBy", { by: String(cred.lockedBy) })
+    : t("section.set.secretHint")));
+  group.appendChild(hint);
+  const err = state.errors.get(path);
+  if (err) group.appendChild(el("div", { class: "form-error" }, errText(err)));
+  card.appendChild(group);
+
+  // 清空。🔴 **这是清空凭据的唯一入口**，而且后果要在**二次确认框里**就说清。
+  const clearBtn = elI18n("button", "section.set.secretClear", { type: "button", class: "btn btn-sm btn-danger" });
+  clearBtn.addEventListener("click", () => confirmClear(path, cred));
+  card.appendChild(clearBtn);
+  return card;
+}
+
+function confirmClear(path, cred) {
   const body = el("div");
-  body.appendChild(el("p", null, t("set.clear.warn", { field: t(fieldLabelKey(path)) })));
-  // **按状态分岔的那一句**，取值决策全在 `clearWarning()` 里（含红不红）。
-  // 同一句通用红字在这几种状态下有的是救命、有的是吓人，而面板手上有分辨它们的数据。
-  const effect = clearWarning(data, path);
-  body.appendChild(elI18n("p", effect.key, { class: effect.kind === "danger" ? "danger-text" : "muted note" }));
-  openModal("set.clear.title", body, [
+  body.appendChild(elI18n("p", "section.set.clearConfirm"));
+  // ⚠️⚠️ **两档必须分开说**：清掉网关口令是「下一次冷启动会失败」，
+  //    而清掉一把子系统凭据只是那个子系统停摆 —— 拿砖机的措辞去说一件不砖机的事，
+  //    会让运维在一次小事故上按大事故处置。
+  //    判据是「清完之后环境变量里还有没有」，那正是 `lockedBy` 这一格。
+  const stillFromEnv = cred.lockedBy !== null && cred.lockedBy !== undefined;
+  body.appendChild(elI18n("p", stillFromEnv ? "section.set.clearStillEnv" : "section.set.clearFatal",
+    { class: stillFromEnv ? "text-muted" : "text-danger" }));
+  openModal("section.set.clearTitle", body, [
     { labelKey: "common.cancel" },
-    { labelKey: "common.confirm", danger: true, onClick: () => { doClear(path); } },
+    { labelKey: "section.set.secretClear", danger: true, onClick: () => { doClear(path); } },
   ]);
 }
 
 async function doClear(path) {
+  if (state.busy) return;
+  state.busy = true;
   try {
-    const res = await api.post("/config/secrets/clear", { path });
-    const view = clearResultView(res);
-    // **回读之后**才刷界面（与 `save()` 同一条纪律）。
-    if (view.gatewayTokenMissing === true) {
-      toast(t("set.clear.gatewayMissing"), "warn", { sticky: true });
-      load();
-      return;
+    const body = await api.post("/config/secrets/clear", { path });
+    // 🔴 **回执里就带着回读出来的 `fields` / `credentials`**，直接拿它重画。
+    absorb(body);
+    // 两句话分开说：清掉了什么、清完之后这份配置还装不装得起来。
+    if (body.gatewayTokenMissing) {
+      toast(t("section.set.clearedFatal"), "err", { sticky: true });
+    } else if (body.stillConfigured) {
+      toast(t("section.set.clearedStillEnv"), "warn", { sticky: true });
+    } else {
+      toast(t("section.set.cleared"), "ok");
     }
-    if (isDiagnostic(res)) {
-      // 清完之后这份配置装载不起来了：**如实显示诊断视图**（横幅 + 逐条缺什么），
-      // 表单仍然可编辑，运维就地改完保存即可恢复。
-      data = res;
-      render();
-      return;
-    }
-    data = res;
-    render();
-    toast(t("set.clear.done", { field: t(fieldLabelKey(path)) }), "ok");
   } catch (e) {
-    toast(t("set.saveFailed"), "warn", { sticky: true });
+    if (!(e && e.status === 401)) showErrors(e);
+  } finally {
+    state.busy = false;
+    render();
   }
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// 卡 4：危险区
-// ───────────────────────────────────────────────────────────────────────────
+/* ============================================================
+   保存 / 干跑
+   ============================================================ */
 
 /**
- * 「重置配置」的二次确认。
+ * 把脏格子拼成 patch。
  *
- * ⚠️ **弹窗里那几句「重置之后会缺什么」全部来自后端的 `resetBlocked`**
- *（`configLoadBlockers({}, env)`），面板一个优先级判断都不做——设计小节明令
- * 复用「清空凭据」已经在用的那两条文案，不许另写第三句。取值决策在
- * `resetWarnings()` 里，含红不红。
+ * **扁平点分路径，不是嵌套对象**：「缺席 = 不改」这条语义只有扁平形态表达得清楚
+ * ——嵌套形态下 `{a:{b:1}}` 到底是「只改 b」还是「把整个 a 换掉」取决于合并规则
+ * 写在哪一层，而两种读法都有人会按。
+ *
+ * ⚠️ **数字格子送数字、不送串**：后端 `Spec::Int` 判的是 `as_i64`，
+ * 送 `"30000"` 会当场拿一条 `not_an_integer`。
  */
+function buildPatch() {
+  const c = state.config;
+  const fields = (c && c.fields) || {};
+  const patch = {};
+  for (const [path, raw] of state.dirty) {
+    if (raw === "") continue; // 凭据的空串 = 不改；公开字段的空串在后端是 `empty`
+    const quad = fields[path];
+    // ⚠️ **布尔格子送真布尔**，同「数字格子送数字」那条：
+    //    后端 `Spec::Bool` 判的是 `is_boolean()`，送 `"true"` 会当场拿一条
+    //    `not_a_boolean` —— 而那正是本层要替运维挡掉的。
+    if (quad && typeof quad.effective === "boolean") {
+      patch[path] = raw === "true";
+    } else if (quad && typeof quad.effective === "number") {
+      const n = Number(raw);
+      // 🔴 **认不出来的一律原样送过去**，让后端那份唯一的校验器去拒 ——
+      //    在这里先拦一道就是把校验实现成了两份，而两份迟早分叉。
+      patch[path] = Number.isFinite(n) && `${n}` === raw.trim() ? n : raw;
+    } else {
+      patch[path] = raw;
+    }
+  }
+  return patch;
+}
+
+/** 400 的响应体里 `errors` 在**顶层**。把它摊进 `state.errors`。 */
+function showErrors(e) {
+  state.errors.clear();
+  const list = e && e.body && Array.isArray(e.body.errors) ? e.body.errors : null;
+  if (!list || list.length === 0) {
+    toast(t(e && typeof e.status === "number" && e.status > 0
+      ? "section.set.saveFailedHttp" : "section.set.saveFailedNetwork"), "err", { sticky: true });
+    return;
+  }
+  for (const item of list) state.errors.set(String(item.field || ""), item);
+  toast(t("section.set.saveRejected", { n: String(list.length) }), "err", { sticky: true });
+}
+
+async function save() {
+  if (state.busy) return;
+  const patch = buildPatch();
+  if (Object.keys(patch).length === 0) { toast(t("section.set.nothingToSave"), "info"); return; }
+  state.busy = true;
+  paintSaveBar();
+  try {
+    // 🔴 **这一行之前不许出现任何「已保存」的迹象。**
+    const body = await api.put("/config", { patch });
+    absorb(body);
+    // 🔴 **说的是「回读到这几个字段真的变了」，不是「已保存并生效」。**
+    //    ⚠️ `changed` 是按**回读出来的生效值**比的，不是按请求体比的 ——
+    //    一个被 env 锁着的字段即便被写进去，生效值也纹丝不动。
+    const n = (body.changed || []).length;
+    const secrets = (body.credentialsChanged || []).length;
+    toast(n === 0 && secrets === 0
+      ? t("section.set.savedNoChange")
+      : t("section.set.saved", { n: String(n + secrets) }), "ok");
+    // 传播窗口单独说一句：**其余实例最多这么久之后才看得见**。
+    const ms = body.propagation ? body.propagation.visibilityUpperBoundMs : null;
+    if (typeof ms === "number" && ms > 0) toast(t("section.set.propagation", { s: fmtSeconds(ms) }), "info");
+  } catch (e) {
+    if (!(e && e.status === 401)) showErrors(e);
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+/**
+ * 干跑。
+ *
+ * ⚠️⚠️ 它跑的是与 `PUT` **同一个**校验器、上下文也逐字段一样 ——
+ * 另写一份「轻量版校验」就等于让干跑与真跑给出不同答案，而实测过的分叉方向是
+ * 「干跑放行、真跑拒绝」：运维读到的是「面板刚说没问题」。
+ * 🔴 **它一次存储写都不产生。**
+ */
+async function dryRun() {
+  if (state.busy) return;
+  const patch = buildPatch();
+  if (Object.keys(patch).length === 0) { toast(t("section.set.nothingToSave"), "info"); return; }
+  state.busy = true;
+  paintSaveBar();
+  try {
+    const body = await api.post("/config/validate", { patch });
+    state.errors.clear();
+    toast(t("section.set.dryRunOk", { n: String((body.changed || []).length) }), "ok");
+  } catch (e) {
+    if (!(e && e.status === 401)) showErrors(e);
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+/** 把一份「带回读」的回执并进状态。四条端点（PUT / clear / reset）共用。 */
+function absorb(body) {
+  if (!state.config) state.config = {};
+  const c = state.config;
+  c.fields = body.fields;
+  c.credentials = body.credentials;
+  c.configDegraded = body.configDegraded;
+  c.loadBlocked = body.loadBlocked || [];
+  if (body.loadNotices) c.loadNotices = body.loadNotices;
+  if (body.resetBlocked) c.resetBlocked = body.resetBlocked;
+  if (body.propagation) c.propagation = body.propagation;
+  state.changed = Array.isArray(body.changed) ? body.changed.slice() : [];
+  state.dirty.clear();
+  state.errors.clear();
+}
+
+/* ============================================================
+   危险区
+   ============================================================ */
+
+function renderDanger() {
+  const host = nodes.danger;
+  clear(host);
+  const c = state.config;
+  if (!c) return;
+
+  const card = el("div", { class: "card danger-zone" });
+  const header = el("div", { class: "card-header" });
+  header.appendChild(elI18n("h3", "section.set.dangerTitle"));
+  card.appendChild(header);
+  card.appendChild(elI18n("p", "section.set.dangerDesc", { class: "settings-card-desc" }));
+
+  // 🔴 **按钮 `align-self: flex-start`（`.danger-zone .btn` 已经这么写）** ——
+  //    别让销毁凭据的按钮变成横贯整卡的红色大条：agnes 为这条踩过，真机截图上
+  //    整页最抢眼的就是三颗销毁按钮。
+  const btn = elI18n("button", "section.set.resetBtn", { type: "button", class: "btn btn-danger" });
+  btn.addEventListener("click", () => confirmReset());
+  card.appendChild(btn);
+  host.appendChild(card);
+}
+
 function confirmReset() {
+  const c = state.config;
   const body = el("div");
-  body.appendChild(elI18n("p", "set.danger.reset.warn", { class: "danger-text" }));
-  body.appendChild(elI18n("p", "set.danger.reset.scope", { class: "muted note" }));
-  for (const w of resetWarnings(data)) {
-    // 表外的码**原样显示出来**，不冒充任何一档已知原因（与 `showErrors()` 同源）。
-    const text = w.key === null ? t("set.err.unknown", { code: w.code }) : t(w.key, w.params);
-    body.appendChild(el("p", { class: w.kind === "danger" ? "danger-text" : "muted note" }, text));
-  }
-  const p = propagationView(data);
-  if (p.visibilityUpperBoundMs !== null) {
-    // **必须显示，不许写「立即生效」**（设计 §5.2）：本进程确实立刻生效，
-    // 别的副本要等一个 `CONFIG_TTL_MS`（中间不再有任何一层缓存）。
-    body.appendChild(el("p", { class: "muted note" },
-      t("set.danger.reset.propagation", { bound: fmtDuration(p.visibilityUpperBoundMs) })));
+  body.appendChild(elI18n("p", "section.set.resetConfirm"));
+  // 🔴 **后果在二次确认框里就说清，而那一刻还没发过任何写请求** ——
+  //    `resetBlocked` 是 `GET` 上就给的（零额外存储读），正是为了这一刻。
+  const blocked = (c && c.resetBlocked) || [];
+  if (blocked.length > 0) {
+    const box = el("div", { class: "banner banner-danger" });
+    const lines = el("div");
+    lines.appendChild(elI18n("div", "section.set.resetWillBreak"));
+    for (const e of blocked) lines.appendChild(el("div", null, errLine(e)));
+    box.appendChild(lines);
+    body.appendChild(box);
   } else {
-    // ⚠️ **上界读不出来时这句话不许整条消失**（复评回填）：上一版这里没有 else，
-    // 于是 `GET /admin/api/config` 失败之后弹窗里**一个字都不提传播**——
-    // 而设计 §5.2 要求的是「必须显示，不许写立即生效」，「不显示」不是它的一档。
-    // 读不到的只是那个数，「别的副本不会在这一刻看到」这件事照旧成立。
-    body.appendChild(elI18n("p", "set.danger.reset.propagation.unknown", { class: "muted note" }));
+    body.appendChild(elI18n("p", "section.set.resetSafe", { class: "text-muted" }));
   }
-  openModal("set.danger.reset.confirmTitle", body, [
+  openModal("section.set.resetTitle", body, [
     { labelKey: "common.cancel" },
-    { labelKey: "common.confirm", danger: true, onClick: () => { doReset(); } },
+    { labelKey: "section.set.resetBtn", danger: true, onClick: () => { doReset(); } },
   ]);
 }
 
 async function doReset() {
+  if (state.busy) return;
+  state.busy = true;
   try {
-    const res = await api.post("/config/reset", { confirm: true });
-    // **回读之后**才刷界面（与 `save()` / `doClear()` 同一条纪律）：`res` 就是
-    // 后端回读出来的新状态本身。
-    data = res;
-    // ⚠️⚠️ **上一次保存留下的回读行与高亮必须在这里显式作废**（复评回填）。
-    //
-    // `render()` 里那段清理的判据是 `isSaveReceipt()`，而它认的是「`changed` 这一格在不在」
-    // ——**重置回执里也有 `changed`**（`src/http/admin/handlers/config.ts` 的
-    // `configResetHandler` 逐字如此）⇒ `saved !== null` ⇒ 那段清理**恒不跑**。
-    // 复评实测：先改一格保存（回读行说「1 个字段发生了变化（已高亮）」、maxStrikes 带
-    // `.changed`），再点重置、回执 `changed: []` ⇒ 回读行与高亮**原样留着**，
-    // 而那个 `1` 来自上一次保存 —— 与上面那条复评发现逐字同形。
-    // ⚠️ **不改 `isSaveReceipt()` 去把重置排除掉**：那条判据「跟着数据走、不跟着时间走」
-    // 是它存在的全部理由，而重置回执确实是一次写回执（`changed` 那一格的语义与 `PUT` 同源）。
-    // 该作废的是**上一次那件事**留下的痕迹，落点就在这里。
-    clearReadback();
+    // 🔴 `confirm: true` 是**必填的，不是装饰**：一条不带请求体就会重置整份配置
+    //    的端点，在枚举式鉴权矩阵里会把夹具自己的配置抹掉。
+    const body = await api.post("/config/reset", { confirm: true });
+    absorb(body);
+    const lost = (body.credentialsChanged || []).length;
+    toast(lost > 0 ? t("section.set.resetDoneLost", { n: String(lost) }) : t("section.set.resetDone"),
+      lost > 0 ? "warn" : "ok", lost > 0 ? { sticky: true } : undefined);
+  } catch (e) {
+    if (!(e && e.status === 401)) showErrors(e);
+  } finally {
+    state.busy = false;
     render();
-    const changed = changedFields(res).concat(changedSecrets(res));
-    for (const path of changed) {
-      if (nodes.fields[path] !== undefined) nodes.fields[path].wrap.classList.add("changed");
-    }
-    // ⚠️ **按 `changed` 分岔**（复评回填）：重置对一部分字段**什么都没做**
-    //（存储里本来就没有值、或者被环境变量锁着，而那正是五份 ADMIN.md 反复强调的那一句），
-    // 那一档一格都没高亮，说「已经高亮出来」就是当面说反话。
-    // 两档的形状照 `save()` 里 `set.readback` / `set.readback.none` 那一对。
-    // 危险区只在设置页那个宿主上，而这两颗按钮也只在那里 ⇒ 走到这里它一定已经建好了。
-    nodes.dangerResult.textContent = changed.length === 0
-      ? t("set.danger.reset.doneNone")
-      : t("set.danger.reset.done", { count: String(changed.length) });
-    nodes.dangerResult.style.display = "";
-  } catch (e) {
-    toast(t("set.danger.failed"), "warn", { sticky: true });
   }
 }
 
+/* ============================================================
+   集成示例（`.int-card`，照 kiro 的组件）
+   ============================================================ */
+
+/** 这条协议上第一个可用的模型 id。拿不到就用一个占位提示，**不编一个模型名**。 */
+function firstModelFor(protocolId) {
+  const models = (state.catalog && state.catalog.models) || [];
+  for (const m of models) {
+    if (Array.isArray(m.protocols) && m.protocols.includes(protocolId)) return m.id;
+  }
+  return null;
+}
+
 /**
- * 「清空 Key 池」的二次确认。
+ * 拼一段示例代码。
  *
- * ⚠️⚠️ **确认框要求把当前池大小那个数字亲手打一遍**，判据在 `purgeConfirmed()` 里。
- * 这不是仪式感：这颗按钮是本系统最不可撤销的动作（key 明文只在存储里有一份，
- * 每把 key 的用量历史住在记录的值里面），而「再点一次确认」对着一个手滑的人
- * 拦不住任何东西。
- *
- * ⚠️ **池大小是点开这一刻现取的**（`GET /admin/api/keys`，走 isolate 快照：
- * **命中快照那一次零存储读**），不是常驻轮询——本板块那条「没有自动刷新」的纪律照旧。
- * ⚠️ **上一版这里写的是无条件的「零存储读」，那是假的**（复评回填）：
- * `src/core/keypool-repo.ts` 的 `all()` 第一行是
- * `if (this.cacheTtlMs <= 0) return await this.loadAll();`——而 `POOL_CACHE_TTL_MS=0`
- * 是五份 DEPLOY.md 明写的逃生口；快照过期时 `ensureFresh()` 同样真读。
- * 这条端点自己的说法（`src/http/admin/handlers/keys.ts` 文件头）是
- * 「零 `list()`、零**额外**读，与转发路径共用同一个 isolate 快照」，那句是对的。
- * **读不到就不给开确认框**：没有基线时那个数字要么是编的、要么是 0，
- * 而 0 会让人在一池 key 上确认一个「空池」。
+ * 🔴 **一个字节的协议知识都不在这里写死**：方法、路径、鉴权头、示例请求体
+ * 全部来自 `GET /admin/api/models`（`src/admin/models.rs` 的 `PROTOCOLS` 是
+ * 「怎么调这个网关」那份单一真源）。本函数只负责把它们摆成 curl / Python / Node 的形状。
+ * ⚠️ 口令一律画成 `$GATEWAY_TOKEN` 这样的占位符 —— **绝不把真口令拼进示例**
+ * （它会被复制、被贴进工单、被截图）。
  */
-async function confirmPurge() {
-  let size = null;
+function sampleCode(proto, lang) {
+  const model = firstModelFor(proto.id);
+  const path = String(proto.pathTemplate || "").split("{model}").join(model || "MODEL");
+  const url = `${location.origin}${path}`;
+  const header = String(proto.authHeader || "authorization");
+  const headerValue = header === "authorization" ? "Bearer $GATEWAY_TOKEN" : "$GATEWAY_TOKEN";
+  let bodyText = "{}";
   try {
-    size = poolSizeOf(await api.get("/keys?size=1&page=1"));
-  } catch (e) {
-    size = null;
-  }
-  if (size === null) {
-    toast(t("set.danger.purge.sizeUnknown"), "warn", { sticky: true });
-    return;
-  }
+    const sample = proto.sampleBody && typeof proto.sampleBody === "object" ? { ...proto.sampleBody } : {};
+    if (model && "model" in sample) sample.model = model;
+    bodyText = JSON.stringify(sample, null, 2);
+  } catch (e) { bodyText = "{}"; }
 
-  const body = el("div");
-  body.appendChild(el("p", { class: "danger-text" }, t("set.danger.purge.warn", { count: String(size) })));
-  body.appendChild(elI18n("p", "set.danger.purge.stats", { class: "danger-text" }));
-  body.appendChild(elI18n("p", "set.danger.purge.propagation", { class: "muted note" }));
-  body.appendChild(el("p", null, t("set.danger.purge.typeTo", { count: String(size) })));
-  const input = el("input", { type: "text", inputmode: "numeric", class: "danger-confirm" });
-  body.appendChild(input);
-  const mismatch = elI18n("p", "set.danger.purge.mismatch", { class: "danger-text" });
-  mismatch.style.display = "none";
-  body.appendChild(mismatch);
-
-  openModal("set.danger.purge.confirmTitle", body, [
-    { labelKey: "common.cancel" },
-    {
-      labelKey: "common.confirm",
-      danger: true,
-      // **打错了就把弹窗留着**（`openModal` 的契约：`onClick` 返回 `false` 不关闭），
-      // 而不是关掉再弹一句 toast——那样运维得重新点开、重新读那个数。
-      onClick: () => {
-        if (!purgeConfirmed(input.value, size)) {
-          mismatch.style.display = "";
-          return false;
-        }
-        doPurge(size);
-        return true;
-      },
-    },
-  ]);
+  if (lang === "curl") {
+    return [
+      `curl -X ${proto.method} '${url}' \\`,
+      `  -H '${header}: ${headerValue}' \\`,
+      "  -H 'content-type: application/json' \\",
+      `  -d '${bodyText.split("\n").join("")}'`,
+    ].join("\n");
+  }
+  if (lang === "python") {
+    return [
+      "import os, requests",
+      "",
+      `resp = requests.request(`,
+      `    "${proto.method}",`,
+      `    "${url}",`,
+      `    headers={"${header}": "${headerValue.split("$GATEWAY_TOKEN").join('" + os.environ["GATEWAY_TOKEN"] + "')}",`,
+      '            "content-type": "application/json"},',
+      `    json=${bodyText},`,
+      ")",
+      "print(resp.status_code, resp.text)",
+    ].join("\n");
+  }
+  return [
+    `const resp = await fetch("${url}", {`,
+    `  method: "${proto.method}",`,
+    `  headers: {`,
+    `    "${header}": \`${headerValue.split("$GATEWAY_TOKEN").join("${process.env.GATEWAY_TOKEN}")}\`,`,
+    '    "content-type": "application/json",',
+    "  },",
+    `  body: JSON.stringify(${bodyText}),`,
+    "});",
+    "console.log(resp.status, await resp.text());",
+  ].join("\n");
 }
 
-async function doPurge(size) {
-  try {
-    const res = await api.post("/keys/purge", { expect: size });
-    const view = purgeResultView(res);
-    // **回执里的 `remaining` 是后端回读出来的**：非零就是「索引写空了、存储里还躺着
-    // 记录」，那件事必须如实说出来，不许说成「已清空」。
-    nodes.dangerResult.textContent = view.remaining !== null && view.remaining > 0
-      ? t("set.danger.purge.leftover", { deleted: String(view.deleted), remaining: String(view.remaining) })
-      : t("set.danger.purge.done", { deleted: String(view.deleted) });
-    nodes.dangerResult.style.display = "";
-  } catch (e) {
-    // 「池子在你确认之前变了」是一条**运维看得懂、也做得了**的失败（去刷新一下再来），
-    // 与一句笼统的「失败了」不是一回事——判据是顶层 `reason`，不解析 message 的中文。
-    if (isPoolSizeChanged(e && e.body)) {
-      toast(t("set.danger.purge.changed"), "warn", { sticky: true });
-      return;
+function renderExamples() {
+  const host = nodes.examples;
+  if (!host) return;
+  clear(host);
+  const cat = state.catalog;
+  // 🔴 **拉不到目录就不画这张卡**，不画一张空的（06 §3.2 ① 末行那条同源纪律）。
+  if (!cat || !Array.isArray(cat.protocols) || cat.protocols.length === 0) return;
+
+  const card = el("div", { class: "card int-card" });
+  const header = el("div", { class: "card-header" });
+  header.appendChild(elI18n("h3", "section.set.examplesTitle"));
+  card.appendChild(header);
+  const bodyWrap = el("div", { class: "card-body" });
+  bodyWrap.appendChild(elI18n("p", "section.set.examplesDesc", { class: "settings-card-desc" }));
+
+  const protoGroup = el("div", { class: "seg-group", role: "group" });
+  protoGroup.setAttribute("aria-label", t("section.set.examplesProtocol"));
+  for (const p of cat.protocols) {
+    const b = el("button", { type: "button", class: "seg-btn" }, p.label);
+    const on = p.id === state.sampleProtocol;
+    b.classList.toggle("is-active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.addEventListener("click", () => { state.sampleProtocol = p.id; renderExamples(); });
+    protoGroup.appendChild(b);
+  }
+  bodyWrap.appendChild(protoGroup);
+
+  const langGroup = el("div", { class: "seg-group", role: "group" });
+  langGroup.setAttribute("aria-label", t("section.set.examplesLang"));
+  for (const spec of SAMPLE_LANGS) {
+    const b = elI18n("button", spec.labelKey, { type: "button", class: "seg-btn" });
+    const on = spec.id === state.sampleLang;
+    b.classList.toggle("is-active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.addEventListener("click", () => { state.sampleLang = spec.id; renderExamples(); });
+    langGroup.appendChild(b);
+  }
+  bodyWrap.appendChild(langGroup);
+
+  const proto = cat.protocols.find((p) => p.id === state.sampleProtocol) || cat.protocols[0];
+  const code = sampleCode(proto, state.sampleLang);
+  const wrap = el("div", { class: "int-codewrap" });
+  const copyBtn = elI18n("button", "common.copy", { type: "button", class: "btn btn-sm btn-outline int-copy" });
+  copyBtn.addEventListener("click", () => copy(code));
+  wrap.appendChild(copyBtn);
+  const pre = el("pre", { class: "int-code" });
+  pre.appendChild(el("code", null, code));
+  wrap.appendChild(pre);
+  bodyWrap.appendChild(wrap);
+
+  card.appendChild(bodyWrap);
+  host.appendChild(card);
+}
+
+/* ============================================================
+   渲染 —— 主体
+   ============================================================ */
+
+function saveBar() {
+  const bar = el("div", { class: "card" });
+  const row = el("div", { class: "mng-toolbar" });
+  nodes.dirtyNote = el("span", { class: "mng-inline-note" });
+  row.appendChild(nodes.dirtyNote);
+  row.appendChild(el("span", { class: "mng-spacer" }));
+  nodes.dryRunBtn = elI18n("button", "section.set.dryRun", { type: "button", class: "btn btn-outline" });
+  nodes.dryRunBtn.addEventListener("click", () => dryRun());
+  row.appendChild(nodes.dryRunBtn);
+  nodes.saveBtn = elI18n("button", "section.set.save", { type: "button", class: "btn btn-primary" });
+  nodes.saveBtn.addEventListener("click", () => save());
+  row.appendChild(nodes.saveBtn);
+  bar.appendChild(row);
+  return bar;
+}
+
+function paintSaveBar() {
+  if (!nodes.saveBtn) return;
+  const n = state.dirty.size;
+  nodes.dirtyNote.textContent = n === 0
+    ? t("section.set.noPendingEdits")
+    : t("section.set.pendingEdits", { n: String(n) });
+  nodes.saveBtn.disabled = state.busy || n === 0;
+  nodes.dryRunBtn.disabled = state.busy || n === 0;
+}
+
+function render() {
+  renderBanners();
+  const host = nodes.grid;
+  clear(host);
+  clear(nodes.barHost);
+  clear(nodes.danger);
+  const c = state.config;
+  // 读不到配置时**连保存条都不画**：没有一份读出来的现状，就没有「改动」可言。
+  if (!c) { renderExamples(); return; }
+
+  const fields = c.fields || {};
+  const credentials = c.credentials || {};
+  const editable = new Set(c.editable || []);
+  const painted = new Set();
+
+  // ── 凭据卡（`secrets` 那一族，一把一张）──────────────────────────────────
+  for (const path of c.secrets || []) {
+    const cred = credentials[path];
+    if (!cred) continue; // 诊断视图下 `credentials` 整块是 null，**不画空壳**
+    host.appendChild(credentialCard(path, cred));
+    painted.add(path);
+  }
+
+  // ── 分组卡 ──────────────────────────────────────────────────────────────
+  for (const g of GROUPS) {
+    const present = g.fields.filter((p) => Object.hasOwn(fields, p));
+    if (present.length === 0) continue;
+    const card = el("div", { class: "card" });
+    const header = el("div", { class: "card-header" });
+    header.appendChild(elI18n("h3", g.titleKey));
+    card.appendChild(header);
+    const grid = el("div", { class: "field-grid" });
+    for (const p of present) {
+      grid.appendChild(fieldNode(p, fields[p], editable.has(p)));
+      painted.add(p);
     }
-    toast(t("set.danger.failed"), "warn", { sticky: true });
+    card.appendChild(grid);
+    host.appendChild(card);
   }
+
+  // ── 「面板还不认识」的那些字段 ───────────────────────────────────────────
+  // 🔴 **照样画出来，不静默丢弃**：静默丢弃会让一个新加的旋钮在面板上消失，
+  //    而运维以为这个部署没有它。
+  const rest = Object.keys(fields).filter((p) => !painted.has(p));
+  if (rest.length > 0) {
+    const card = el("div", { class: "card" });
+    const header = el("div", { class: "card-header" });
+    header.appendChild(elI18n("h3", "section.set.group.other"));
+    card.appendChild(header);
+    card.appendChild(elI18n("p", "section.set.group.otherDesc", { class: "settings-card-desc" }));
+    const grid = el("div", { class: "field-grid" });
+    for (const p of rest) grid.appendChild(fieldNode(p, fields[p], editable.has(p)));
+    card.appendChild(grid);
+    host.appendChild(card);
+  }
+
+  // 保存条排在栅格之后、集成示例之前。整行，不进两列。
+  nodes.barHost.appendChild(saveBar());
+  paintSaveBar();
+
+  renderExamples();
+  renderDanger();
 }
 
-async function load() {
-  if (abort) abort.abort();
-  abort = new AbortController();
-  try {
-    data = await api.get("/config", { signal: abort.signal });
-  } catch (e) {
-    if (e && e.name === "AbortError") return;
-    // **不伪造上一次的数据**：读失败就清空，不留着旧值假装它是新的。
-    data = null;
-  }
-  // 与 `loadCatalog()` 结尾同一条裁定：**不判 `nodes !== null`。**
-  // ⚠️ 上一版这里判、那边不判，而两个函数是同一个 `onShow()` 里的兄弟调用、
-  //    读的是同一个变量（定向复评点出来的：上一轮只修了一半，
-  //    新写的那句「一处判空会被下一个人读成这里真的可能是 null」在自己上方十行处被反证）。
-  //    不变量与出处见 `loadCatalog()` 结尾那一段。
-  render();
-}
-
-/**
- * 注册机那张配置卡的卡内内容（补池旋钮 + 两张平级通道子卡 + 高级折叠区）。
- * **屏幕上它在注册机板块的「设置」分页里**，见下面 `registrarConfigPanel`。
- */
-function buildRegistrarCard(body) {
-  // ⚠️ **这张卡里的每一格字段也装在 `.cfg-grid` 里**，理由与设置页那两张卡逐字相同
-  //（`.cfg-field` 是块级盒、一格占一整行，而输入框只占其中一段），规则与它踩过的
-  // 那个窄屏坑写在 `admin-ui/css/sections.css` 的 `.cfg-grid` 上方。
-  // ⚠️⚠️ **这一处曾经是漏掉的那一半**：设置页那四张卡改成网格的那一轮**没有改到这里**，
-  // 于是注册机板块「设置」分页里的字段一格不落地全在网格外 —— 真机量到过一次
-  //（那一天这一页里 `.cfg-grid` 的个数是 0），屏幕上就是「怎么改都还是一列」。
-  // 由 `tests/ui/dom/settings-layout.test.ts` 的
-  // 「注册机分页上每一格字段都装在某个 .cfg-grid 里」那一格钉着。
-  const knobs = el("div", { class: "cfg-grid" });
-  for (const path of CARD_REGISTRAR) {
-    const kind = path === "registrar.enabled"
-      ? "toggle"
-      : (path === "registrar.channel" ? "select" : "text");
-    addField(knobs, path, kind);
-  }
-  body.appendChild(knobs);
-
-  // 卡级的整句说明留在网格外面（与设置页那两句同一条规矩）：它说的是整张卡。
-  //
-  // ⚠️⚠️ **这一处是无条件的，而且必须保持无条件。** 它是「设置」分页上**唯一**
-  // 一句说「选中那条失败了也不会自动改用另一条」的话（两张子卡上的
-  // `reg.channel.idle` 说的是「另一条闲着」，不是同一件事）。把它改成条件显示，
-  // 最常见的那一档（通道已经选好）屏幕上就再也没人说这件事了。
-  // ⚠️ 同一个 key 在 `./sec-registrar.js` 还有**第二个**渲染点（「运行状态」那一页），
-  // 那边**是**有条件的（只在开着却没选通道时出现）。只读到那一处会得出相反的结论——
-  // 一次评审就是这么误判的。这一处由 `tests/ui/dom/registrar-section.test.ts` 的
-  // 「设置分页：选好通道之后，「不会自动切换」那句话仍然在屏幕上（不是空状态才出现）」钉着。
-  body.appendChild(elI18n("p", "reg.emptyChannel", { class: "muted note" }));
-  const channelRow = el("div", { class: "card-row" });
-  // **顺序取自 `CHANNELS`**（字母序），两张子卡由同一段代码建出来 ⇒
-  // 「完全对称」在结构上就是不可表达的例外（设计 §10.3 第 2 条）。
-  for (const channel of CHANNELS) {
-    const sub = el("div", { class: "card channel-card", "data-channel": channel });
-    sub.appendChild(elI18n("div", channelLabelKey(channel), { class: "label channel-name" }));
-    /**
-     * **「本次使用 / 未使用」这一行是「必须两个都配」那个体感的真正解药。**
-     *
-     * 那个体感的成因**不是** `primary` / `fallback` 这对字段名（面板上早就有「未选择」
-     * 这一项），而是这里对两条通道**无条件**渲染两张凭据子卡、四个输入框永远在等着
-     * 被填，旁边却没有一句话说「这条本次没用到」。
-     *
-     * ⚠️ **两张子卡都保留，不许砍成一张**：砍掉一张就等于把「平级」变成「有个正牌、
-     * 有个备胎」，反而更糟；两卡同构是结构性保证。
-     */
-    const inUse = el("p", { class: "muted note channel-inuse" });
-    sub.appendChild(inUse);
-    nodes.channelUse[channel] = inUse;
-    // **两张子卡各自一个网格**，而不是共用一个：共用会让两条通道的字段在同一行里
-    // 交错排（第 2 条「完全对称」在屏幕上就没了）。这一步对两条通道逐字相同。
-    const subGrid = el("div", { class: "cfg-grid" });
-    for (const path of channelFields(channel)) {
-      addField(subGrid, path, isSecretPath(path) ? "secret" : "text");
-    }
-    sub.appendChild(subGrid);
-    // 「填根地址、别带 /v1」这一句**两张子卡逐字相同**，所以它不破坏对称：
-    // 它说的是这一格该填什么形状的地址，与是哪条通道无关。
-    sub.appendChild(elI18n("p", "set.field.channel.baseUrl.fact", { class: "muted note" }));
-    // 两条通道之间**唯一**的不对称，且它是同一个字段位置上的两句事实。
-    sub.appendChild(elI18n("p", channelAddressFactKey(channel), { class: "muted note" }));
-    channelRow.appendChild(sub);
-  }
-  body.appendChild(channelRow);
-
-  // 高级折叠区：`agnesPlatformUrl` 单独放这里 + 红色警告 + 自己的二次确认按钮。
-  const advanced = el("details", { class: "cfg-advanced" });
-  advanced.appendChild(elI18n("summary", "set.advanced.title"));
-  advanced.appendChild(elI18n("p", "set.advanced.warn", { class: "danger-text" }));
-  // 折叠区里那一格同样进网格：它今天只有一格，`auto-fit` 会把空轨道塌掉、让它铺满
-  //（与设置页「认证密钥」那张单格卡是同一档行为），而清单一旦多一格就自动排成多列。
-  const advGrid = el("div", { class: "cfg-grid" });
-  for (const path of ADVANCED_FIELDS) addField(advGrid, path, "text");
-  advanced.appendChild(advGrid);
-  const advSave = elI18n("button", "set.advanced.save", { type: "button", class: "cfg-advanced-save danger" });
-  advSave.addEventListener("click", () => { confirmAdvanced(); });
-  advanced.appendChild(advSave);
-  body.appendChild(advanced);
-}
-
-/**
- * 一个挂载点的工具条：「刷新」+「保存」。两个宿主形状相同，所以只有一份实现。
- * `save` 那颗按钮由 `addHost()` 登记进 `nodes.hosts`，保存期间两个宿主一起变灰。
- */
-function buildToolbar(container) {
-  const bar = el("div", { class: "toolbar" });
-  const refresh = elI18n("button", "common.refresh", { type: "button" });
-  refresh.addEventListener("click", () => { load(); });
-  bar.appendChild(refresh);
-  const saveBtn = elI18n("button", "set.save", { type: "button", class: "cfg-save" });
-  saveBtn.addEventListener("click", () => { save(); });
-  bar.appendChild(saveBtn);
-  container.appendChild(bar);
-  return saveBtn;
-}
-
-/**
- * 注册机那张配置卡。**它不在设置页上，挂在注册机板块的「设置」分页里**
- *（`admin-ui/js/sec-registrar.js` 的 TAB）。
- *
- * ⚠️ **为什么代码仍然住在这个文件里**：它是 `GET/PUT /admin/api/config` 那张表单的
- * 一部分——建控件、四元组渲染、锁定、诊断态、保存顺序全走上面那一套。搬到注册机板块
- * 文件里就要把整套表单机制抄第二份，而那正是本文件顶上那段 ⚠️⚠️ 反对的形态。
- * 搬走的是**屏幕上的位置**，不是实现。
- *
- * ⚠️ **设置页那边不再有第二份**：`settingsSection.init()` 里已经没有注册机那张卡了
- *（曾经的「卡 3」）。两处都能改同一个字段 = 两处各写各的，正是本轮要消掉的形态。
- * 「设置页今天有几张卡」这个数是五份 ADMIN.md 那张表的行数真源，随之从 5 变成 4。
- */
-export const registrarConfigPanel = {
-  init(host) {
-    ensureNodes();
-    host.textContent = "";
-    const saveBtn = buildToolbar(host);
-    const h = addHost(host, saveBtn);
-
-    const reg = card("set.card.registrar");
-    buildRegistrarCard(reg.body);
-    host.appendChild(reg.wrap);
-
-    addHostFooter(host, h);
-  },
-
-  onShow() {
-    load();
-  },
-
-  onHide() {
-    // **作废在飞请求**：与 `settingsSection.onHide()` 同一条（板块契约 §9.3）。
-    // 两个宿主共用同一个 `abort`：面板一次只显示一个板块，不会互相打断。
-    if (abort) { abort.abort(); abort = null; }
-  },
-};
+/* ============================================================
+   板块契约
+   ============================================================ */
 
 export const settingsSection = {
-  init(section) {
-    ensureNodes();
-    section.textContent = "";
-    section.appendChild(elI18n("h2", "set.title"));
-
-    const saveBtn = buildToolbar(section);
-    const host = addHost(section, saveBtn);
-
-    // ── 四张卡分两列 ────────────────────────────────────────────────────────
-    //
-    // 竖着摞成一列时整页是一条很长的窄条（改前改后的实测高写在这两笔改动的提交信息里，
-    // **这里刻意不抄一份**：本仓没有布局引擎，抄下来的数没有测法、只会过期）。
-    // **这一层与下面那几处 `.cfg-grid` 是两件事，缺一处右边那片空白就还在**：
-    // 网格管的是一张卡里一行站几格，这两列管的是四张卡怎么排。
-    //
-    // ⚠️ **行容器复用 `.card-row`**（注册机那两张通道卡走的就是它），列本身是
-    // `.cfg-col`——`.card-row` 的子项是一张卡，而这里一列里要摞好几张，
-    // 理由与它踩过的那个窄屏坑写在 `admin-ui/css/sections.css` 的 `.cfg-col` 上方。
-    // ⚠️ **分列不改阅读顺序**：DOM 里仍是卡 1→4，左列拿前两张、右列拿后两张，
-    // 窄屏落回单列时读到的顺序与宽屏逐张相同。这一条由
-    // `tests/ui/dom/settings-layout.test.ts「四张卡分在两列里，读序仍是卡 1→4」` 钉着。
-    const cols = el("div", { class: "card-row" });
-    const colLeft = el("div", { class: "cfg-col" });
-    const colRight = el("div", { class: "cfg-col" });
-    cols.appendChild(colLeft);
-    cols.appendChild(colRight);
-    section.appendChild(cols);
-
-    // ── 卡 1：认证密钥 ──────────────────────────────────────────────────────
-    //
-    // ⚠️ **每张卡的字段装在一个 `.cfg-grid` 里，不直接摊在卡身上**：`.cfg-field`
-    // 是块级盒、一格占一整行，而输入框上有 `max-width: 420px` ⇒ 每一行右边空着一大片。
-    // 网格让一行站几格由卡宽决定，规则与它踩过的那个窄屏坑写在
-    // `admin-ui/css/sections.css` 的 `.cfg-grid` 上方。
-    // ⚠️ **卡级的整句说明留在网格外面**（下面两处 `muted note`）：那两句说的是整张卡，
-    // 塞进网格会被当成一格字段去排。
-    const auth = card("set.card.auth");
-    // **排在输入框上面、网格外面**：打开这张卡的第一个问题是「现在配的是哪一把」，
-    // 第二个才是「换一把」；在网格外的理由与上面那句卡级说明相同。
-    const master = buildMasterRow();
-    nodes.master = master;
-    auth.body.appendChild(master.wrap);
-    const authGrid = el("div", { class: "cfg-grid" });
-    for (const path of CARD_AUTH) addField(authGrid, path, "secret");
-    auth.body.appendChild(authGrid);
-    // 管理员口令**只读展示**（设计 §8.1 规则 2 / §10.4 卡 1）：它只从环境变量来，
-    // 面板不该能改自己的钥匙，所以这里连输入框都不给。
-    auth.body.appendChild(elI18n("p", "set.adminTokenNote", { class: "muted note" }));
-    colLeft.appendChild(auth.wrap);
-
-    // ── 卡 2：上游与冷却 ────────────────────────────────────────────────────
-    const upstream = card("set.card.upstream");
-    const upstreamGrid = el("div", { class: "cfg-grid" });
-    for (const path of CARD_UPSTREAM) addField(upstreamGrid, path, "text");
-    upstream.body.appendChild(upstreamGrid);
-    // 这一句在字典里躺了整整一期没上屏，而 `pure/settings.mjs` 的注释一直声称它「就在卡 2 底下」。
-    // 说的是 `poolCacheTtlMs` / `poolTouchIntervalMs` 与卡 2 里别的字段的那条真实差异：
-    // 建实例时读一次，改了要重启容器 / 等 isolate 回收才生效。面板不说这句话，
-    // 运维改完刷新一看没变化，得出的结论是「这个面板的保存是假的」。**写法与卡 1 对齐。**
-    // 由 tests/ui/dom/settings-save.test.ts 的「卡 2 底下真的印着那句「改了要重启」」钉着。
-    upstream.body.appendChild(elI18n("p", "set.card.upstreamNote", { class: "muted note" }));
-    colLeft.appendChild(upstream.wrap);
-
-    // ── 卡 3：集成示例（设计 §10.4 第 4 张卡）──────────────────────────────────
-    // 板块文件允许碰浏览器全局，**base URL 在这里读一次再传给纯函数**——
-    // `js/pure/` 下禁止出现浏览器那两个顶层全局（`scripts/build-ui.mjs` 的静态校验，
-    // 含注释里的字样），所以纯函数只收一个 `origin` 参数。
-    const examples = card("set.card.examples");
-    exOrigin = location.origin;
-    nodes.examples = examples.body;
-    colRight.appendChild(examples.wrap);
-
-    // ── 卡 4：危险区（设计小节「重置到底重置了什么」）────────────────────────────
-    //
-    // ⚠️ **这张卡一度刻意不存在**：设计里那条订正把它往后推过一期，逐字理由是
-    // 「『重置』到底重置了什么本身就需要一节设计，而本文档没有这一节」——
-    // **让一颗后果不可挽回的按钮先于它的语义上线，正是会变成 Critical 的形状。**
-    // 那一节现在写好了，这张卡才落地。
-    //
-    // ⚠️ **两颗按钮从 `DANGER_ACTIONS` 派生**，不在这里写第二份清单：那张表的**条数**
-    // 同时是五份 ADMIN.md 危险区那张表的行数真源，各写一份就会漂。
-    const danger = card("set.card.danger");
-    danger.wrap.classList.add("danger-zone");
-    danger.body.appendChild(elI18n("p", "set.danger.intro", { class: "danger-text" }));
-    const dangerRun = { resetConfig: confirmReset, purgeKeys: confirmPurge };
-    for (const a of DANGER_ACTIONS) {
-      const row = el("div", { class: "cfg-field", "data-danger": a.id });
-      row.appendChild(elI18n("div", a.titleKey, { class: "label" }));
-      row.appendChild(elI18n("p", a.descKey, { class: "muted note" }));
-      const btn = elI18n("button", a.buttonKey, { type: "button", class: "danger" });
-      btn.addEventListener("click", () => { dangerRun[a.id](); });
-      row.appendChild(btn);
-      danger.body.appendChild(row);
-    }
-    const dangerResult = el("p", { class: "muted note cfg-danger-result" });
-    dangerResult.style.display = "none";
-    danger.body.appendChild(dangerResult);
-    nodes.dangerResult = dangerResult;
-    colRight.appendChild(danger.wrap);
-
-    addHostFooter(section, host);
+  init(node) {
+    nodes.root = node;
   },
-
   onShow() {
+    if (ctl) { ctl.abort(); ctl = null; }
+    // ⚠️ 切语言时框架层会重跑 `onShow()`；重新 `build()` + `load()` 让所有靠 `t()`
+    //    拼进 textContent 的串跟着换语言。
+    // 🔴 **重进板块丢掉未保存的编辑**：留着它们会让「屏幕上这个值」与「服务器上
+    //    那个值」在下一次保存时静默合流 —— 而中间可能已经有别人改过。
+    build(nodes.root);
+    state.changed = [];
     load();
-    // 目录是静态的：成功读过一次之后这一步只重画（切语言时框架层会重跑 onShow，
-    // 而集成示例卡那段说明带插值参数，`apply(document)` 刷不动它，必须重画）。
-    loadCatalog();
   },
-
   onHide() {
-    // **作废在飞请求**：不作废的话切回来时旧响应可能盖掉新数据（板块契约 §9.3）。
-    if (abort) { abort.abort(); abort = null; }
+    if (ctl) { ctl.abort(); ctl = null; }
   },
 };
 
-/**
- * 这条路径是不是凭据。
- *
- * ⚠️ **`init()` 跑在第一次 `load()` 之前，那时 `data` 还是 `null`**，
- * `isSecret(data, path)` 一律回 `false` ⇒ 两条通道的 `apiKey` 会被建成明文文本框。
- * 所以建控件这一步用路径形状判，**而运行期的那份判据仍然走后端给的 `secrets` 清单**
- *（`buildPatch` / `renderOne` 都走 `isSecret`）。两处判据不一致时以后端那份为准，
- * 这里只影响「这个框是不是 password 类型」。
- */
-function isSecretPath(path) {
-  return path.endsWith(".apiKey") || path === "gatewayToken";
-}
+export default settingsSection;

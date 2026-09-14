@@ -1,8 +1,19 @@
-node_modules/
-dist/
-data/
+# Rust 构建产物
+/target
+**/*.rs.bk
+
+# 运行期数据目录（store.json 里有网关口令与 key 明文，🔴 绝不许进仓）
+/data
+store.json
+*.corrupt.*
+
+# 本地环境变量（GATEWAY_TOKEN / ADMIN_TOKEN 都在里面）
 .env
 .env.*
 !.env.example
-*.log
-.superpowers/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+.DS_Store

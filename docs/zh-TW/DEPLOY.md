@@ -55,9 +55,9 @@ cd agnes2api
 cp .env.example .env
 ```
 
-**不用映像、直接從原始碼跑**：`pnpm dev:node` 以 `node scripts/build-ui.mjs` 開頭，
-然後建置並跑起 `dist/entry/node.js`。裸跑 `node dist/entry/node.js` 也起得來，
-但面板會停在上一次產生的那一份——改了 `admin-ui/` 卻看不到變化，多半就是這個原因。
+**不用映像、直接從原始碼跑**：`cargo run --release`。面板不需要任何建置步驟 ——
+`admin-ui/` 下那些手寫檔案由 `rust-embed` 在**編譯期**直接讀原檔嵌進二進位檔，
+所以「產物與原始碼對不上」這件事在結構上不可能發生，改完重新編譯就是了。
 
 ### 設定
 

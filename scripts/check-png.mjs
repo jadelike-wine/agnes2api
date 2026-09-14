@@ -120,6 +120,16 @@ import { pathToFileURL } from "node:url";
  */
 export const REGISTERED_BINARIES = Object.freeze({
   "docs/logo.png": "af6540babf42c49762c81ca1b04fdab64dafeb15900f0dae5635b44b63e82279",
+  // 面板那一份。**与上面是同一份字节**，而这里仍然逐条登记、不写成
+  // 「docs/logo.png 的副本」：登记值就是「这张图是被人看过的那张」的唯一凭证，
+  // 写成引用就等于让一份没被单独审过的字节搭另一份的便车。
+  //
+  // 🔴 **它是文件、不是内联 base64**（裁定 P-13，见 `admin-ui/index.html`）：
+  // 面板直接 `<link rel="icon" href="/admin/logo.png">`，仓里一处内联 PNG 都没有
+  // ⇒ 下面那一半「面板内联副本逐像素对账」**被测对象不存在**，由 `--skip-inline` 明关。
+  // 「两份字节必须相同」这条性质换了个执行者：Rust 判据
+  // `webui::tests::the_panel_logo_is_the_same_file_as_the_docs_logo` 逐字节钉着。
+  "admin-ui/logo.png": "af6540babf42c49762c81ca1b04fdab64dafeb15900f0dae5635b44b63e82279",
 });
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -587,6 +597,8 @@ function main(argv) {
     console.log(`data:image/png;base64,${png.toString("base64")}`);
     return 0;
   }
+  const skipInline = argv.length === 1 && argv[0] === "--skip-inline";
+  if (skipInline) argv = [];
   const targets = argv.length > 0
     ? argv.map((p) => [p, REGISTERED_BINARIES[p] ?? null])
     : Object.entries(REGISTERED_BINARIES);
@@ -610,7 +622,18 @@ function main(argv) {
   }
   // 面板里内联的那几串 base64 与上面这张图对账。**只在审全量时跑**：带路径参数是
   // 单审某个文件的用法，那一档不该顺带把面板也审一遍（报文会指错地方）。
-  if (argv.length === 0) {
+  //
+  // 📜 `--skip-inline`：**这一半的被测对象没了，不是判据被放宽了。**
+  // 它防的是「同一张图在 admin-ui 里另存了一份 base64 副本，两份会各漂各的」。
+  // Rust 版的面板**直接引用 `/admin/logo.png` 这个文件**（裁定 P-13，见
+  // `admin-ui/index.html` 里那段注释）⇒ 仓里一处内联 base64 PNG 都没有，
+  // **重复本身被消掉了**。
+  // ⚠️ 「两份字节必须相同」这条性质没有跟着消失，它换了个执行者：Rust 判据
+  // `webui::tests::the_panel_logo_is_the_same_file_as_the_docs_logo` 逐字节钉着
+  // `admin-ui/logo.png == docs/logo.png`。
+  // 🔴 **哪天面板又开始内联了，就把这个开关从 CI 里摘掉** —— 那时重复回来了，
+  // 而上面那条 Rust 判据看不见内联的那一份。
+  if (argv.length === 0 && !skipInline) {
     let logos;
     try {
       logos = auditUiLogos();

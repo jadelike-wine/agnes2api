@@ -59,10 +59,10 @@ cd agnes2api
 cp .env.example .env
 ```
 
-**이미지를 쓰지 않고 소스에서 돌릴 때**: `pnpm dev:node`는 `node scripts/build-ui.mjs`로
-시작해 빌드한 뒤 `dist/entry/node.js`를 띄웁니다. 맨손으로 `node dist/entry/node.js`를
-띄워도 되지만, 패널은 마지막으로 생성된 그대로 남습니다 —— `admin-ui/`를 고쳤는데 아무
-변화가 없다면 대개 이것이 이유입니다.
+**이미지를 쓰지 않고 소스에서 돌릴 때**: `cargo run --release`. 패널에는 빌드 단계가
+전혀 없습니다 —— `admin-ui/` 아래 손으로 쓴 파일들을 `rust-embed`가 **컴파일 시점**에
+그대로 읽어 바이너리에 넣기 때문에, "산출물과 소스가 어긋난다"는 일은 구조적으로
+일어나지 않습니다. 고친 뒤 다시 컴파일하면 됩니다.
 
 ### 설정
 

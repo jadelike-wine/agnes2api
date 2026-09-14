@@ -19,47 +19,52 @@ save you a round trip.
 
 ## Setting up
 
-Install dependencies with pnpm. Neither the pnpm version nor the Node version is repeated
-here: both are pinned in `package.json` (`packageManager` and `engines`), and the same Node
-major is pinned in `Dockerfile` and in the CI workflow. Those three are kept in step by a test,
-so trust them and not this paragraph.
+You need a Rust toolchain and nothing else. The version is not repeated here: it is pinned in
+`rust-toolchain.toml`, and `rustup` will install it for you on the first `cargo` command. The
+CI workflow deliberately does **not** name a version either — two places naming it is two
+places that drift, and the drift shows up as "green on my machine, red in CI, on a line nobody
+can explain".
+
+A few of the repository-hygiene gates are still Node scripts (`scripts/*.mjs`). They are not
+part of the build: they check things that have nothing to do with the implementation language —
+whether a tracked file is text, whether the one allowed binary hides a payload, whether a
+credential slipped in. Any recent Node runs them.
 
 ## Running the checks
 
 > [!IMPORTANT]
 > **This page deliberately does not keep a second copy of the check list.** The gates, their
 > order and their exact commands live in [`.github/workflows/ci.yml`](.github/workflows/ci.yml);
-> the script names they call live in `package.json`. Run what that file runs, in that order —
-> the same knowledge written down twice will drift.
+> and they are plain commands. Run what that file runs, in that order — the same knowledge
+> written down twice will drift.
 
 ### The one you will run most often
 
-- `pnpm test` — unit, contract and front-end pure-function tests, on the Node runtime.
+- `cargo test` — every assertion in the repository. There is one command and one runner;
+  assertions live in `#[cfg(test)]` modules next to the code they judge.
 
-There used to be a second line here — a `test:workers` script that re-ran everything in
-`tests/contract/` inside `workerd` — plus a paragraph telling you that a case running under
-only one runtime covers half the product. The Cloudflare Worker deployment shape was removed
-in v0.4.0 and that entry point went with it, together with its own vitest config. **What that
-line used to guard — the two runtimes never disagreeing — has no guard today, because there
-is no second runtime left to disagree.** Cases under `tests/contract/` still exist and still
-run; they now run once. The same removal is why the pre-push smoke test further down this
-page covers one deployment shape rather than two.
+> [!WARNING]
+> **Never give it a filter.** `cargo test some::thing` is fine while you iterate, but a filter
+> that reaches a commit — or CI — silently shrinks what is checked, and a shrunken run is still
+> a green run. The CI step runs it bare on purpose.
 
-### Nothing checks that a case is in the right directory
+### Nothing checks that an assertion is in the right module
 
-**No machine will tell you that you put a case in the wrong directory.** The collection guard
-in `tests/global-setup.ts` checks that every file *already in* `tests/contract/` is collected
-by every vitest config it finds on disk — one, today — and it does not judge where a case
-belongs. Its own note says so in as many words:
-`tests/global-setup.ts`「不校验目录归属本身是否合理」. Write a contract-shaped case into
-`tests/unit/` and it still runs, with a green run and an unchanged banner. Catching that is a
-reviewer's job, and it is one of the things the pull request template asks about.
+**No machine will tell you that you put an assertion in the wrong place.** Assertions live
+beside the code they judge, and nothing compares "what this module is about" with "what this
+assertion is about". An assertion about the registrar written into the pool's test module runs,
+passes, and looks exactly like one that belongs there. Catching that is a reviewer's job, and
+it is one of the things the pull request template asks about.
 
 ### If you touch the panel
 
-If you touch `admin-ui/`, the generated bundle `src/ui/assets.generated.ts` has to be
-regenerated and committed in the same change. CI regenerates it and fails on any difference,
-so a forgotten regeneration is a red build, not a silent drift.
+Nothing to regenerate. The hand-written files under `admin-ui/` are read straight from disk by
+`rust-embed` at **compile time** and baked into the binary, so there is no bundle in the
+repository and no "did you remember to rebuild it" step. Recompile and the panel is the files
+you just edited.
+
+The one thing that is checked: the panel's size budget, and that `admin-ui/logo.png` is the
+same bytes as `docs/logo.png`. Both are ordinary assertions — `cargo test` runs them.
 
 ## Mutation evidence is a merge condition
 
@@ -166,12 +171,18 @@ Swapping the image is therefore five steps, not one:
    The gate goes red until you do, and that is the point: the registered digest is the only
    evidence that a human ever looked at these bytes.
 3. Regenerate the panel's two inline copies and paste them back:
-   `node scripts/check-png.mjs --emit 32` for the `<link rel="icon">` in
+   *(This step no longer applies: the panel references `/admin/logo.png` as a file and the
+   repository contains no inline base64 copy. It is kept here only so that the numbering
+   matches the Chinese copy inside `scripts/check-png.mjs`, which explains why.)*
+   `node scripts/check-png.mjs --emit 32` used to regenerate the `<link rel="icon">` in
    `admin-ui/index.html`, `--emit 64` for the `.brand-mark` background in
-   `admin-ui/css/shell.css`; then `pnpm ui:build`. The same gate goes red until you do.
+   `admin-ui/css/shell.css`. Today there is nothing to paste it into.
 4. Re-run the credential scan — **both archives**: `bash scripts/scan-secrets.sh` and
    `bash scripts/scan-secrets.sh --history`.
-5. Re-run `node scripts/check-png.mjs`.
+5. Re-run `node scripts/check-png.mjs --skip-inline`. Both `docs/logo.png` and
+   `admin-ui/logo.png` are registered binaries and both get the byte-level audit; the
+   `--skip-inline` half is off because the panel has no inline copy left to reconcile
+   (the flag's own comment in that script says why, and what took over the guarantee).
 
 ### Why step 4 is not a formality
 
@@ -198,14 +209,16 @@ and none of them is edited by hand — `scripts/set-version.sh` writes all four 
 bash scripts/set-version.sh 0.1.1
 ```
 
-That rewrites `VERSION`, the `version` field in `package.json`, the constant in
-`src/version.ts`, and the version badge at the top of the root README **and** of every
-translated README.
+That rewrites `VERSION`, the `version` field in `Cargo.toml`, and the entry in `Cargo.lock`.
+**Three places, not four**: the code reads `env!("CARGO_PKG_VERSION")` and keeps no version
+constant of its own — one more copy is one more thing that can drift, and "`/health` reports a
+version that is not the one running" is a shape this project has already been bitten by.
 
 ### Then, in this order
 
-1. Refresh the lockfile. The script prints the exact command as its last line; run it, because
-   `package.json` and `pnpm-lock.yaml` disagreeing is a red build, not a warning.
+1. Nothing to refresh by hand — `scripts/set-version.sh` already updated `Cargo.lock` for you.
+   Confirm it is in the diff: `VERSION` and `Cargo.toml` agreeing while `Cargo.lock` lags is a
+   red build, and an assertion in the repository says so before CI does.
 2. Write the entry in `CHANGELOG.md`.
 3. Run the pre-push checklist — `bash scripts/prepush.sh` — and make it green. It re-runs the
    CI gates in CI's own order, plus the few things CI structurally cannot see (a dirty working

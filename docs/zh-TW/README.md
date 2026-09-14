@@ -7,12 +7,12 @@
 <p>一套程式碼同時相容 OpenAI / Anthropic / OpenAI-Responses / Gemini 四大 AI SDK，由 Agnes AI 後端統一供給對話與圖片、影片生成，Docker 一條指令快速部署。</p>
 
 <p>
-  <img src="https://img.shields.io/badge/TypeScript-7.0-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Rust-1.90-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Hono-4.13-E36002?style=flat-square&logo=hono&logoColor=white" alt="Hono">
   <img src="https://img.shields.io/badge/Docker-20.10+-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4285F4?style=flat-square&logo=linux&logoColor=white" alt="Arch">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/version-v0.4.0-success?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.0-success?style=flat-square" alt="Version">
 </p>
 
 <p>
@@ -60,11 +60,11 @@
 
 | 日期 | 更新內容 |
 |------|----------|
+| 2026-09-14 | v1.0.0 - 🦀 **整個網關用 Rust 重寫**：對外契約逐格不變、`store.json` 一個位元組沒改，升級就是換映像。另加：註冊機 15 個設定項進設定頁（改完不必重啟）、「立即補池」有了冷卻與日額度；另修：面板改完不生效、關著註冊機的部署永不對帳索引 |
 | 2026-09-10 | v0.4.0 - ✂️ **砍掉 Cloudflare Worker 形態**（破壞性變更）：只剩 Docker 一種。Worker 上註冊機鑄不出 key（上游限流按 IP），`waitUntil` 還會靜默取消整輪背景活。另修：面板把子金鑰吊銷上界多報了 1 分鐘（6 → 5 分鐘） |
 | 2026-09-10 | v0.3.1 - 🔍 **稽核收口**：v0.3.0 之後跑了一輪六軸稽核，36 條發現經對抗式覆核確認 20 條，本版全修。含兩條 critical —— 安全文件把「沒有 reveal 端點」當成保證寫著，以及 `/v1/responses` 串流讓官方 SDK 崩在自己內部 |
 | 2026-09-10 | v0.3.0 - 🚀 **面向使用者的大修**（含破壞性變更）：模型目錄 4 → 12（從前漏掉唯一能對話的那個）、面板補上響應式（從前一個斷點都沒有）、Key 池與 API 金鑰可在面板顯示明文並複製、新增逐模型連通性測試。另修一批實測缺陷：畸形請求被轉發上游白燒共用限流額度、結構錯回 500 而非 400、500 不留任何線索 |
 | 2026-09-09 | v0.2.2 - 🐛 **修好「立即補池」**（含破壞性變更）：這顆按鈕以前回 202「已開始」之後整輪被 Cloudflare 靜默取消，池子不動、歷史不加行，還會把補池鎖洩漏一刻鐘、連定時輪一起擋掉。現在改成跑完再回傳 200 並帶上真實結果；手動輪有了自己那一族上限（單輪 1 把 / 等碼 60 秒 / 鎖 3 分鐘） |
-| 2026-09-09 | v0.2.1 - 🧾 **發版後收口**：v0.2.0 的稽核發現當時修在了 tag 之後，等於沒發出去。這一版把它們真正發出去 —— LICENSE 恢復成純 MIT（那段重複的 Required Notice 讓 GitHub 與 GHCR 映像都判成 NOASSERTION）、README 的「八個板塊」改成實際的九個、五語言文件與面板裡一批「話說得比事實滿」的訂正，以及 26 處差了兩個版本的 /health 範例（並補測試從 VERSION 現算釘住） |
 
 > 完整更新日誌請查看 [CHANGELOG.md](../../CHANGELOG.md)。
 
@@ -113,7 +113,7 @@
 
 ### ⚡ 高效能架構
 
-- 基於 **TypeScript + Hono**，一棵路由樹裝配四條協議、媒體轉發與 `/admin` 子樹
+- 基於 **Rust + axum**，一棵路由樹裝配四條協議、媒體轉發與 `/admin` 子樹
 - 上游回應以串流轉發為主；非串流請求原樣以 `stream:false` 發給上游，閘道解析上游那份 JSON 再翻譯成你用的協議形狀
 - port 層與 adapter 層分離（儲存、抓取、日誌、信箱都是可替換的 port），契約測試直接打真裝配出來的那棵路由樹
 - 多階段 Docker 建置、非 root 執行、多架構映像檔（amd64 / arm64）、健康檢查
@@ -185,7 +185,7 @@ docker compose logs -f
 ```bash
 # 健康檢查（不鑑權）。前面掛了網域就換成你自己的位址
 curl http://localhost:8080/health
-# {"status":"ok","version": "0.4.0"}
+# {"status":"ok","version": "1.0.0"}
 
 # 查看可用模型
 curl http://localhost:8080/v1/models \
@@ -484,5 +484,5 @@ agnes2api 主要由個人維護，歡迎透過程式碼、文件、修復或 PR 
 ---
 
 <div align="center">
-  <sub>Built with TypeScript + Hono + Docker | Powered by Agnes AI</sub>
+  <sub>Built with Rust + axum + Docker | Powered by Agnes AI</sub>
 </div>

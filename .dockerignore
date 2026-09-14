@@ -1,7 +1,31 @@
-node_modules
-dist
+# 构建上下文里**不需要**的东西。
+#
+# 🔴 **`admin-ui/` 绝不许出现在这张表里。**
+# 面板不是生成物：`rust-embed` 在**编译期**直接读 `admin-ui/` 下的原文件嵌进二进制
+# （见 `src/webui/mod.rs` 与 Dockerfile 里那行 `COPY admin-ui ./admin-ui`）。
+# 排除掉它的后果不是「镜像小一点」，是**构建当场失败**：
+#   failed to compute cache key: "/admin-ui": not found
+# 上一版（TypeScript）确实把它排除了，因为那时进镜像的是 `src/ui/assets.generated.ts`
+# 这份生成物，`admin-ui/` 只是它的源。**语言换了，这一行的前提就没了。**
+# 这一条是 `scripts/prepush.sh` 那格真机冒烟抓到的 —— 判据全绿，而镜像构建不起来。
+
+# 构建产物：上下文里带上它会让每次 docker build 多传几个 GB。
+target
+
+# 版本库与运行期数据。
 .git
+.github
 data
-tests
+store.json
+
+# 文档与仓库门禁脚本：二进制里一个字节都用不到。
+# ⚠️ `docs/logo.png` 只被 `#[cfg(test)]` 那一格 `include_bytes!` 读，
+#    而镜像里跑的是 `cargo build --release`（不编译测试）⇒ 排除它是安全的。
+#    **改成在非测试代码里读它的那天，这一行要跟着删。**
 docs
-admin-ui
+scripts
+
+# 本地环境变量（口令都在里面）。
+.env
+.env.*
+!.env.example

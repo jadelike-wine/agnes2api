@@ -1,373 +1,689 @@
 /**
- * 「API 密钥」板块：**我们签发给下游的那一族凭据**的签发 / 命名 / 到期 / 停用 / 吊销。
+ * 「API 管理」板块 —— **我们签发给下游的那一族 `sk-*`** 的签发 / 改名 / 到期 /
+ * 停用 / 吊销 / 明文回显。
  *
- * ⚠️⚠️ **它与「Key 池」板块方向相反，别读混。** 那一族是**我们持有的**上游凭据
- *（拿去向 Agnes 证明身份，端点 `/admin/api/keys`）；这一族是**别人拿来向我们证明
- * 身份**的（端点 `/admin/api/apikeys`）。两个名字很像是已知代价，缓解手段是文案
- *（每张卡头一句）与文档，不是去改已经发布过的那条路径。
+ * ⚠️⚠️ **它与「账号管理」板块方向相反，别读混。** 那一族是**我们持有的**上游凭据
+ * （拿去向 Agnes 证明身份，端点 `/admin/api/keys`）；这一族是**别人拿来向我们证明
+ * 身份**的（端点 `/admin/api/apikeys`）。两个名字很像是**已知代价**，缓解手段是
+ * 文案与文档，不是去改一条已经发布过的公开路径。
  *
- * 板块契约（设计文档 §9.3）：`{ init?, onShow?, onHide? }`，见 `js/app.js` 的
- * `showSection`。**板块内不许监听 langchange**——框架层会 apply(document) 之后
- * 重跑一次 onShow()。
+ * ── 🔴 reveal 的**四态**，本板块最要紧的一条 ──────────────────────────────
  *
- * ── 三条纪律（与其余八个板块相同）────────────────────────────────────────────
+ * TS 版把这四态混成过一态，代价是运维**对着一把永远取不回的密钥反复点**。四态是：
+ *
+ * | 档 | 载体 | 含义 | 运维该做什么 |
+ * |---|---|---|---|
+ * | `ok`          | 200 体 `kind:"ok"`          | 明文在这儿 | 复制走 |
+ * | `unavailable` | 200 体 `kind:"unavailable"` | 这把签发于明文落盘之前，服务端**从来就没有过**它的明文 | **永久**如此，重发一把 |
+ * | `gone`        | **404**                      | 这条记录已经不在表里了（别处删过） | 刷新列表 |
+ * | `failed`      | 其余非 2xx / 传输失败        | 这一次没拿到 | 重试可能有用 |
+ *
+ * 🔴 **`unavailable` 与 `failed` 不许并档**：前者是一个**永远不会变**的事实。
+ * 本板块把这条「永久」真的画了出来 —— 一旦某一把回了 `unavailable`，
+ * 它那一行的「显示明文 / 复制」两颗按钮**当场换成一句话**（见 `revealCell()`），
+ * 而不是继续摆在那里等人再点一次。**一句 toast 不够**：toast 3 秒就没了，
+ * 而那颗按钮会一直在。
+ * ⚠️ `gone` 与 `failed` 也不许并档：前者的处置是「刷新一下列表」，本板块据此**自动
+ * 重拉一次列表**（那一行本来就该消失）。
+ *
+ * ── 三条纪律 ──────────────────────────────────────────────────────────────
  * ① 一切来自接口的内容一律 `textContent`（`el()` 走的就是它）。**本板块尤其要紧**：
- *    密钥的名称是运维自由输入、又会被投影到屏幕上的字段，与 `KeyView.note` 同一类；
- * ② **取值决策一律不写在这里**，全在 `js/pure/apikeys.mjs`（admin-ui/README.md 硬规则 1）；
- * ③ **一切形态分支只读接口返回的字段**（`capabilities` 的 `apiKeys` 那一格），
- *    不许自己嗅探运行时、更不许把上限 / TTL / 「明文能不能再取回」写死在前端。
+ *    密钥名称是运维自由输入、又会被投影到屏幕上的字段；
+ * ② **判定一律读响应里那一格 `view`**（06 §5.3 的 A 档，判定在
+ *    `src/core/admin/view/apikeys.rs`）：徽章类、档位文案、开关文案、
+ *    「清理失效」的 N 与它出不出现、空表那句话，一格都不在这里重算；
+ * ③ **一切形态分支只读接口返回的字段**（`/capabilities` 的 `apiKeys` 那一块），
+ *    不许把上限 / TTL / 「明文能不能再取回」写死在前端。
  *
- * ── 服务连接卡里**刻意没有主口令的掩码**（与设计稿的一处偏离，写清理由）──────────
- * 设计稿要在这张卡上复用 `masterKeyView()` 显示主口令掩码。**没有做，两条理由**：
+ * ── 服务连接卡上**刻意没有主口令的掩码**（与 kiro 的一处偏离，理由写清）────────
+ * kiro 那张卡上有一行 `masterKey`。本板块**不画它**，两条理由：
  * ① 那份数据只有 `GET /admin/api/config` 给得出来 ⇒ 每打开一次这个板块就多**一次
- *    存储读**，而五份 DEPLOY.md 的配额账里这个板块的单价写的是「列一次表 = 1 次 get」；
- * ② 主口令的那张卡**已经在设置页上**（`sec-settings.js` 的 `buildMasterRow`），
- *    同一把凭据在面板上有两个展示入口，迟早会分叉——本仓为这个形态付过多次代价。
- * ⇒ 这里只写清「主口令永远有效、要轮换请去设置页」这句话，并把「设置」做成跳转。
- * **不画一个假的掩码，也不画一串圆点占位**。
+ *    存储读**，而部署文档的配额账里这个板块的单价写的是「列一次表 = 1 次 get」；
+ * ② 同一把凭据在面板上有两个展示入口，迟早会分叉。
+ * ⇒ 这里只写清「主口令在设置页」，**不画一个假的掩码、也不画一串圆点占位**。
  */
 import { api, ApiError } from "./api.js";
 import { t } from "./i18n.js";
 import {
-  REVEAL_KINDS, createRevealState, revealMessageKey, revealOutcome,
-} from "./pure/reveal.mjs";
-import { el, elI18n, toast, openModal, confirmModal, copy, revealControls,
+  el, elI18n, iconBtn, svgIcon, toast, copy, openModal, confirmModal, revealControls,
 } from "./ui.js";
-import { fmtCount, fmtDash, fmtDuration, fmtInstant } from "./pure/format.mjs";
-import { offsetMs } from "./pure/overview.mjs";
-// 错误码 → 文案。**全仓唯一那份「码 → i18n key」的翻译**，两族管理端点共用它
-// （那张表的名字里没有 keys 字样，射程本来就是整棵管理树）。
-import { adminErrorFields, adminErrorText } from "./pure/keys-write.mjs";
-// ⚠️ **用量那一行走「用量」板块那份纯模块，不在这里再写一套判据**：
-// 「这段用量该读成什么」本仓只许有一份判据（`usageState()`），各写一份的话，
-// 分叉的那一边正好是「关着」时，面板就会开始伪造 0。
-// ⚠️ **这里刻意不复述那边分了几档、各叫什么**：那是另一份文件的内容，抄过来会腐烂
-//（上一版这行写的是「这三态」，而那边早已不止三态）。要看清单去 `usageState()`。
-// 区间也用同一个 `rangeToQuery`，两处不许各算各的。
-import { apiKeyUsage, rangeToQuery } from "./pure/usage.mjs";
-import {
-  AK_CARDS, AK_SORTS, AK_EXPIRY_DAYS,
-  akCounts, akListState, akItems, akVersion, akBadgeClass, akBucketLabelKey,
-  akCardLabelKey, akSortLabelKey, akExpiryLabelKey, akVisible, akPurgeCount,
-  akPurgeVisible, akEmptyKey, akToggleLabelKey, akNameProblem, akExpiresAt,
-  akRevokeDelayMs, akCapability,
-} from "./pure/apikeys.mjs";
+// 🔴 **徽章类名要过这一道翻译**：后端交的 `badge badge-ok` / `badge badge-warn`
+//    在 `css/base.css` 里**根本不存在**（那边是 `-success` / `-warning`），原样上屏
+//    的话「可用 / 已过期 / 已停用」三档完全同色。理由全文见那个模块的文件头。
+import { badgeClass } from "./pure/badge-class.mjs";
 
-const state = { q: "", sort: "new" };
+/* ============================================================
+   图标
+   ============================================================ */
+
+const ICON_LINK = "M 10 13 a 5 5 0 0 0 7.5 .5 l 3 -3 a 5 5 0 0 0 -7 -7 l -1.7 1.7 M 14 11 a 5 5 0 0 0 -7.5 -.5 l -3 3 a 5 5 0 0 0 7 7 l 1.7 -1.7";
+const ICON_COPY = "M 9 9 h 10 v 10 h -10 z M 5 15 H 4 a 1 1 0 0 1 -1 -1 V 4 a 1 1 0 0 1 1 -1 h 10 a 1 1 0 0 1 1 1 v 1";
+const ICON_PENCIL = "M 17 3 a 2.8 2.8 0 1 1 4 4 L 7.5 20.5 L 2 22 l 1.5 -5.5 z";
+const ICON_TRASH = "M 3 6 h 18 M 8 6 V 4 h 8 v 2 M 19 6 l -1 14 H 6 L 5 6 M 10 11 v 6 M 14 11 v 6";
+const ICON_PLUS = "M 12 5 v 14 M 5 12 h 14";
+const ICON_SORT = "M 3 6 h 12 M 3 12 h 8 M 3 18 h 5 M 17 8 v 11 M 17 19 l -3 -3 M 17 19 l 3 -3";
+const ICON_SEARCH = "M 11 4 a 7 7 0 1 0 0 14 a 7 7 0 1 0 0 -14 z M 20 20 l -4 -4";
+
+/* ============================================================
+   服务端视图 key → 本板块字典 key
+   ============================================================ */
+
+/**
+ * 🔴 **服务端交出来的判定 key 的别名表**（与 `js/sec-models.js` 同一条理由）。
+ *
+ * `src/core/admin/view/apikeys.rs` 交出的是 `ak.*` 那一族名字，而词条命名空间登记表
+ * （`src/webui/mod.rs` 的 `NAMESPACES`）今天不认这个前缀，那张表住在 `.rs` 里、
+ * 本轮不归本文件这一面改。
+ * ⇒ 这里只做一次**纯改名**：**判定完全在服务端**，本表把那个标识符翻成本仓字典 key。
+ * ⚠️ **认不出来的一律照实画原始 key**（下面每一处的 `undefined` 分支）。
+ */
+const VIEW_KEY = {
+  "ak.bucket.active": "section.ak.bucket.active",
+  "ak.bucket.disabled": "section.ak.bucket.disabled",
+  "ak.bucket.expired": "section.ak.bucket.expired",
+  "ak.action.enable": "section.ak.action.enable",
+  "ak.action.disable": "section.ak.action.disable",
+  "ak.empty": "section.ak.empty",
+};
+
+/** `ui.js` 的 `revealControls` 四态 → 本板块文案。**四句话各说各的，不许并成一句。** */
+const REVEAL_MESSAGE = {
+  gone: "section.ak.reveal.gone",
+  unavailable: "section.ak.reveal.unavailable",
+  expired: "section.ak.reveal.expired",
+  failed: "section.ak.reveal.failed",
+};
+
+/** 管理接口错误码 → 文案。认不出来的落到那句通用的，**不把英文码画给运维**。 */
+const ERROR_KEY = {
+  apikey_not_found: "section.ak.err.notFound",
+  apikeys_unreadable: "section.ak.err.unreadable",
+  too_many_apikeys: "section.ak.err.tooMany",
+  stale_write: "section.ak.err.stale",
+  invalid_apikey_name: "section.ak.err.badName",
+  invalid_expires_at: "section.ak.err.badExpiry",
+};
+
+const SORTS = ["new", "old", "name"];
+const SORT_KEY = { new: "section.ak.sort.new", old: "section.ak.sort.old", name: "section.ak.sort.name" };
+/** 到期快捷档（天）。`0` = 不过期。**文案写的是「自签发时刻起 N 天」。** */
+const EXPIRY_DAYS = [0, 7, 30, 90];
+const EXPIRY_KEY = {
+  0: "section.ak.expiry.never",
+  7: "section.ak.expiry.d7",
+  30: "section.ak.expiry.d30",
+  90: "section.ak.expiry.d90",
+};
+
+/* ============================================================
+   状态
+   ============================================================ */
 
 let nodes = null;
-/** 最近一次列表响应。`null` = 还没读到 / 读不出来。 */
+const ui = { q: "", sort: "new" };
+
+/** 最近一次列表响应。`null` = 还没读到 / 这一次读失败了（后者另有 `loadError`）。 */
 let data = null;
 /** 这一次读失败了没有。与 `data === null` **不是**一回事（后者还包含「没读过」）。 */
 let loadError = false;
-/** 在飞请求的取消闸。离开板块 / 发起下一次请求时作废上一次。 */
+/** 在飞那条列表读的取消闸。离开板块 / 发起下一次时作废上一次。 */
 let abort = null;
-/** `capabilities` 里那一块。**只拉一次**：三格都是建 app 时定死的部署期常量。 */
-let cap = { wired: null, max: null, nameMax: null, plaintextRetrievable: false, cacheTtlMs: null };
+
 /**
- * 最近一次 `GET /admin/api/usage`（近 24 小时那一档）的响应，每张卡的用量那一行读它。
+ * `capabilities` 里那一块。**只拉一次**：几格都是建 app 时定死的部署期常量。
  *
- * ⚠️ **`null` 与 `usageFailed` 是两件事**，与本文件 `data` / `loadError` 那一对
- * 逐字同源：`null` 还包含「还没拉过」，而那一档与「拉了但失败了」在面板上
- * 都画破折号、**但它们不是同一句话**——判据收在 `apiKeyUsage()` 里，这里只存状态。
+ * 🔴 **`null` 一律读作「还不知道」，不读作「没有」。** `wired` 一开始就是这样写的，
+ * 而 `plaintextRetrievable` 原来的初值是 `false` —— 于是 `loadCapabilities()` 的
+ * catch 块（它**刻意什么都不做**，注释写着「保持 `wired: null`，不假装它没接」）
+ * 对这一格根本不成立：一次读失败会让它**停在 `false`**，
+ * 而 `revealCell()` 据此把「显示明文 / 复制」两颗按钮**静默撤掉**。
+ * ⇒ 一次网络抖动长得和「这个部署永远取不回明文」一模一样。
+ * **一次读取失败不该长得像一条永久结论** —— 与本板块 reveal 四态那条纪律同源。
  */
+let cap = { wired: null, max: null, nameMax: null, plaintextRetrievable: null, cacheTtlMs: null };
+
+/** 用量（近 24 小时）那一次的响应与它的世代号。与列表那一条分开作废。 */
 let usageData = null;
 let usageFailed = false;
-/** 用量那一次请求的世代号。与列表那一条分开：两者的作废条件本来就不同。 */
 let usageSeq = 0;
 
-/** 把一次管理接口错误翻成一句话。**两族端点共用同一份翻译**，见上面的 import。 */
-/** 见 `admin-ui/js/sec-keys.js` 同名常量：明文只活在这里，不进列表数据。 */
-const revealState = createRevealState();
+/**
+ * 🔴 **已知「永久取不回明文」的那几把 id。**
+ *
+ * 它就是四态里 `unavailable` 那一档**在 UI 上真的分得开**的落点：记住之后，
+ * 那一行不再画「显示明文 / 复制」，改画一句说明。
+ * ⚠️ **只进不出、也不持久化**：它是一条关于「这把密钥签发于什么时候」的事实，
+ * 在这一次会话里不会变；刷新页面重新问一次服务端也完全正确。
+ */
+const permanentlyUnavailable = new Set();
 
-function errorMessage(e, genericKey) {
-  return adminErrorText(adminErrorFields(e), t, genericKey);
+/**
+ * 明文只活在这里。🔴 **绝不写回列表数据**：列表随每次写操作整份重建
+ * ⇒ 切板块、刷新之后自动回到掩码态。塞进列表数据会让它跟着进下一次渲染、
+ * 进任何对列表做的序列化。
+ */
+const revealState = (() => {
+  const secrets = new Map();
+  const shown = new Set();
+  return {
+    secretOf: (id) => (secrets.has(id) ? secrets.get(id) : null),
+    remember: (id, s) => { secrets.set(id, s); },
+    isShown: (id) => shown.has(id),
+    show: (id) => { shown.add(id); },
+    hide: (id) => { shown.delete(id); },
+    forget: () => { secrets.clear(); shown.clear(); },
+  };
+})();
+
+/* ============================================================
+   小工具（**本地的格式化，不造第二份判定**）
+   ============================================================ */
+
+function asObject(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v) ? v : null;
+}
+
+/** 一根 EM DASH = **「我们没有这个数」**，与真实的 0 是两句话。 */
+const DASH = "—";
+
+function two(n) { return n < 10 ? `0${n}` : String(n); }
+
+/**
+ * 一个时刻画成「本机时区的 YYYY-MM-DD HH:MM」。
+ * ⚠️ **不是 UTC**：这一栏是给人读的，而运维读的是自己机器上的钟。
+ * 读不出来一律 EM DASH，**绝不画一个 1970**。
+ */
+function fmtInstant(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return DASH;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return DASH;
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+/** 一段毫秒画成「N 秒 / N 分钟」。**这个数从后端来（`cacheTtlMs`），不写死。** */
+function fmtDuration(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return DASH;
+  const sec = Math.ceil(ms / 1000);
+  if (sec < 60) return t("section.ak.dur.seconds", { n: sec });
+  return t("section.ak.dur.minutes", { n: Math.ceil(sec / 60) });
+}
+
+/** 一次管理接口错误翻成一句话。**不把英文码画给运维。** */
+function errorMessage(e) {
+  const body = e instanceof ApiError ? asObject(e.body) : null;
+  const err = body === null ? null : asObject(body.error);
+  const code = err !== null && typeof err.code === "string" ? err.code : null;
+  const key = code === null ? undefined : ERROR_KEY[code];
+  if (key !== undefined) return t(key);
+  return t("section.ak.writeFailed");
+}
+
+/* ============================================================
+   窄化 + 本地排序/搜索
+   ============================================================ */
+
+/** 列表响应里那一格已经判好的视图，按 id 建索引。**不靠下标对齐。** */
+function viewRows() {
+  const d = asObject(data);
+  const v = d === null ? null : asObject(d.view);
+  const out = new Map();
+  if (v === null || !Array.isArray(v.rows)) return out;
+  for (const item of v.rows) {
+    const r = asObject(item);
+    if (r !== null && typeof r.id === "string") out.set(r.id, r);
+  }
+  return out;
+}
+
+function items() {
+  const d = asObject(data);
+  if (d === null || !Array.isArray(d.keys)) return [];
+  return d.keys.filter((k) => asObject(k) !== null && typeof k.id === "string");
+}
+
+function version() {
+  const d = asObject(data);
+  return d !== null && typeof d.version === "number" ? d.version : null;
 }
 
 /**
- * 把表单校验给出的那个「码 + params」翻成一句话。
- *
- * **走的是同一份翻译**（`adminErrorText`），所以同一条码在「前端拦下来」与
- * 「后端拒了」两条路径上给出的是**同一句话**——各写一份的话，运维会看到
- * 同一个错误有两种说法，而其中一种迟早过期。
+ * 列表这一刻该说哪句话。**四档互斥。**
+ * 🔴 `unreadable`（表坏了、全部下游客户端正在 401）与「一把都没有」**绝不合并**：
+ * 后者会让运维往完全相反的方向查。这一档由服务端的 `view.state` 独占。
  */
-function problemText(problem) {
-  return adminErrorText(
-    { code: problem.code, params: problem.params ?? {}, message: "" }, t, "ak.writeFailed",
-  );
+function listState() {
+  if (loadError) return "error";
+  const d = asObject(data);
+  if (d === null) return "error";
+  const v = asObject(d.view);
+  if (v !== null && v.state === "unreadable") return "unreadable";
+  return "ok";
 }
 
-/** 一张卡：标题 + 内容。**类名沿用全站那一套**（`card block`），不新造容器。 */
-function block(titleKey) {
-  const wrap = el("div", { class: "card block" });
-  wrap.appendChild(elI18n("h3", titleKey));
-  const body = el("div");
-  wrap.appendChild(body);
-  return { wrap, body };
-}
-
-/** 服务连接卡：Base URL + 一句「主口令在设置页」。见文件头那段偏离说明。 */
-function buildServiceCard() {
-  const { wrap, body } = block("ak.svc.title");
-  // ⚠️ **不复用设置页的 `.cfg-field`**：那是一张 auto-fit 网格（一格一行地铺），
-  // 而这里要的是「标签 + 值 + 一颗按钮」挤在同一行 —— 套上去之后那颗「复制」
-  // 会被拉成整行宽的一条绿带（真浏览器上量到的）。
-  const row = el("div", { class: "ak-svc-row" });
-  row.appendChild(elI18n("div", "ak.svc.baseUrl", { class: "cfg-label" }));
-  const url = el("div", { class: "mono", id: "ak-base-url" }, fmtDash(null));
-  row.appendChild(url);
-  const btn = elI18n("button", "common.copy", { type: "button" });
-  btn.addEventListener("click", () => { copy(url.textContent); });
-  row.appendChild(btn);
-  body.appendChild(row);
-  body.appendChild(elI18n("p", "ak.svc.master", { class: "muted note" }));
-  return { wrap, url };
-}
-
-/** 四张统计卡。**沿用全站那一套 `.card-row > .card` + `.label` / `.value`。** */
-function buildCards() {
-  const grid = el("div", { class: "card-row" });
-  const values = {};
-  const labels = {};
-  for (const c of AK_CARDS) {
-    const card = el("div", { class: "card" });
-    labels[c] = el("div", { class: "label" }, t(akCardLabelKey(c)));
-    values[c] = el("div", { class: "value" }, fmtDash(null));
-    card.appendChild(labels[c]);
-    card.appendChild(values[c]);
-    grid.appendChild(card);
+function visibleItems() {
+  const q = ui.q.trim().toLowerCase();
+  let rows = items();
+  if (q !== "") {
+    rows = rows.filter((k) => {
+      const name = String(k.name ?? "").toLowerCase();
+      const hint = String(k.hint ?? "").toLowerCase();
+      return name.includes(q) || hint.includes(q) || String(k.seq ?? "").includes(q);
+    });
   }
-  return { grid, values, labels };
+  const sorted = rows.slice();
+  if (ui.sort === "name") sorted.sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")));
+  else if (ui.sort === "old") sorted.sort((a, b) => Number(a.createdAt ?? 0) - Number(b.createdAt ?? 0));
+  else sorted.sort((a, b) => Number(b.createdAt ?? 0) - Number(a.createdAt ?? 0));
+  return sorted;
 }
 
-function buildToolbar() {
-  const bar = el("div", { class: "toolbar" });
-  const search = el("input", { type: "search" });
-  search.setAttribute("placeholder", t("ak.searchPh"));
-  search.setAttribute("data-i18n-ph", "ak.searchPh");
-  search.addEventListener("input", () => { state.q = search.value; render(); });
-  bar.appendChild(search);
-
-  const sort = el("select");
-  const sortOptions = {};
-  for (const s of AK_SORTS) {
-    sortOptions[s] = el("option", { value: s }, t(akSortLabelKey(s)));
-    sort.appendChild(sortOptions[s]);
-  }
-  sort.value = state.sort;
-  sort.addEventListener("change", () => { state.sort = sort.value; render(); });
-  bar.appendChild(sort);
-
-  // 右侧那一组：`.ak-bar-right` 只有一条 `margin-left:auto`，把两颗按钮推到行尾。
-  const purge = el("button", { type: "button", class: "danger ak-bar-right" });
-  purge.addEventListener("click", () => confirmPurge());
-  bar.appendChild(purge);
-
-  const issue = elI18n("button", "ak.issue", { type: "button", class: "primary" });
-  issue.addEventListener("click", () => openIssueDialog());
-  bar.appendChild(issue);
-
-  return { bar, search, sort, sortOptions, purge, issue };
+/**
+ * 这把密钥的用量那一行该说什么。
+ * 🔴 **判定整块读服务端的 `view.apiKeyUsageKind`**（`src/core/admin/view/usage.rs`），
+ * **不在这里从 `tier` / `shards` / `total` 反推** —— 反推就是把那套五态判定复制了第二份，
+ * 而分叉的那一边正好会在「统计关着」时画出一个假的 0。
+ */
+function usageOf(id) {
+  if (usageFailed) return { kind: "unknown", requests: 0 };
+  const u = asObject(usageData);
+  const v = u === null ? null : asObject(u.view);
+  const kind = v !== null && typeof v.apiKeyUsageKind === "string" ? v.apiKeyUsageKind : "unknown";
+  if (kind !== "value") return { kind, requests: 0 };
+  const by = asObject(u.byApiKey);
+  const bucket = by === null ? null : asObject(by[id]);
+  // 缺席**就是真的 0 次**（这一档服务端已经判过「读成功了」）。
+  return { kind: "value", requests: bucket !== null && typeof bucket.requests === "number" ? bucket.requests : 0 };
 }
 
-/** 一条密钥的卡片。**每一格都走 `el()`（textContent），名称尤其不许拼进 HTML。** */
-function itemCard(v) {
-  const card = el("div", { class: "ak-item" });
+/* ============================================================
+   卡片
+   ============================================================ */
 
-  const head = el("div", { class: "ak-item-head" });
-  head.appendChild(el("span", { class: "seq" }, `#${fmtCount(v.seq)}`));
-  head.appendChild(el("span", { class: "ak-name" }, String(v.name ?? "")));
-  const badge = el("span", { class: akBadgeClass(v.bucket) }, t(akBucketLabelKey(v.bucket)));
-  head.appendChild(badge);
+/** 服务连接卡。见文件头那段偏离说明。 */
+function serviceCard() {
+  const card = el("div", { class: "card svc-card" });
+  const head = el("div", { class: "svc-card-head" });
+  head.appendChild(svgIcon(ICON_LINK, 16));
+  head.appendChild(elI18n("span", "section.ak.svc.title"));
   card.appendChild(head);
 
-  const meta = el("div", { class: "ak-item-meta" });
-  // 掩码 + 显示明文 + 复制。
-  // ⚠️ **`plaintextRetrievable` 是契约不是猜测**：它由后端算（`/admin/api/capabilities`），
-  // 面板据它决定这两颗按钮出不出现 —— **不许在前端写死**，写死就会在哪天有人改了
-  // 后端存法时变成假话。取不回来的部署（或升级前签发的那些）仍然只画掩码。
-  if (cap.plaintextRetrievable) {
-    meta.appendChild(revealControls({
-      id: v.id, masked: String(v.masked ?? fmtDash(null)), state: revealState,
-      fetchSecret: (id) => api.get(REVEAL_KINDS.apikey.path(id)),
-      outcomeOf: revealOutcome, messageKeyOf: revealMessageKey,
-    }));
-  } else {
-    meta.appendChild(el("span", { class: "mono" }, String(v.masked ?? fmtDash(null))));
-  }
-  const off = offsetMs();
-  meta.appendChild(el("span", { class: "muted" },
-    `${t("ak.createdAt")} ${fmtInstant(v.createdAt, off)}`));
-  meta.appendChild(el("span", { class: "muted" }, v.expiresAt === null
-    ? t("ak.expiresNever")
-    : `${t("ak.expiresAt")} ${fmtInstant(v.expiresAt, off)}`));
-  // ── 这把密钥的用量（Tier-2）─────────────────────────────────────────────
-  // ⚠️⚠️ **`apiKeyUsage()` 的每一档各有各的一句话，其中两档里一个数字都没有**：
-  //    `off` —— Tier-2 关着，这个部署根本没在记账；
-  //    `no-shards` —— 开着，但这段区间一条分片都还没落盘（评审第 2 轮补的那一档）。
-  //    两档下画 `0` 都是把别的事说成「没人用」（全局约束 9）。
-  //    判据在 `apiKeyUsage()` 里，**这里只负责把它画出来**（admin-ui/README.md 硬规则 1）。
-  const u = apiKeyUsage(usageData, usageFailed, v.id);
-  const usage = el("span", { class: "muted ak-usage" },
-    u.kind === "off" ? t("ak.usage.off")
-      : u.kind === "unknown" ? t("ak.usage.unknown")
-        : u.kind === "no-shards" ? t("ak.usage.notLanded")
-          : t("ak.usage.value", { count: fmtCount(u.requests) }));
-  // tooltip：`value` 那一档说「这个数是近似值」，`no-shards` 那一档说「为什么这里没有数」。
-  // 另外两档不挂 —— 「这个数是近似值」在它们身上是一句关于**不存在的数字**的话
-  //（本仓为这个形状付过一次代价，见 sec-usage.js 的 `approxTitleMark`）。
-  if (u.kind === "value") usage.setAttribute("title", t("ak.usage.tip"));
-  else if (u.kind === "no-shards") usage.setAttribute("title", t("ak.usage.notLandedTip"));
-  meta.appendChild(usage);
-  card.appendChild(meta);
+  const row = el("div", { class: "svc-row" });
+  const left = el("div", { class: "svc-row-left" });
+  left.appendChild(elI18n("div", "section.ak.svc.baseUrl", { class: "svc-row-label" }));
+  // `location.origin` 是**运行期**的源：写死一条 URL 就是在面板上承诺一个可能不对的地址。
+  left.appendChild(el("code", { class: "svc-row-val" }, nodes.origin));
+  row.appendChild(left);
+  row.appendChild(iconBtn(ICON_COPY, "common.copy", () => { void copy(nodes.origin); }));
+  card.appendChild(row);
 
-  const actions = el("div", { class: "ak-item-actions" });
-  const rename = elI18n("button", "ak.action.rename", { type: "button" });
-  rename.addEventListener("click", () => openRenameDialog(v));
-  actions.appendChild(rename);
-
-  const toggle = elI18n("button", akToggleLabelKey(v), { type: "button" });
-  toggle.addEventListener("click", () => toggleDisabled(v));
-  actions.appendChild(toggle);
-
-  const del = elI18n("button", "ak.action.delete", { type: "button", class: "danger" });
-  del.addEventListener("click", () => confirmDelete(v));
-  actions.appendChild(del);
-  card.appendChild(actions);
+  card.appendChild(elI18n("p", "section.ak.svc.master", { class: "mng-inline-note" }));
   return card;
 }
 
+/**
+ * 五张状态卡。
+ *
+ * ⚠️ **kiro 的第 3 张是「待激活」，本仓没有那个概念**（惰性激活本期不做），
+ * **画一张恒为 0 的卡就是撒谎** ⇒ 那一格换成「上限」（`max`，来自响应）。
+ * 🔴 **不是把格子空着**：`.key-stat-grid` 是固定五列，留一个洞比换一张真卡难看得多，
+ * 而「这个部署最多能签几把」恰好是运维在这张页面上真的会问的一个数。
+ */
+function statGrid() {
+  const grid = el("div", { class: "key-stat-grid" });
+  const d = asObject(data);
+  const counts = d === null ? null : asObject(d.counts);
+  const num = (k) => (counts !== null && typeof counts[k] === "number" ? String(counts[k]) : DASH);
+  const max = d !== null && typeof d.max === "number" ? String(d.max) : (cap.max === null ? DASH : String(cap.max));
+  const cards = [
+    ["section.ak.stat.total", num("all"), ""],
+    ["section.ak.stat.active", num("active"), " ok"],
+    ["section.ak.stat.disabled", num("disabled"), " bad"],
+    ["section.ak.stat.expired", num("expired"), " warn"],
+    ["section.ak.stat.max", max, " muted"],
+  ];
+  for (const [key, value, kind] of cards) {
+    const c = el("div", { class: `card key-stat${kind}` });
+    c.appendChild(elI18n("div", key, { class: "key-stat-label" }));
+    c.appendChild(el("div", { class: "key-stat-num" }, value));
+    grid.appendChild(c);
+  }
+  return grid;
+}
+
+function toolbar() {
+  const head = el("div", { class: "section-header" });
+  head.appendChild(elI18n("h2", "section.ak.listTitle", { class: "section-title" }));
+  const acts = el("div", { class: "section-actions" });
+
+  const sortWrap = el("div", { class: "key-sort" });
+  sortWrap.appendChild(svgIcon(ICON_SORT, 16));
+  for (const s of SORTS) {
+    const on = ui.sort === s;
+    // `.btn-primary` 是实心主色 + 白字（`--primary-strong`），`aria-pressed` 是读屏
+    // 那条腿 —— 选中态不许只靠颜色。
+    const b = elI18n("button", SORT_KEY[s], {
+      type: "button",
+      class: `btn btn-sm ${on ? "btn-primary" : "btn-outline"}`,
+      "aria-pressed": on ? "true" : "false",
+    });
+    b.addEventListener("click", () => { ui.sort = s; render(); });
+    sortWrap.appendChild(b);
+  }
+  acts.appendChild(sortWrap);
+
+  const issue = el("button", { type: "button", class: "btn btn-sm btn-primary" });
+  issue.appendChild(svgIcon(ICON_PLUS, 15));
+  issue.appendChild(elI18n("span", "section.ak.issue"));
+  // 版本号还不知道时写操作整个禁掉：不带版本号的写会被后端拒，
+  // 而那时面板给出的错误对运维毫无意义。
+  issue.disabled = listState() !== "ok" || cap.wired === false || version() === null;
+  issue.addEventListener("click", () => openIssueDialog());
+  acts.appendChild(issue);
+
+  // 「清理失效（N）」：🔴 **N 与「这颗按钮出不出现」都读服务端那一格**
+  //（`view.purgeCount` / `view.purgeVisible`），不在这里数一遍。
+  //  N = 0 时整颗按钮不画 —— 一颗点了什么都不会发生的按钮比没有更糟。
+  const d = asObject(data);
+  const v = d === null ? null : asObject(d.view);
+  const purgeVisible = v !== null && v.purgeVisible === true && listState() === "ok" && version() !== null;
+  if (purgeVisible) {
+    const n = typeof v.purgeCount === "number" ? v.purgeCount : 0;
+    const purge = el("button", { type: "button", class: "btn btn-sm btn-outline" });
+    purge.appendChild(svgIcon(ICON_TRASH, 15));
+    purge.appendChild(el("span", null, t("section.ak.purge", { n })));
+    purge.addEventListener("click", () => openPurgeDialog(n));
+    acts.appendChild(purge);
+  }
+
+  const reload = elI18n("button", "section.ak.refresh", { type: "button", class: "btn btn-sm btn-outline" });
+  reload.addEventListener("click", () => { void load(); });
+  acts.appendChild(reload);
+
+  head.appendChild(acts);
+  return head;
+}
+
+function searchBox() {
+  const wrap = el("div", { class: "key-search-wrap" });
+  wrap.appendChild(svgIcon(ICON_SEARCH, 16));
+  const input = el("input", {
+    type: "text",
+    class: "form-control key-search",
+    "data-i18n-ph": "section.ak.searchPh",
+  });
+  input.setAttribute("placeholder", t("section.ak.searchPh"));
+  input.value = ui.q;
+  input.addEventListener("input", () => { ui.q = input.value; render(); });
+  wrap.appendChild(input);
+  return wrap;
+}
+
+/**
+ * 「掩码 + 显示明文 + 复制」那一组。
+ *
+ * 🔴 **这里是四态真的分得开的那个落点**（见文件头）：已知 `unavailable` 的那一把
+ * 不再画那两颗按钮，改画掩码 + 一句**永久**说明。
+ *
+ * 🔴🔴 **「取不回」与「还不知道能不能取回」是两件事，这个函数分三支。**
+ * 上一版的判据是 `if (!cap.plaintextRetrievable || …)` —— 一个把
+ * `false`（部署真的不留明文）与 `null`（`/capabilities` 这一次没读出来）**并成一档**
+ * 的写法，而后者压根不是一条结论。两处后果各说一次：
+ *   · `null` 被当成 `false` ⇒ 一次读失败让两颗按钮**静默消失**，
+ *     运维看到的是一行没有任何操作、也没有任何解释的掩码；
+ *   · `false` 那一支**一个字都不说**（那句说明原来只挂在 `permanentlyUnavailable`
+ *     那个条件上）⇒ 部署真的不留明文时，按钮同样是无声地没了。
+ * ⇒ 现在：`true` 画按钮；`false` 画按钮位的那句**永久**说明；
+ *   `null` **照旧画按钮** —— 不知道的时候不许替服务端下结论，让人点一下，
+ *   端点自己会用那四态里的一档把真相说清（每一档都有各自的 sticky toast）。
+ */
+function revealCell(k) {
+  const masked = String(k.masked ?? DASH);
+  // ⚠️ `=== false` 是刻意的：`null`（还不知道）绝不能落进这一支。
+  const noPlaintext = cap.plaintextRetrievable === false || permanentlyUnavailable.has(k.id);
+  if (noPlaintext) {
+    const wrap = el("span", { class: "reveal" });
+    wrap.appendChild(el("code", { class: "reveal-text" }, masked));
+    // ⚠️ **一句 toast 不够**：toast 3 秒就没了，而那两颗消失的按钮会一直不在。
+    //    两种「永久取不回」（这个部署从不留明文 / 这一把签发于明文落盘之前）
+    //    对运维的下一步是同一条：别再点了，重发一把。共用这一句。
+    wrap.appendChild(elI18n("span", "section.ak.reveal.permanent", { class: "cell-sub" }));
+    return wrap;
+  }
+  return revealControls({
+    id: k.id,
+    masked,
+    state: revealState,
+    fetchSecret: revealSecret,
+    messageKeyOf: (kind) => REVEAL_MESSAGE[kind] ?? REVEAL_MESSAGE.failed,
+  });
+}
+
+/**
+ * 取一次明文，**把服务端那四态翻成 `js/ui.js` 那套状态机认得的形状**。
+ *
+ * ⚠️ `ui.js` 的 `revealErrorKind()` 是按 **HTTP 状态码**分档的（404 ⇒ `gone`、
+ * 403/501 ⇒ `unavailable`、401 ⇒ `expired`、其余 ⇒ `failed`），而本族端点把
+ * 「永久取不回」放在 **200 的响应体**里（`kind:"unavailable"`）。
+ * ⇒ 这里合成一个 403 把它送进 `unavailable` 那一档。
+ * 🔴 **这不是「拿状态码撒谎」，是一次翻译**：判定仍然完全来自服务端那一格 `kind`，
+ * 本函数一个字节都不自己判。**别把它改成「非 ok 一律抛」** —— 那正好把
+ * `unavailable` 与 `failed` 并成一档，也就是这一整段要防的那个缺陷。
+ */
+async function revealSecret(id) {
+  let body = null;
+  try {
+    body = await api.get(`/apikeys/${encodeURIComponent(id)}/reveal`);
+  } catch (e) {
+    // 404 ⇒ 这一行在别处被删了。**顺手重拉一次列表**：那一行本来就该消失，
+    // 而「刷新一下」正是这一档唯一正确的处置。
+    if (e instanceof ApiError && e.status === 404) setTimeout(() => { void load(); }, 0);
+    throw e;
+  }
+  const b = asObject(body);
+  const kind = b !== null && typeof b.kind === "string" ? b.kind : null;
+  if (kind === "ok" && typeof b.secret === "string" && b.secret !== "") return b.secret;
+  if (kind === "unavailable") {
+    permanentlyUnavailable.add(id);
+    // 记住之后重画一次 —— 那一行的两颗按钮当场换成一句话。
+    setTimeout(render, 0);
+    throw new ApiError(403, "apikey_plaintext_unavailable", b);
+  }
+  // 读回来了但形状不认：那是**这一次**的事，重试可能有用 ⇒ `failed` 那一档。
+  throw new ApiError(500, "apikey_reveal_unrecognised", b);
+}
+
+function keyCard(k, row) {
+  const bucketKey = row === undefined ? undefined : VIEW_KEY[row.bucketLabelKey];
+  const card = el("div", { class: "key-card" });
+  // `.is-dim` 是「这把现在用不了」的那条**非颜色**线索（整卡降透明度）。
+  if (row !== undefined && (row.bucketLabelKey === "ak.bucket.disabled" || row.bucketLabelKey === "ak.bucket.expired")) {
+    card.classList.add("is-dim");
+  }
+
+  const main = el("div", { class: "key-card-main" });
+  const info = el("div", { class: "key-card-info" });
+
+  const line1 = el("div", { class: "key-line1" });
+  // ⚠️ `seq` **随删除而变，不是身份**：要指认一条记录只能用 `id`。它在这里只是行号。
+  line1.appendChild(el("code", { class: "key-serial" }, `#${String(k.seq ?? DASH)}`));
+  line1.appendChild(el("span", { class: "key-name" }, String(k.name ?? "")));
+  // 🔴 徽章的类与文案**都**来自服务端那一格，本文件不认识「停用优先于过期」那条规则。
+  // ⚠️ 类名过一道 `badgeClass()`（见 import 处）：**判定仍然全在服务端**，
+  //    这一道只把 DTO 的类名翻成这份 CSS 里真的存在的那个。
+  line1.appendChild(el("span", { class: badgeClass(row === undefined ? null : row.badgeClass) },
+    bucketKey === undefined ? String(row === undefined ? DASH : row.bucketLabelKey) : t(bucketKey)));
+  info.appendChild(line1);
+
+  const line2 = el("div", { class: "key-line2" });
+  line2.appendChild(revealCell(k));
+  const created = el("span", null);
+  created.appendChild(elI18n("span", "section.ak.meta.created", { class: "meta-k" }));
+  created.appendChild(el("span", { class: "key-mono" }, ` ${fmtInstant(k.createdAt)}`));
+  line2.appendChild(created);
+  const exp = el("span", { class: "key-limit" });
+  if (k.expiresAt === null || k.expiresAt === undefined) {
+    exp.appendChild(elI18n("span", "section.ak.meta.expiresNever"));
+  } else {
+    exp.appendChild(elI18n("span", "section.ak.meta.expiresAt", { class: "meta-k" }));
+    exp.appendChild(el("span", { class: "key-mono" }, ` ${fmtInstant(k.expiresAt)}`));
+  }
+  line2.appendChild(exp);
+  info.appendChild(line2);
+
+  // ── 用量那一行 ──────────────────────────────────────────────────────────
+  // ⚠️⚠️ **四档各有各的一句话，其中三档里一个数字都没有**：
+  //    `off` = 统计根本没开、`unknown` = 这一块读不出来、`no-shards` = 开着但这段区间
+  //    一条分片都还没落盘。三档下画 `0` 都是把别的事说成「没人用」。
+  const line3 = el("div", { class: "key-line3" });
+  const u = usageOf(k.id);
+  const usage = el("span", { class: "key-usg-item" });
+  if (u.kind === "value") {
+    usage.appendChild(el("span", null, t("section.ak.usage.value", { n: u.requests })));
+    usage.setAttribute("title", t("section.ak.usage.tip"));
+  } else if (u.kind === "off") {
+    usage.appendChild(elI18n("span", "section.ak.usage.off", { class: "key-usg-io" }));
+  } else if (u.kind === "no-shards") {
+    usage.appendChild(elI18n("span", "section.ak.usage.notLanded", { class: "key-usg-io" }));
+    usage.setAttribute("title", t("section.ak.usage.notLandedTip"));
+  } else {
+    usage.appendChild(el("span", { class: "key-usg-io" }, `${DASH} ${t("section.ak.usage.unknown")}`));
+  }
+  line3.appendChild(usage);
+  info.appendChild(line3);
+
+  main.appendChild(info);
+
+  // ── 行内动作簇 ──────────────────────────────────────────────────────────
+  const act = el("div", { class: "key-card-actions" });
+  act.appendChild(iconBtn(ICON_COPY, "section.ak.action.copyInfo", () => {
+    // **只复制「地址 + 掩码」，绝不复制明文**：一次「复制信息」是给人贴进工单的，
+    // 而明文进工单是不可逆的泄漏。要明文请走上面那颗专门的按钮（它会留痕）。
+    void copy(t("section.ak.copyBlock", { url: nodes.origin, key: String(k.masked ?? "") }));
+  }));
+
+  const disabled = k.disabled === true;
+  const toggleKey = row === undefined ? undefined : VIEW_KEY[row.toggleLabelKey];
+  const sw = el("button", {
+    type: "button",
+    class: disabled ? "acct-switch" : "acct-switch is-on",
+    role: "switch",
+    "aria-checked": disabled ? "false" : "true",
+  });
+  const swLabel = toggleKey === undefined ? "" : t(toggleKey);
+  sw.setAttribute("title", swLabel);
+  sw.setAttribute("aria-label", swLabel);
+  sw.appendChild(el("span", { class: "acct-switch-thumb" }));
+  sw.addEventListener("click", () => toggleDisabled(k, !disabled));
+  act.appendChild(sw);
+
+  act.appendChild(iconBtn(ICON_PENCIL, "section.ak.action.edit", () => openEditDialog(k)));
+  act.appendChild(iconBtn(ICON_TRASH, "section.ak.action.delete", () => confirmDelete(k), "is-danger"));
+  main.appendChild(act);
+
+  card.appendChild(main);
+  return card;
+}
+
+/* ============================================================
+   渲染
+   ============================================================ */
+
 function render() {
   if (nodes === null) return;
-  nodes.url.textContent = nodes.origin;
-
-  const items = akItems(data);
-  const counts = akCounts(loadError ? null : data);
-  for (const c of AK_CARDS) {
-    nodes.cards.values[c].textContent = fmtCount(counts[c]);
-    nodes.cards.labels[c].textContent = t(akCardLabelKey(c));
-  }
-  for (const s of AK_SORTS) nodes.toolbar.sortOptions[s].textContent = t(akSortLabelKey(s));
-
-  const st = akListState(data, loadError);
-  const visible = akVisible(items, state.q, state.sort);
-
-  // 「清理失效（N）」：N = 0 时整颗按钮不画（一颗点了什么都不会发生的按钮比没有更糟）。
-  const purgeable = akPurgeVisible(items) && st === "ok" && akVersion(data) !== null;
-  nodes.toolbar.purge.style.display = purgeable ? "" : "none";
-  nodes.toolbar.purge.textContent = t("ak.purge", { count: akPurgeCount(items) });
-  // 版本号还不知道时写操作整个禁掉：不带版本号的写会被后端 400，
-  // 而那时面板给出的错误对运维毫无意义。
-  nodes.toolbar.issue.disabled = st !== "ok" || cap.wired === false;
-
-  const host = nodes.list;
+  const host = nodes.body;
   host.textContent = "";
+  host.appendChild(serviceCard());
+  host.appendChild(statGrid());
+  host.appendChild(toolbar());
+
   if (cap.wired === false) {
-    host.appendChild(elI18n("p", "ak.notWired", { class: "muted note" }));
+    // 「这个部署没接上存储」与「一把都没签发过」在面板上长得一模一样，而后者是假话。
+    host.appendChild(elI18n("div", "section.ak.notWired", { class: "empty-state" }));
     return;
   }
+
+  const st = listState();
   if (st === "error") {
-    const banner = el("div", { class: "banner-danger" });
-    banner.appendChild(elI18n("span", "ak.loadFailed"));
-    const retry = elI18n("button", "common.refresh", { type: "button" });
-    retry.addEventListener("click", () => { load(); });
+    const banner = el("div", { class: "banner banner-danger", role: "status" });
+    banner.appendChild(elI18n("span", "section.ak.loadFailed"));
+    const retry = elI18n("button", "section.ak.refresh", { type: "button", class: "btn btn-sm btn-outline" });
+    retry.addEventListener("click", () => { void load(); });
     banner.appendChild(retry);
     host.appendChild(banner);
     return;
   }
   if (st === "unreadable") {
     // ⚠️ **这一支绝不能与「一把都没有」合并**：表坏掉时全部下游客户端正在 401，
-    // 而画一句「你还没签发过密钥」会让运维往完全相反的方向查。
-    const banner = el("div", { class: "banner-danger" });
-    banner.appendChild(elI18n("span", "ak.unreadable"));
+    //    而一句「你还没签发过密钥」会让运维往完全相反的方向查。
+    const banner = el("div", { class: "banner banner-danger", role: "status" });
+    banner.appendChild(elI18n("span", "section.ak.unreadable"));
     host.appendChild(banner);
-    host.appendChild(elI18n("p", "ak.unreadableHelp", { class: "muted note" }));
+    host.appendChild(elI18n("p", "section.ak.unreadableHelp", { class: "mng-inline-note" }));
     return;
   }
-  const emptyKey = akEmptyKey(items, visible);
-  if (emptyKey !== null) {
-    host.appendChild(elI18n("p", emptyKey, { class: "muted note" }));
-    return;
-  }
-  // ── 用量这一次没读到：**这个板块自己给出重试的入口**─────────────────────────
-  // 没有这一条时，`usageFailed` 是个**进得去出不来**的状态：每张卡画成「用量：—」，
-  // 而板块里没有任何一颗按钮会再拉一次用量（上面那颗「刷新」只重拉列表，写操作
-  // 收尾也只重拉列表）⇒ 运维唯一的出路是切走板块再切回来。
-  //
-  // ⚠️ **它与上面 `st === "error"` 那条红条刻意是两条，不合并**：那一条说的是
-  //    「列表读不出来」，那时卡片压根没画、谈用量没有意义（所以那一支先 return 了）；
-  //    这一条说的是「列表好好的，只有用量这一行没读到」。**两颗按钮各只重拉自己
-  //    那一条**——让「刷新」顺手把另一条也拉一遍，就是让一次点击付一笔运维没要的
-  //    存储读（Tier-2 开着时是 4 次 get）。
+
+  host.appendChild(searchBox());
+
+  // ── 用量这一次没读到：**本板块自己给出重试入口** ────────────────────────
+  // 没有这一条时 `usageFailed` 是个**进得去出不来**的状态：每张卡画一根破折号，
+  // 而板块里没有任何一颗按钮会再拉一次用量 ⇒ 运维唯一的出路是切走再切回来。
   // ⚠️ 它是**黄条**不是红条：列表、签发、停用、删除全都照常可用，坏掉的只是卡片上
   //    那一行附加信息。用红条会把「少一行数字」说成「这个板块出事了」。
   if (usageFailed) {
-    const warn = el("div", { class: "banner-warn" });
-    warn.appendChild(elI18n("span", "ak.usageFailed"));
-    const again = elI18n("button", "common.refresh", { type: "button", class: "ak-usage-retry" });
+    const warn = el("div", { class: "banner banner-warn" });
+    warn.appendChild(elI18n("span", "section.ak.usageFailed"));
+    const again = elI18n("button", "section.ak.refresh", { type: "button", class: "btn btn-sm btn-outline" });
     again.addEventListener("click", () => { void loadUsage(); });
     warn.appendChild(again);
     host.appendChild(warn);
   }
-  for (const v of visible) host.appendChild(itemCard(v));
+
+  const all = items();
+  const visible = visibleItems();
+  const list = el("div", { class: "key-list" });
+  if (all.length === 0) {
+    // 🔴 整张表空时那句话来自服务端（`view.emptyKey`）。
+    const d = asObject(data);
+    const v = d === null ? null : asObject(d.view);
+    const key = v !== null && typeof v.emptyKey === "string" ? VIEW_KEY[v.emptyKey] : undefined;
+    list.appendChild(elI18n("div", key === undefined ? "section.ak.empty" : key, { class: "empty-state" }));
+  } else if (visible.length === 0) {
+    // ⚠️「一把都没有」与「搜索没命中」是两句话。后者服务端答不了（搜索是客户端做的）。
+    list.appendChild(elI18n("div", "section.ak.emptySearch", { class: "empty-state" }));
+  } else {
+    const rows = viewRows();
+    const group = el("div", { class: "key-cards" });
+    for (const k of visible) group.appendChild(keyCard(k, rows.get(k.id)));
+    list.appendChild(group);
+  }
+  host.appendChild(list);
 }
 
-/** 「停用之后最多还能再用多久」那句话。**这个数从后端来，不写死。** */
-function revokeDelayText() {
-  return t("ak.revokeDelay", { delay: fmtDuration(akRevokeDelayMs(cap.cacheTtlMs)) });
-}
-
-// ── 网络 ────────────────────────────────────────────────────────────────────
+/* ============================================================
+   网络
+   ============================================================ */
 
 async function loadCapabilities() {
   try {
     const body = await api.get("/capabilities");
-    cap = akCapability(body);
-    const kv = body && typeof body === "object" ? body.storage : null;
-    void kv;
+    const b = asObject(body);
+    const a = b === null ? null : asObject(b.apiKeys);
+    if (a === null) return;
+    cap = {
+      wired: a.wired === true,
+      max: typeof a.max === "number" ? a.max : null,
+      nameMax: typeof a.nameMax === "number" ? a.nameMax : null,
+      // 🔴 **契约不是猜测**：这一格由后端算，面板据它决定那两颗按钮出不出现。
+      //    在前端写死就会在哪天有人改了后端存法时变成假话。
+      plaintextRetrievable: a.plaintextRetrievable === true,
+      cacheTtlMs: typeof a.cacheTtlMs === "number" ? a.cacheTtlMs : null,
+    };
   } catch (e) {
-    // 读不出来时保持 `wired: null`（「还不知道」），不假装它没接。
+    // 🔴 读不出来时**整块保持初值的 `null`**（「还不知道」），一格都不假装。
+    //    `wired: null` ⇒ 不假装它没接；`plaintextRetrievable: null` ⇒ 不假装
+    //    明文取不回（那会让两颗按钮静默消失，见 `revealCell()` 上面那段）。
+    //    ⚠️ 这个 catch **就该是空的** —— 它的全部内容是「什么都别写回去」。
   }
-}
-
-/**
- * 拉一次近 24 小时的用量汇总。**每张卡上那一行的唯一数据源。**
- *
- * ⚠️ **它不轮询、不跟着搜索框重拉**：与「用量」板块同一条纪律
- *（那个板块的文件头写着「每刷新一次要付『天数 × 分片槽位』次存储读」）。
- * **进板块拉一次；此外只有一个调用点**——这一次读失败时 `render()` 会画出一条黄条，
- * 那颗按钮再拉一次。现算：`grep -n loadUsage admin-ui/js/sec-apikeys.js` 是**四行**
- *（本行这句说明 + 定义 + 黄条那颗按钮 + `onShow`），也就是**调用点只有两个**。
- *
- * ⚠️ **写操作收尾（`afterWrite`）刻意不重拉它**，而这不是省事：签发 / 改名 / 停用 /
- * 删除**都不会改变「已经发生过的请求数」**——新签发的那把在这份数据里本来就取不到桶
- *（`apiKeyUsage()` 据此判成**真的 0**，那是对的），删掉的那张卡整张消失。
- * 跟着重拉一遍只会给每一次写操作平白加 4 次 get，换不回任何一个会变的数字。
- *
- * ⚠️⚠️ **Tier-2 关着时这条请求的存储读是 0 次**，那是后端的结构性性质
- *（`src/http/admin/handlers/usage.ts` 的 `UsageWiring` 上方：关闭时读路径
- * 在结构上不存在）⇒ **默认部署为这一行付的存储读恰好是 0**。
- * 开着时它按 24 小时那一档取键，最多跨 2 个 UTC 日 × 2 个槽位 = 4 次 get。
- * 这笔账写在五份 DEPLOY.md 的配额账里。
- *
- * **失败不抹掉已经画好的数字**：与 `load()` 同一条理由，一次读失败对
- * 「这些密钥被用了多少次」什么新东西都没说。
- */
-async function loadUsage() {
-  const mine = ++usageSeq;
-  const q = rangeToQuery("24h", Date.now());
-  // `q` 为 null 只在本机时钟坏掉时发生；那时不发请求，让上一次的数据留着。
-  if (q === null) return;
-  try {
-    const body = await api.get(`/usage?from=${q.from}&to=${q.to}`);
-    if (mine !== usageSeq) return;
-    usageData = body;
-    usageFailed = false;
-  } catch (e) {
-    if (mine !== usageSeq) return;
-    usageFailed = true;
-  }
-  render();
 }
 
 async function load() {
@@ -387,84 +703,155 @@ async function load() {
   render();
 }
 
-/** 一次写操作的收尾：成功就重新拉一次（版本号必须刷新），失败就把码翻成一句话。 */
+/**
+ * 拉一次近 24 小时的用量汇总。**每张卡那一行的唯一数据源。**
+ *
+ * ⚠️ **它不轮询、不跟着搜索框重拉**：进板块拉一次，此外只有黄条上那颗按钮。
+ * ⚠️ **写操作收尾刻意不重拉它**：签发 / 改名 / 停用 / 删除**都不会改变「已经发生过的
+ * 请求数」**，跟着重拉一遍只会给每一次写操作平白加几次存储读，换不回任何会变的数字。
+ * **失败不抹掉已经画好的数字**：一次读失败对「这些密钥被用了多少次」什么都没说。
+ */
+async function loadUsage() {
+  const mine = ++usageSeq;
+  const to = Date.now();
+  const from = to - 24 * 3600 * 1000;
+  try {
+    const body = await api.get(`/usage?from=${from}&to=${to}`);
+    if (mine !== usageSeq) return;
+    usageData = body;
+    usageFailed = false;
+  } catch (e) {
+    if (mine !== usageSeq) return;
+    usageFailed = true;
+  }
+  render();
+}
+
+/** 一次写操作的收尾：成功就重新拉一次（**版本号必须刷新**），失败就把码翻成一句话。 */
 async function afterWrite(promise, okKey) {
   try {
     const out = await promise;
     toast(t(okKey), "ok");
+    // 明文缓存整份作废：改名/停用之后那几把的 id 没变，但列表节点会整份重建，
+    // 而留着一份「上一屏显示过的明文」只会让它多活一次渲染。
+    revealState.forget();
     await load();
     return out;
   } catch (e) {
-    toast(errorMessage(e, "ak.writeFailed"), "err", { sticky: true });
-    // 409 stale_write / 表坏掉这两档都要求运维重新看一眼当前真值。
+    toast(errorMessage(e), "err", { sticky: true });
+    // 409（stale_write / 表坏掉）两档都要求运维重新看一眼当前真值。
     if (e instanceof ApiError && e.status === 409) await load();
     return null;
   }
 }
 
-// ── 对话框 ──────────────────────────────────────────────────────────────────
+/** 「停用之后最多还能再用多久」。🔴 **这个数从后端来（`cacheTtlMs`），不写死。** */
+function revokeDelayText() {
+  return t("section.ak.revokeDelay", { delay: fmtDuration(cap.cacheTtlMs) });
+}
 
-/**
- * 签发对话框：名称 + 到期（不过期 / 7·30·90 天 / 自定义日期）。
- *
- * ⚠️ 快捷 chip 的文案是「**自签发时刻起** N 天」，不是「有效期 N 天」——
- * 理由（惰性激活这个概念在本网关里不存在）写在 `pure/apikeys.mjs` 的 `AK_EXPIRY_DAYS` 上方。
- */
-function openIssueDialog() {
-  const body = el("div");
-  const nameRow = el("div", { class: "cfg-field" });
-  nameRow.appendChild(elI18n("label", "ak.form.name", { class: "cfg-label" }));
-  const name = el("input", { type: "text" });
+/* ============================================================
+   对话框
+   ============================================================ */
+
+/** 名称 + 到期那一组表单控件。签发与编辑共用一份 —— 两处各写一份迟早会分叉。 */
+function keyForm(initialName, initialExpiresAt) {
+  const form = el("div", { class: "key-form" });
+
+  const nameGroup = el("div", { class: "form-group" });
+  const nameLabel = el("label", { class: "form-label" });
+  nameLabel.appendChild(el("span", { class: "req-star" }, "*"));
+  nameLabel.appendChild(elI18n("span", "section.ak.form.name"));
+  nameGroup.appendChild(nameLabel);
+  const name = el("input", { type: "text", class: "form-control", "data-i18n-ph": "section.ak.form.namePh" });
+  name.setAttribute("placeholder", t("section.ak.form.namePh"));
   if (cap.nameMax !== null) name.setAttribute("maxlength", String(cap.nameMax));
-  name.setAttribute("placeholder", t("ak.form.namePh"));
-  name.setAttribute("data-i18n-ph", "ak.form.namePh");
-  nameRow.appendChild(name);
-  body.appendChild(nameRow);
+  name.value = initialName;
+  nameGroup.appendChild(name);
+  form.appendChild(nameGroup);
 
-  body.appendChild(elI18n("div", "ak.form.expiry", { class: "cfg-label" }));
-  const chips = el("div", { class: "chips" });
-  let chosenDays = 0;
-  const chipNodes = {};
+  const expGroup = el("div", { class: "form-group" });
+  expGroup.appendChild(elI18n("label", "section.ak.form.expiry", { class: "form-label" }));
+  const chips = el("div", { class: "chip-row" });
+  // `null` = 自定义日期那一档。初始值：已有到期时刻 ⇒ 自定义；否则不过期。
+  let chosen = initialExpiresAt === null ? 0 : null;
+  const chipNodes = new Map();
+  const custom = el("input", { type: "date", class: "form-control dur-num" });
+  if (initialExpiresAt !== null) {
+    const d = new Date(initialExpiresAt);
+    if (!Number.isNaN(d.getTime())) {
+      custom.value = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+    }
+  }
   const paint = () => {
-    for (const d of AK_EXPIRY_DAYS) chipNodes[d].classList.toggle("active", chosenDays === d);
-    chipNodes.custom.classList.toggle("active", chosenDays === null);
-    custom.style.display = chosenDays === null ? "" : "none";
+    for (const [d, node] of chipNodes) node.classList.toggle("is-active", chosen === d);
+    customChip.classList.toggle("is-active", chosen === null);
+    custom.style.display = chosen === null ? "" : "none";
   };
-  for (const d of AK_EXPIRY_DAYS) {
-    const chip = elI18n("button", akExpiryLabelKey(d), { type: "button", class: "chip" });
-    chip.addEventListener("click", () => { chosenDays = d; paint(); });
-    chipNodes[d] = chip;
+  for (const d of EXPIRY_DAYS) {
+    const chip = elI18n("button", EXPIRY_KEY[d], { type: "button", class: "chip-btn" });
+    chip.addEventListener("click", () => { chosen = d; paint(); });
+    chipNodes.set(d, chip);
     chips.appendChild(chip);
   }
-  const customChip = elI18n("button", "ak.expiry.custom", { type: "button", class: "chip" });
-  customChip.addEventListener("click", () => { chosenDays = null; paint(); });
-  chipNodes.custom = customChip;
+  const customChip = elI18n("button", "section.ak.expiry.custom", { type: "button", class: "chip-btn" });
+  customChip.addEventListener("click", () => { chosen = null; paint(); });
   chips.appendChild(customChip);
-  body.appendChild(chips);
+  expGroup.appendChild(chips);
+  expGroup.appendChild(custom);
+  form.appendChild(expGroup);
 
-  const custom = el("input", { type: "date" });
-  custom.style.display = "none";
-  body.appendChild(custom);
-
-  const err = el("div", { class: "err" });
-  body.appendChild(err);
-  body.appendChild(elI18n("p", "ak.form.onceOnly", { class: "muted note" }));
+  const err = el("div", { class: "form-error", role: "alert" });
+  form.appendChild(err);
   paint();
 
-  openModal("ak.issueTitle", body, [
+  /**
+   * 读一次表单。**校验在这里做一半**：后端只在收到请求时才看得到这些值，
+   * 而一次注定被拒的往返会在服务端留下一条无意义的失败记录。
+   * ⚠️ 另一半（长度上界、时刻必须在未来）**后端照样自己判**，这里不是唯一那道闸。
+   */
+  const read = () => {
+    err.textContent = "";
+    const v = name.value.trim();
+    if (v === "") { err.textContent = t("section.ak.err.nameEmpty"); return null; }
+    if (cap.nameMax !== null && v.length > cap.nameMax) {
+      err.textContent = t("section.ak.err.nameTooLong", { max: cap.nameMax });
+      return null;
+    }
+    let expiresAt = null;
+    if (chosen === null) {
+      if (custom.value === "") { err.textContent = t("section.ak.err.expiryBad"); return null; }
+      const ms = Date.parse(`${custom.value}T23:59:59Z`);
+      if (Number.isNaN(ms)) { err.textContent = t("section.ak.err.expiryBad"); return null; }
+      if (ms <= Date.now()) { err.textContent = t("section.ak.err.expiryPast"); return null; }
+      expiresAt = ms;
+    } else if (chosen > 0) {
+      expiresAt = Date.now() + chosen * 24 * 3600 * 1000;
+    }
+    return { name: v, expiresAt };
+  };
+  return { form, read, err };
+}
+
+/** 签发对话框。到期那几个快捷档写的是「**自签发时刻起** N 天」。 */
+function openIssueDialog() {
+  const f = keyForm("", null);
+  const body = el("div");
+  body.appendChild(elI18n("p", "section.ak.issueDesc", { class: "modal-desc" }));
+  body.appendChild(f.form);
+  body.appendChild(elI18n("p", "section.ak.form.onceOnly", { class: "mng-inline-note" }));
+
+  openModal("section.ak.issueTitle", body, [
     { labelKey: "common.cancel" },
     {
-      labelKey: "ak.issueSubmit",
+      labelKey: "section.ak.issueSubmit",
+      // 🔴 `keepOpen`：校验失败 / 网络失败时弹窗**不许先关掉** —— 关了之后用户
+      //    填进去的内容就全丢了，屏幕上只剩一句 toast。
       keepOpen: true,
       onClick: (close) => {
-        err.textContent = "";
-        const nameProblem = akNameProblem(name.value, cap.nameMax);
-        if (nameProblem !== null) { err.textContent = problemText(nameProblem); return; }
-        const exp = akExpiresAt(chosenDays, custom.value, Date.now());
-        if (exp.key !== undefined) { err.textContent = t(exp.key); return; }
-        if (exp.code !== undefined) { err.textContent = problemText(exp); return; }
-        const payload = { name: name.value.trim(), expiresAt: exp.value };
-        void afterWrite(api.post("/apikeys", payload), "ak.issued").then((out) => {
+        const payload = f.read();
+        if (payload === null) return;
+        void afterWrite(api.post("/apikeys", payload), "section.ak.issued").then((out) => {
           if (out === null) return;
           close();
           showSecret(out);
@@ -475,124 +862,158 @@ function openIssueDialog() {
 }
 
 /**
- * 一次性明文对话框。**这是明文唯一一次出现在屏幕上的地方。**
+ * 签发之后那一次明文。
  *
- * ⚠️ 关闭那颗按钮的文案逐字写着「关掉就再也看不到了」——面板不许让人以为
- * 「回头再来复制」这个动作存在。`capabilities.apiKeys.plaintextRetrievable`
- * 恒 false 就是这条契约的机器可读形态，这里据它决定要不要画这段警告，
- * **不在前端写死**。
+ * ⚠️ 这个部署**能不能再取回明文**由 `capabilities.apiKeys.plaintextRetrievable` 说，
+ * 面板据它决定要不要画那句「关掉就再也看不到了」，**不在前端写死**。
  */
 function showSecret(out) {
-  const secret = out && typeof out === "object" ? out.secret : null;
+  const o = asObject(out);
+  const secret = o !== null && typeof o.secret === "string" ? o.secret : null;
   const body = el("div");
-  body.appendChild(elI18n("p", "ak.secret.intro"));
-  const value = el("div", { class: "mono ak-secret" }, typeof secret === "string" ? secret : fmtDash(null));
-  body.appendChild(value);
-  const btn = elI18n("button", "common.copy", { type: "button" });
-  btn.addEventListener("click", () => { copy(typeof secret === "string" ? secret : ""); });
-  body.appendChild(btn);
-  if (!cap.plaintextRetrievable) body.appendChild(elI18n("p", "ak.secret.onceOnly", { class: "banner-warn" }));
-  openModal("ak.secret.title", body, [{ labelKey: "ak.secret.close" }]);
+  body.appendChild(elI18n("p", "section.ak.secret.intro", { class: "modal-desc" }));
+  const box = el("div", { class: "created-key-box" });
+  box.appendChild(elI18n("div", "section.ak.secret.label", { class: "form-label" }));
+  box.appendChild(el("div", { class: "cka-key" }, secret === null ? DASH : secret));
+  const btn = el("button", { type: "button", class: "btn btn-primary btn-sm" });
+  btn.appendChild(svgIcon(ICON_COPY, 15));
+  btn.appendChild(elI18n("span", "section.ak.secret.copy"));
+  // **只复制密钥本身**，不连同周边说明一起塞进剪贴板。
+  btn.addEventListener("click", () => { if (secret !== null) void copy(secret); });
+  box.appendChild(btn);
+  body.appendChild(box);
+  // ⚠️⚠️ **这一处与 `revealCell()` 的判据刻意相反，两边各自倒向安全的那一侧。**
+  //    这里是 `!cap.plaintextRetrievable` ⇒ `null`（还不知道）**照样警告**：
+  //    「还不知道能不能再取回」时叫人现在就复制走，代价是多复制一次；
+  //    反过来（不知道就不警告）的代价是关掉这一屏之后明文可能真的没了。
+  //    而 `revealCell()` 那边 `null` 倒向「把按钮留着」—— 同一条原则的两个方向：
+  //    **不确定时，不做那个不可挽回的选择。**
+  if (!cap.plaintextRetrievable) {
+    body.appendChild(elI18n("p", "section.ak.secret.onceOnly", { class: "banner banner-warn" }));
+  }
+  openModal("section.ak.secret.title", body, [{ labelKey: "common.close" }]);
 }
 
-function openRenameDialog(v) {
+function openEditDialog(k) {
+  const current = k.expiresAt === null || k.expiresAt === undefined ? null : Number(k.expiresAt);
+  const f = keyForm(String(k.name ?? ""), current);
   const body = el("div");
-  body.appendChild(elI18n("label", "ak.form.name", { class: "cfg-label" }));
-  const name = el("input", { type: "text" });
-  if (cap.nameMax !== null) name.setAttribute("maxlength", String(cap.nameMax));
-  name.value = String(v.name ?? "");
-  body.appendChild(name);
-  const err = el("div", { class: "err" });
-  body.appendChild(err);
-  openModal("ak.renameTitle", body, [
+  body.appendChild(elI18n("p", "section.ak.editDesc", { class: "modal-desc" }));
+  body.appendChild(f.form);
+
+  openModal("section.ak.editTitle", body, [
     { labelKey: "common.cancel" },
     {
       labelKey: "common.confirm",
       keepOpen: true,
       onClick: (close) => {
-        err.textContent = "";
-        const problem = akNameProblem(name.value, cap.nameMax);
-        if (problem !== null) { err.textContent = problemText(problem); return; }
-        const version = akVersion(data);
-        if (version === null) { err.textContent = t("ak.staleView"); return; }
+        const payload = f.read();
+        if (payload === null) return;
+        const v = version();
+        if (v === null) { f.err.textContent = t("section.ak.staleView"); return; }
         void afterWrite(
-          api.patch(`/apikeys/${encodeURIComponent(v.id)}`, { version, name: name.value.trim() }),
-          "ak.renamed",
+          api.patch(`/apikeys/${encodeURIComponent(k.id)}`, { version: v, name: payload.name, expiresAt: payload.expiresAt }),
+          "section.ak.saved",
         ).then((out) => { if (out !== null) close(); });
       },
     },
   ]);
 }
 
-function toggleDisabled(v) {
-  const version = akVersion(data);
-  if (version === null) { toast(t("ak.staleView"), "warn"); return; }
-  const next = !(v.disabled === true);
+function toggleDisabled(k, next) {
+  const v = version();
+  if (v === null) { toast(t("section.ak.staleView"), "warn"); return; }
   void afterWrite(
-    api.patch(`/apikeys/${encodeURIComponent(v.id)}`, { version, disabled: next }),
-    next ? "ak.disabled" : "ak.enabled",
+    api.patch(`/apikeys/${encodeURIComponent(k.id)}`, { version: v, disabled: next }),
+    next ? "section.ak.disabled" : "section.ak.enabled",
   ).then((out) => {
-    // **停用成功要把「多久才在别处失效」说出来**，而且要给具体的数字。
-    // 这是安全相关的：运维会以为停用是即时的。
+    // 🔴 **停用成功要把「多久之后才在别处真的失效」说出来，而且要给具体的数字。**
+    //    这是安全相关的：运维会以为停用是即时的，而中间还隔着一层进程内缓存。
     if (out !== null && next) toast(revokeDelayText(), "warn", { sticky: true });
   });
 }
 
-function confirmDelete(v) {
-  confirmModal("ak.deleteTitle", "ak.deleteConfirm", () => {
-    const version = akVersion(data);
-    if (version === null) { toast(t("ak.staleView"), "warn"); return; }
+function confirmDelete(k) {
+  // ⚠️ 标题与正文都走字典；密钥名称**不拼进那句话**（它是运维自由输入的字段，
+  //    而 `confirmModal` 的正文走的是不带参数的 `t()`）。
+  confirmModal("section.ak.deleteTitle", "section.ak.deleteConfirm", () => {
+    const v = version();
+    if (v === null) { toast(t("section.ak.staleView"), "warn"); return; }
     void afterWrite(
-      api.del(`/apikeys/${encodeURIComponent(v.id)}?version=${version}`),
-      "ak.deleted",
+      // ⚠️ 版本号走**查询参数**而不是 `DELETE` 的请求体：带体的 DELETE 在规范上合法，
+      //    但中间代理与部分客户端会把它丢掉 —— 一条**被静默丢掉的并发凭证**的后果是
+      //    「运维以为自己带了那道保险，其实没带」。
+      api.del(`/apikeys/${encodeURIComponent(k.id)}?version=${v}`),
+      "section.ak.deleted",
     ).then((out) => { if (out !== null) toast(revokeDelayText(), "warn", { sticky: true }); });
   });
 }
 
-function confirmPurge() {
-  confirmModal("ak.purgeTitle", "ak.purgeConfirm", () => {
-    const version = akVersion(data);
-    if (version === null) { toast(t("ak.staleView"), "warn"); return; }
-    void afterWrite(api.post("/apikeys/purge", { version }), "ak.purged");
-  });
+/** 清理失效：把这一次会删掉哪几把**逐条列出来**，不只给一个数字。 */
+function openPurgeDialog(n) {
+  const rows = viewRows();
+  const body = el("div");
+  body.appendChild(el("p", { class: "modal-desc" }, t("section.ak.purgeDesc", { n })));
+  const list = el("div", { class: "purge-list" });
+  for (const k of items()) {
+    const row = rows.get(k.id);
+    if (row === undefined) continue;
+    if (row.bucketLabelKey !== "ak.bucket.disabled" && row.bucketLabelKey !== "ak.bucket.expired") continue;
+    const item = el("div", { class: "purge-item" });
+    const left = el("span");
+    left.appendChild(el("code", { class: "key-serial" }, `#${String(k.seq ?? DASH)}`));
+    left.appendChild(el("span", null, ` ${String(k.name ?? "")}`));
+    item.appendChild(left);
+    const key = VIEW_KEY[row.bucketLabelKey];
+    item.appendChild(el("span", { class: badgeClass(row.badgeClass) },
+      key === undefined ? String(row.bucketLabelKey) : t(key)));
+    list.appendChild(item);
+  }
+  body.appendChild(list);
+
+  openModal("section.ak.purgeTitle", body, [
+    { labelKey: "common.cancel" },
+    {
+      labelKey: "section.ak.purgeConfirm",
+      danger: true,
+      onClick: () => {
+        const v = version();
+        if (v === null) { toast(t("section.ak.staleView"), "warn"); return; }
+        void afterWrite(api.post("/apikeys/purge", { version: v }), "section.ak.purged");
+      },
+    },
+  ]);
 }
 
-// ── 板块契约 ────────────────────────────────────────────────────────────────
+/* ============================================================
+   板块契约
+   ============================================================ */
 
 export const apikeysSection = {
   init(host) {
-    // **板块主标题走本板块自己的 `ak.title`，不复用侧栏那条 `nav.apikeys`**：
-    // 与其余八个板块逐字同源（它们各有 `keys.title` / `ov.title` / …）。
-    // `nav.*` 那一族是**壳层导航**的文案，全部写在 `index.html` 的 `data-i18n` 属性里
-    // ——`tests/unit/i18n-dict.test.ts` 有一格正面登记着「`nav` 在 JS 侧一个引用都没有」，
-    // 在这里引用它会让那一格红，而那一格红说的是「壳层与板块的文案边界被跨了」。
-    host.appendChild(elI18n("h2", "ak.title"));
-    host.appendChild(elI18n("p", "ak.sub", { class: "sub" }));
-    const svc = buildServiceCard();
-    host.appendChild(svc.wrap);
-    const cards = buildCards();
-    host.appendChild(cards.grid);
-    const toolbar = buildToolbar();
-    host.appendChild(toolbar.bar);
-    const list = el("div", { class: "ak-list" });
-    host.appendChild(list);
-    // `location.origin` 只读一次：它在一次会话里不会变，而这个板块的每一次
-    // render 都要写它。**读它的是板块文件，不是 `js/pure/` 那一层**（那里禁浏览器全局）。
-    nodes = { url: svc.url, cards, toolbar, list, origin: location.origin };
+    host.textContent = "";
+    const body = el("div");
+    host.appendChild(body);
+    // `location.origin` 只读一次：它在一次会话里不会变，而每一次 render 都要写它。
+    nodes = { body, origin: location.origin };
   },
+
   onShow() {
     render();
     void (async () => {
       if (cap.wired === null) await loadCapabilities();
       await load();
-      // ⚠️ **排在列表之后、且不并发发**：这一行是卡片上的附加信息，
-      //    列表拉不出来时卡片压根不画，先把它抢在前面只会白付一次请求。
+      // ⚠️ **排在列表之后、且不并发发**：这一行是卡片上的附加信息，列表拉不出来时
+      //    卡片压根不画，先把它抢在前面只会白付一次请求。
       await loadUsage();
     })();
   },
+
   onHide() {
     if (abort !== null) { abort.abort(); abort = null; }
-    // 用量那一条在飞的同样作废：回来时它会 `render()`，而那时板块已经切走了。
+    // 用量那一条在飞的同样作废：它回来时会 `render()`，而那时板块已经切走了。
     usageSeq++;
+    // 🔴 **明文不跨板块存活**：切走就忘掉，回来时是掩码态。
+    revealState.forget();
   },
 };

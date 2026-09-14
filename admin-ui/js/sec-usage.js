@@ -1,804 +1,911 @@
 /**
- * 用量板块（设计文档 §10.6）：
- * 6 张汇总卡 + 时间范围按钮组 + 日汇总表 + 点某天下钻到「小时 / 模型 / 协议 / 密钥」四张表。
+ * 使用统计板块（`usage`）。
  *
- * 板块契约（设计文档 §9.3）：`{ init?, onShow?, onHide? }`，见 admin-ui/js/app.js
- * 的 showSection。**板块内不许监听 langchange**——框架层会 apply(document) 之后
- * 重跑一次 onShow()。
+ * 布局**照 kiro**（06 §3.2 ⑥）：
+ *   `.stats-head` → 六张 `.stat-card`（`.usage-summary-grid`）→ `.usage-chart-panel`
+ *   （手搓 inline SVG 柱图 + 浮动 tooltip）→ `.usage-table-panel`（日汇总表）
+ *   → `.usage-drill`（下钻）。
+ * 语义**照 agnes**：五态互斥、两种破折号、`≈`、`.usage-incomplete` 一条都不丢。
  *
- * 三条纪律：①一切来自接口的内容一律 textContent（`byModel` 的键来自客户端填的
- * 模型名，完全不可信）；②**取值决策一律不写在这里**，全在 `js/pure/usage.mjs` 里
- * （admin-ui/README.md 硬规则 1），整块状态判定由 `tests/ui/usage.test.ts` 的
- * 「五种状态互不重叠 —— 『没开』『读不出来』『还没落盘』『真的是 0』『有数据』揉在一起就是撒谎」
- * 那一格钉着；③**一切形态分支只读接口返回的字段**，不许自己嗅探运行时（全局约束 1）。
+ * # 🔴 四条贯穿本文件的纪律
  *
- * ── **本板块不轮询** ────────────────────────────────────────────────────────
- * 每刷新一次要付「天数 × 分片槽位」次存储读，而配额账把面板的读算成
- *「人点一下才发生」。刷新是手动的 + 切时间范围时。`onHide()` 停掉在飞请求。
+ * ① **一切来自接口的内容一律 `textContent`**（`el()` / `elI18n()` 内部就是它），
+ *    全文件零 `innerHTML`。SVG 一律 `createElementNS`。
+ *    ⚠️ kiro 的同一份文件里有 `els.chart.innerHTML = ''` 与 `tip.innerHTML = ''`
+ *    两处 —— 那是它没有共用层、也没有 CSP 的结果。本文件用 `clear()`。
  *
- * ── 「统计开没开」只读一个出口 ─────────────────────────────────────────────
- * `GET /admin/api/capabilities` 的 `stats.tier2Enabled` 与 `GET /admin/api/usage`
- * 的 `tier` 说的是同一件事，由 `tests/contract/admin-usage.test.ts` 的
- * 「capabilities 的 tier2Enabled 与 usage 的 tier 说的是同一件事 —— 两边不许分叉」
- * 那一格钉着。**本板块只读后者**（经 `usageState()`）：两个出口都读的话，
- * 面板就要面对「它们不一致时听谁的」这个不该存在的问题，而那正是本期核心
- * 设计决定（同一份知识只许有一份）在这个板块的落点。
- * `capabilities` 在这里只提供两个**数字**：落盘间隔与 token 覆盖到的协议 id。
+ * ② 🔴 **「该显示哪一档」一个字都不在这里判。**
+ *    后端 `GET /admin/api/usage` 的 `view` 块（`src/admin/usage.rs` 的
+ *    `UsageViewWire`）已经把五态、六张卡的档位、每一行的状态全判好了。
+ *    本文件只做「`kind` → 画什么」的搬运。
+ *    ⚠️ 那套判定在 TS 版里是面板自己算的、**算错过五次**，每一次的形态都逐条记在
+ *    `src/core/admin/view/usage.rs` 里。**别在这里写第二份**（哪怕只是一个
+ *    `total.requests > 0 ? … : …`）。
+ *
+ * ③ 🔴 **三种「没有数字」必须画成三样东西**：
+ *    · `value`          → 真的数字（**含 0**，那一次读成功了，我们确实知道是零）；
+ *    · `none`           → EN DASH `–`（`.usage-none`）：读成功了，这一段真的没有样本；
+ *    · `none-no-shards` → **同一根 EN DASH，换一句 tooltip**：一条分片都还没落盘，
+ *                          「有没有样本」正是我们分不出来的那件事；
+ *    · `unknown`        → EM DASH `—`（`.usage-unknown`）：这一块压根没读出来。
+ *    ⚠️ **别把真零「修」成破折号**，那是反向的撒谎（`cell_kind` 的文档逐字写着）。
+ *
+ * ④ **板块内不许监听 `langchange`**：框架层会 `apply(document)` 之后重跑 `onShow()`。
+ *
+ * # ⚠️ 关掉的时候后端回 **200 + `tier:"off"`**，不是 404 不是 503
+ *
+ * 503 会让面板把「**运维没打开统计**」渲染成「**后端坏了**」，而这两件事的处置
+ * 完全不同（去改一个环境变量 vs 去看容器日志）。⇒ 本文件**没有**「这条端点挂了」
+ * 这种分支：`view.state === "off"` 是一条正常返回，画的是一句说明 + 六格 EM DASH。
+ *
+ * # ⚠️⚠️ 档位 → `(from, to)` 的映射：**唯一一个必须出现在前端的日长常数**
+ *
+ * 服务端**不认档位**（没有 `days` 参数），但两边必须对同一个映射有共识 ——
+ * `src/admin/usage.rs::parse_range` 的文档把它钉死成
+ * **`from = to − (N − 1) × 86400000`**（服务端按整 UTC 天取，而「N 天」含今天）。
+ * 🔴 **差一天的后果不是「多一天数据」，是那句警告永久常驻**：发
+ * `from = now − 30 × 86400000` 的话 `asked_from_day = 今天 − 30` 而保留期起点是
+ * `今天 − 29` ⇒ **每一次点 30d 都 `clamped: true`**，面板于是每一次都说
+ * 「这段时间早于保留期」——**说到运维不再看它**。
+ * ⇒ [`DAY_MS`] 是这份共识的前端一半，不是一次随手的复制。
+ *
+ * # ⚠️ 「now」取的是**服务端**时钟，浏览器时钟只当第一次的种子
+ *
+ * 区间两端都由前端算，而 UTC 日的归属对**一天**这个粒度敏感：浏览器时钟偏一天
+ * （虚拟机休眠、时区被改、用户手动调过）时，面板会去查一段**服务端根本没在看**
+ * 的日子，然后如实报「这几天没有请求」——一句关于错误日子的真话。
+ * ⇒ 第一次用 `Date.now()` 当种子，拿回响应后改用它自己的 `generatedAt`；
+ *   若两者**落在不同的 UTC 日**，**补发一次**（每次进板块至多一次，见 `correcting`）。
  */
 import { api } from "./api.js";
 import { t } from "./i18n.js";
 import { el, elI18n } from "./ui.js";
-import { fmtCount, fmtDash, fmtDuration, fmtInstant, fmtPercent } from "./pure/format.mjs";
-import { offsetMs } from "./pure/overview.mjs";
-import {
-  RANGES, DEFAULT_RANGE, rangeLabelKey, rangeToQuery,
-  usageState, detailState, rowState, readSucceeded, summaryCards, bucketCells,
-  malformedKind, usageNoteKey, noteSeverity,
-  dayRows, breakdownRows, tokensCoverageLabels, pendingTail, cellKind, ratioKind,
-  apiKeyRowLabelKey,
-} from "./pure/usage.mjs";
+
+/* ============================================================
+   常量
+   ============================================================ */
 
 /**
- * EN DASH（U+2013）。**与 `fmtDash(null)` 交出来的 EM DASH（U+2014）是两个记号，
- * 说的是两件事**：这一根是「读成功了，只是没有样本」，那一根是「我们不知道」。
- * **哪一格用哪一根由 `pure/usage.mjs` 的 `cellKind` / `ratioKind` 决定**，
- * 这里只负责把它画出来——让板块文件自己目测就等于把三态判定抄回了 DOM 代码。
+ * 一天。见文件头「档位 → (from, to) 的映射」那一段 —— 它是**契约的前端一半**，
+ * 由 `src/admin/usage.rs::parse_range` 的文档与
+ * `the_four_preset_ranges_are_not_clamped_but_an_off_by_one_day_always_is` 那格
+ * 钉在另一头。⚠️ **别改成 `24 * 3600 * 1000` 之类的算式**：两边要能被同一次 grep 找到。
  */
-const EN_DASH = "–";
+const DAY_MS = 86400000;
 
-let nodes = null;
-let abort = null;
 /**
- * 在飞请求的世代号。**`AbortController` 一个人守不住这件事**：
- * `fetch` 的 abort 在真实浏览器里是异步的，而 DOM 用例里那个 `fetch` 替身
- *（`tests/ui/dom/harness.ts` 的 `bootPanel()` 用 `vi.stubGlobal("fetch", …)` 装的那一个）
- * **压根不看 signal** ⇒ 只靠 `e.name === "AbortError"` 分支的话，
- * 「切走再回来，上一次的响应把新数据覆盖掉」这件事**在两种环境里都可能发生，
- * 而在测试里恒不可观测**（第 8 / 第 9 两种假阳性合起来的形态）。
- * 世代号是同步的、两种环境里行为逐字相同，由
- * `tests/ui/dom/usage-section.test.ts` 的
- * 「切走板块时在飞请求被作废 —— 回来时不会被上一次的响应覆盖」那一格钉着。
+ * 四个档位。**与后端那格判据逐字同一组数**（`for n in [1i64, 3, 7, 30]`）。
+ * 🔴 **没有「6h」这一档**（kiro 有）：本仓的用量桶粒度就是 **UTC 天**，
+ * 一个 6 小时的按钮只能返回「今天」——装作能给出半天是撒谎。
  */
-let seq = 0;
-/** 下钻的世代号。**与 `seq` 分开**，理由见 `openDay()` 上方那段。 */
-let detailSeq = 0;
-/**
- * 板块现在是不是显示着。**`loadStatic()` 那条链唯一的作废判据**（评审发现）：
- * 它不经 `load()`，所以拿不到世代号；切走之后它回来重绘一个不可见的板块，
- * 今天没有用户可见的后果，但那是「一条没有作废条件的异步链」——
- * 本板块另外两条都有，这一条没有理由是例外。
- */
-let shown = false;
-/** 最近一次成功的 `/usage` 响应；`null` = 还没有过一次成功（或上一次失败了）。 */
-let data = null;
-/** `/capabilities` 与 `/models` 各拉一次（都是零存储读的静态数据）。 */
-let caps = null;
-let catalog = null;
-let range = DEFAULT_RANGE;
-/** 当前展开的那一天（`YYYY-MM-DD`）与它的响应。`null` = 没有展开任何一天。 */
-let detailDate = null;
-let detailData = null;
-let detailFailed = false;
+const RANGES = [1, 3, 7, 30];
 
-/** 建一张 `.card`：标签 + 值。值那一格由调用方之后自己填。 */
-function tile(labelKey, tipKey, tipParams) {
-  const card = el("div", { class: "card" });
-  const label = elI18n("div", labelKey, { class: "label" });
-  if (tipKey !== undefined && tipKey !== null) {
-    label.setAttribute("title", tipParams === undefined ? t(tipKey) : t(tipKey, tipParams));
-  }
-  card.appendChild(label);
-  const value = el("div", { class: "value" });
-  card.appendChild(value);
-  return { card, value };
+/**
+ * 图表的三种度量。都取自同一个 `UsageBucket`，零额外请求。
+ *
+ * ⚠️⚠️ **文案键一律写成字面量，不许用模板串拼**（`` `section.usg.metric.${m}` ``）。
+ * 理由是硬的：`src/webui/mod.rs` 的 `referenced_keys()` 扫的是**双引号字面量**，
+ * 拼出来的 key 它一个都看不见 ⇒ 那几条词条会被「字典里每个 key 都被引用过」
+ * 那一格判成孤儿而当场红；反过来，拼错一个前缀也不会被「面板里的 key 必须在
+ * 字典里」那一格抓住。**下面几张表都是同一条理由。**
+ */
+const METRICS = [
+  { id: "requests", labelKey: "section.usg.metric.requests" },
+  { id: "tokens", labelKey: "section.usg.metric.tokens" },
+  { id: "errors", labelKey: "section.usg.metric.errors" },
+];
+
+/** 四个档位的文案键。见 `METRICS` 上方那段。 */
+const RANGE_KEY = {
+  1: "section.usg.range.d1",
+  3: "section.usg.range.d3",
+  7: "section.usg.range.d7",
+  30: "section.usg.range.d30",
+};
+
+/**
+ * 下钻的四个维度。**kiro 只有一维**（逐请求记录表），这四维是 agnes 更强的一面。
+ * `col` 是那一维第一列的表头文案。
+ */
+const DIMS = [
+  { id: "hours", labelKey: "section.usg.dim.hours", colKey: "section.usg.dim.hours.col" },
+  { id: "byModel", labelKey: "section.usg.dim.byModel", colKey: "section.usg.dim.byModel.col" },
+  { id: "byProtocol", labelKey: "section.usg.dim.byProtocol", colKey: "section.usg.dim.byProtocol.col" },
+  { id: "byApiKey", labelKey: "section.usg.dim.byApiKey", colKey: "section.usg.dim.byApiKey.col" },
+];
+
+/**
+ * 后端 `view.apiKeyLabelKeys` 给的是**它自己那套**文案键
+ * （`src/core/admin/view/usage.rs::api_key_row_label_key` 回的
+ * `usage.key.master` / `usage.key.unattributed` / `usage.key.other`），
+ * 而本仓字典的命名空间登记表（`src/webui/mod.rs` 的 `NAMESPACES`）里**没有
+ * `usage.` 这一条** ⇒ 那三个串直接当 key 用的话，`t()` 会把它们原样画上屏幕。
+ *
+ * ⚠️ **这张表是权宜之计，不是设计**：它让同一个决定有了第二份实现。
+ * 正确的收口是让两边用同一套命名空间（改 Rust 那三个串、或把 `usage.` 加进
+ * `NAMESPACES`），而那两份文件都不归本面改 ⇒ **登记为欠账**，见交付说明。
+ * 🔴 认不出来的一律**照实画原始 id**（下面 `apiKeyLabel`），不猜、也不标「已删除」：
+ * 一个已经被删掉的密钥与一个「这一刻那张表读不出来」的密钥在面板手上完全同形。
+ */
+const API_KEY_LABEL = {
+  "usage.key.master": "section.usg.key.master",
+  "usage.key.unattributed": "section.usg.key.unattributed",
+  "usage.key.other": "section.usg.key.other",
+};
+
+/**
+ * `note` 的九条 code → 文案键。**逐条一句话，绝不并成「没有数据」。**
+ * 🔴 全集与 `src/admin/usage.rs::USAGE_NOTES` 一一对应；后端加第十条时这里认不出来，
+ * 走 `section.usg.note.unknown`（**说「面板还不认识这条」，不假装看懂了**）。
+ */
+const NOTE_KEY = {
+  tier2_off: "section.usg.note.tier2Off",
+  clock_unavailable: "section.usg.note.clockUnavailable",
+  read_failed: "section.usg.note.readFailed",
+  range_clamped: "section.usg.note.rangeClamped",
+  date_out_of_retention: "section.usg.note.dateOutOfRetention",
+  no_shards: "section.usg.note.noShards",
+  all_malformed: "section.usg.note.allMalformed",
+  partial_malformed: "section.usg.note.partialMalformed",
+  no_request_detail: "section.usg.note.noRequestDetail",
+};
+
+/** `view.noteSeverity` → 横幅变体类。横幅是 agnes 独有的组件（U-3）。 */
+const BANNER_CLASS = { error: "banner banner-danger", warn: "banner banner-warn", info: "banner banner-info" };
+
+/* ============================================================
+   本地化格式（06 §5.3 的 B 档：`Intl` 只有浏览器有，留在 JS）
+   ⚠️ **这几个函数里不许有「该显示哪一档」的分支** —— 那一半是 A 档，
+   由 `view.cards.*` / `view.dayRows[i].state` 给出。
+   ⚠️ 已登记的欠账：`js/pure/format.mjs`（P-9 的 B 档归宿）本轮还不存在，
+   所以这几个小函数暂住在板块文件里，别的 `sec-*.js` 里有形近的另一份。
+   ============================================================ */
+
+function langOf() { return document.documentElement.lang || "zh-CN"; }
+
+/** 千分位整数。`Intl` 按当前界面语言给分隔符。 */
+function fmtInt(n) { return new Intl.NumberFormat(langOf()).format(n); }
+
+/** 百分比，一位小数。 */
+function fmtPercent(ratio) { return `${(ratio * 100).toFixed(1)}%`; }
+
+/** 毫秒。**单位跟着数字走**，不放在表头 —— 表头那一格在破折号那几档下会骗人。 */
+function fmtMs(ms) { return t("section.usg.msValue", { n: fmtInt(ms) }); }
+
+/** `YYYY-MM-DD`（UTC）原样画。**不转本地时区**：桶就是按 UTC 日分的。 */
+function fmtDate(s) { return s; }
+
+/** 清空一个节点。**不用 `innerHTML = ""`**（见文件头纪律 ①）。 */
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+/* ============================================================
+   三种「没有数字」——纪律 ③ 的落点
+   ============================================================ */
+
+/**
+ * 一格数字。`kind` 直接来自后端 DTO，本函数**不做任何判定**。
+ *
+ * `fmt` 只在 `value` 那一档被调用 —— 其余三档根本没有数字可格式化，
+ * 传一个 0 进去格式化再丢掉，是把「伪造 0」这条路留在代码里。
+ */
+function cell(kind, value, fmt) {
+  if (kind === "value") return el("span", null, fmt(value));
+  if (kind === "unknown") return unknownCell();
+  // `none` 与 `none-no-shards` **共用同一根 EN DASH，字形一个像素都不动**
+  //（`cell_kind` 文档逐字写着这一条），只换 tooltip：前者是「确实没有样本」，
+  // 后者是「有没有样本这件事我们不知道」。
+  const node = el("span", { class: "usage-none" }, "–");
+  node.setAttribute("title", t(kind === "none-no-shards" ? "section.usg.cell.noneNoShards" : "section.usg.cell.none"));
+  return node;
 }
 
-/** 一个内容块：标题 + 空的 body 容器。 */
-function block(titleKey) {
-  const wrap = el("div", { class: "card block" });
-  // **标题节点要交出去**：`≈` 得真的挂在标题上，而不是挂在整张表下面
-  //（收口复评：上一版 append 到 `wrap` ⇒ 子节点序是
-  // `h3, div, span.approx`，`≈` 落在表格**下面**，与注释和用例名都对不上，
-  // 而用例只数个数 ⇒ 改 append 目标那一行**不会红**）。
-  const head = elI18n("h3", titleKey);
-  wrap.appendChild(head);
-  const body = el("div");
-  wrap.appendChild(body);
-  return { wrap, body, head };
+/** 「这一块压根没读出来」。EM DASH + 警示色 + 字距（非颜色线索）。 */
+function unknownCell() {
+  const node = el("span", { class: "usage-unknown" }, "—");
+  node.setAttribute("title", t("section.usg.cell.unknown"));
+  return node;
 }
 
 /**
- * `≈` 标记的 tooltip。**落盘间隔这个数从 `capabilities` 取，不在前端算死**
- *（全局约束 10：诚实标记由后端字段驱动；写死会在改后端常量的那天变成一句假话）。
- * 拿不到 capabilities 时换一句**不带那个数**的话，而不是编一个缺省值。
+ * 计数类的 `≈`。**后端 `approximate` 恒为真**（Tier-2 的槽位是 last-write-wins，
+ * 超过 2 个副本时同槽位互相覆盖），⇒ 每一个计数都要带这个标记。
+ * 🔴 **只给计数类带，不给比率类带**：两个都带 `≈` 的比值仍然是一个有意义的比值。
  */
-function approxTitle() {
-  const ms = caps && caps.stats && typeof caps.stats.flushIntervalMs === "number"
-    && Number.isFinite(caps.stats.flushIntervalMs) ? caps.stats.flushIntervalMs : null;
-  return ms === null ? t("usage.approxTipUnknown") : t("usage.approxTip", { flush: fmtDuration(ms) });
-}
-
-/**
- * 把一个数字格填成四态里的一种。
- *
- * `kind` 来自 `cellKind` / `ratioKind`，**不是这里判的**：
- * · `"value"` —— 那个数字（可能带 `≈` 与「不完整」两个前缀标记）；
- * · `"none"`  —— EN DASH，「读成功了，这段时间没有样本」；
- * · `"none-no-shards"` —— **同一根 EN DASH**，换一句 tooltip：这段区间一条分片
- *   都还没落盘，「有没有样本」正是分不出来的那件事；
- * · `"unknown"` —— `fmtDash(null)` 的 EM DASH，「我们不知道」。
- *
- * ⚠️⚠️ **后两档的字形刻意相同，不同的只有 `title`**：`no-shards` 下这一格
- * 与 `empty` 下一样「读成功了、只是没有数字可写」，动字形就撞上
- *「这一档六张卡仍然写 0」那条裁定的反面。**这一屏上第三处那句假话就藏在
- * 这个 `title` 里** —— 横幅刚说完「还有 N 条计数没有落盘」，tooltip 却在说
- *「这段时间没有可用的样本」。分档判据整段写在 `pure/usage.mjs` 的 `cellKind` 上方。
- *
- * ⚠️ **计数类在 `empty` 态拿到的 `kind` 是 `"value"`、值是 `0`** ——那一格就该写 `0`。
- * 把真零画成破折号是**反向的撒谎**，与「接口失败伪造 0」同样严重、方向相反。
- */
-function fillCell(node, kind, text, marks) {
-  node.textContent = "";
-  if (kind === "unknown") {
-    node.appendChild(el("span", { class: "usage-unknown", title: t("usage.cell.unknownTip") }, fmtDash(null)));
-    return;
-  }
-  if (kind === "none" || kind === "none-no-shards") {
-    const tip = kind === "none" ? "usage.cell.noneTip" : "usage.cell.noneNoShardsTip";
-    node.appendChild(el("span", { class: "usage-none", title: t(tip) }, EN_DASH));
-    return;
-  }
-  if (marks && marks.approx) {
-    node.appendChild(el("span", { class: "approx", title: approxTitle() }, "≈ "));
-  }
-  if (marks && marks.incompleteOf !== null && marks.incompleteOf !== undefined) {
-    const warn = el("span", { class: "usage-incomplete" }, `${t("usage.incomplete")} `);
-    warn.setAttribute("title", t("usage.incompleteTip", { malformed: fmtCount(marks.incompleteOf) }));
-    node.appendChild(warn);
-  }
-  node.appendChild(el("span", null, text));
-}
-
-/**
- * Tier-2 关闭时的说明卡。**一个数字格都不渲染**（设计 §10.6：不画空图表）——
- * 一张全是 0 的表会被读成「这段时间没人用」，而事实是这个部署根本没在记账。
- *
- * ⚠️⚠️ **设计 §10.6 的原话是「一张说明卡 +『开启时间序列统计』按钮（跳设置页）」，
- * 而这里刻意没有那颗按钮，理由是它会把运维送到一个没有这个开关的页面上**：
- * `usageStatsEnabled` **今天不在 `EDITABLE` 里**，`src/core/config.ts` 的
- * `usageStatsEnabled` 字段上方逐字写着「不进 `EDITABLE`，是因为设置页本期没有
- * 它的入口——进了就会得到一份『说能改、却没有任何地方能改』的字段清单」，
- * 而 `admin-ui/js/pure/settings.mjs` 的三张卡（`CARD_AUTH` / `CARD_UPSTREAM` /
- * `CARD_REGISTRAR`）里确实一格都没有它。
- * ⇒ 那颗按钮会是本仓反复裁过的同一个形态：**面板说一件事、实际是另一件事**。
- * 换成写清「怎么开」——环境变量 + 重启，那是今天唯一真的能开它的路径。
- * **这条偏离是刻意的，理由整段就写在上面。**
- */
-function buildOffCard() {
-  const { wrap, body } = block("usage.off.title");
-  body.appendChild(elI18n("p", "usage.off.body"));
-  body.appendChild(elI18n("p", "usage.off.howto"));
-  const cost = el("p", { class: "muted note" });
-  const ms = caps && caps.stats && typeof caps.stats.flushIntervalMs === "number"
-    && Number.isFinite(caps.stats.flushIntervalMs) ? caps.stats.flushIntervalMs : null;
-  // ⚠️ 那个开销数字**来自 capabilities**，不在前端算死（设计 §10.6 + 全局约束 10）。
-  cost.textContent = ms === null ? t("usage.off.costUnknown") : t("usage.off.cost", { flush: fmtDuration(ms) });
-  body.appendChild(cost);
-  body.appendChild(elI18n("p", "usage.off.tier1", { class: "muted note" }));
+function approx(node, on) {
+  if (!on) return node;
+  const wrap = el("span", null);
+  wrap.appendChild(el("span", { class: "approx" }, "≈"));
+  wrap.appendChild(node);
   return wrap;
 }
 
-/**
- * 时间范围按钮组 + 覆盖区间 + 30 天那一档的保留期说明。
- *
- * 按钮组**复用事件板块那套 `.btn-group` / `.btn-toggle`**，不新起一套 class：
- * 两个板块的这个控件在交互与外观上是同一件东西，各写一份迟早长得不一样。
- */
-function buildRangeBar() {
-  const wrap = el("div");
-  const bar = el("div", { class: "btn-group" });
-  bar.appendChild(elI18n("span", "usage.rangeLabel", { class: "muted" }));
-  for (const r of RANGES) {
-    const key = rangeLabelKey(r);
-    // 表外的档位不该存在（`RANGES` 与 `rangeLabelKey` 同一个文件），
-    // 但真出现时**把原值照实显示出来**，不冒充任何一档已知档位。
-    // ⚠️ **`aria-pressed` 两支都要写**：这是一个三元，两支各自是一个创建点。
-    //    只补有 i18n key 的那一支的话，表外档位那颗按钮会成为唯一读不出选中态的按钮
-    //    ——而那正是最需要被读清楚的一颗（它显示的是原值，本来就已经不好理解）。
-    const pressed = r === range ? "true" : "false";
-    const btn = key === null
-      ? el("button", { type: "button", class: "btn-toggle", "data-range": r, "aria-pressed": pressed }, r)
-      : elI18n("button", key, { type: "button", class: "btn-toggle", "data-range": r, "aria-pressed": pressed });
-    btn.classList.toggle("active", r === range);
-    btn.addEventListener("click", () => {
-      if (range === r) return;
-      range = r;
-      // 换档位就换了一段区间，上一天的下钻不再属于这一段 —— 连同它在飞的那份一起作废。
-      detailDate = null;
-      detailData = null;
-      detailFailed = false;
-      detailSeq++;
+/* ============================================================
+   状态
+   ============================================================ */
+
+const state = {
+  rangeDays: 1,
+  metric: "requests",
+  /** 汇总响应整包（含 `view`）。`null` = 还没拉到 / 上一次失败。 */
+  summary: null,
+  /** 请求失败（网络 / 5xx / 400）时那句话的 key。**与 `tier:"off"` 不是一回事。** */
+  failedKey: null,
+  /**
+   * 服务端时钟。第一次是 `null`（用 `Date.now()` 当种子），
+   * 之后一律用上一次响应的 `generatedAt` —— 见文件头最后一段。
+   */
+  serverNow: null,
+  /** 这一次进板块里补发过没有。**每次 `onShow()` 归零**，防止两个时钟来回打架。 */
+  corrected: false,
+  drill: { date: null, dim: "hours", data: null, failedKey: null, loading: false },
+};
+
+/** 在飞请求的作废控制。切板块 / 换档位 / 重新加载都顶掉上一发。 */
+let listCtl = null;
+let drillCtl = null;
+
+const nodes = {};
+
+/* ============================================================
+   骨架
+   ============================================================ */
+
+/** 一张汇总卡。`tint` 走 `base.css` 的 `.stat-icon.primary/.success/...`。 */
+function statCard(id, labelKey, emoji, tint) {
+  const card = el("div", { class: "stat-card" });
+  card.appendChild(el("div", { class: `stat-icon ${tint}`, "aria-hidden": "true" }, emoji));
+  const info = el("div", { class: "stat-info" });
+  const h3 = el("h3", { id });
+  h3.appendChild(unknownCell());
+  info.appendChild(h3);
+  info.appendChild(elI18n("p", labelKey));
+  card.appendChild(info);
+  return card;
+}
+
+function build(node) {
+  clear(node);
+
+  const head = el("div", { class: "stats-head" });
+  head.appendChild(elI18n("h2", "section.usg.title"));
+  const toolbar = el("div", { class: "stats-toolbar" });
+  nodes.refreshBtn = elI18n("button", "section.usg.refresh", { type: "button", class: "btn btn-sm btn-outline" });
+  nodes.refreshBtn.addEventListener("click", () => load());
+  toolbar.appendChild(nodes.refreshBtn);
+  head.appendChild(toolbar);
+  node.appendChild(head);
+
+  // 横幅（note）。**恒在，靠 hidden 控制显隐** —— 每次重建一个横幅会让它在
+  // 刷新的一瞬间跳一下，而它承载的正是「有件事你得知道」。
+  nodes.banner = el("div", { class: "banner banner-info", hidden: true });
+  node.appendChild(nodes.banner);
+
+  // ── 六张汇总卡 ──────────────────────────────────────────────────────────
+  const grid = el("div", { class: "stats-grid usage-summary-grid" });
+  grid.appendChild(statCard("usgRequests", "section.usg.card.requests", "📨", "primary"));
+  grid.appendChild(statCard("usgSuccess", "section.usg.card.successRate", "✅", "success"));
+  grid.appendChild(statCard("usgErrors", "section.usg.card.errorRate", "⚠️", "danger"));
+  grid.appendChild(statCard("usgLatency", "section.usg.card.avgLatency", "⏱️", "info"));
+  grid.appendChild(statCard("usgTokens", "section.usg.card.tokens", "🔢", "warning"));
+  grid.appendChild(statCard("usgStreaming", "section.usg.card.streaming", "📡", "info"));
+  node.appendChild(grid);
+  nodes.cards = {
+    requests: grid.querySelector("#usgRequests"),
+    successRate: grid.querySelector("#usgSuccess"),
+    errorRate: grid.querySelector("#usgErrors"),
+    avgLatency: grid.querySelector("#usgLatency"),
+    tokens: grid.querySelector("#usgTokens"),
+    streaming: grid.querySelector("#usgStreaming"),
+  };
+
+  // ── 图表面板 ────────────────────────────────────────────────────────────
+  const panel = el("div", { class: "usage-chart-panel" });
+  const controls = el("div", { class: "chart-controls" });
+
+  const metricGroup = el("div", { class: "control-group" });
+  metricGroup.appendChild(elI18n("label", "section.usg.metric"));
+  nodes.metricBtns = el("div", { class: "btn-group" });
+  for (const spec of METRICS) {
+    const m = spec.id;
+    const b = elI18n("button", spec.labelKey, { type: "button", class: "btn btn-sm btn-outline" });
+    b.setAttribute("data-metric", m);
+    b.addEventListener("click", () => {
+      if (state.metric === m) return;
+      state.metric = m;
+      // 🔴 **换度量只重画，不重新请求**：三种度量取的是同一份 `UsageBucket`。
+      paintControls();
+      renderChart();
+    });
+    nodes.metricBtns.appendChild(b);
+  }
+  metricGroup.appendChild(nodes.metricBtns);
+  controls.appendChild(metricGroup);
+
+  const rangeGroup = el("div", { class: "control-group" });
+  rangeGroup.appendChild(elI18n("label", "section.usg.timeRange"));
+  nodes.rangeBtns = el("div", { class: "btn-group" });
+  for (const n of RANGES) {
+    const b = elI18n("button", RANGE_KEY[n], { type: "button", class: "btn btn-sm btn-outline" });
+    b.setAttribute("data-range", String(n));
+    b.addEventListener("click", () => {
+      if (state.rangeDays === n) return;
+      state.rangeDays = n;
+      // 换档位要**收掉下钻**：那张表说的是某一天，而那一天可能已经不在新区间里。
+      closeDrill();
+      paintControls();
       load();
     });
-    bar.appendChild(btn);
+    nodes.rangeBtns.appendChild(b);
   }
-  wrap.appendChild(bar);
+  rangeGroup.appendChild(nodes.rangeBtns);
+  controls.appendChild(rangeGroup);
+  panel.appendChild(controls);
 
-  // **渲染服务端回读的 `range`**，不自己算显示区间：滚动 30 天会横跨 31 个 UTC 日，
-  // 而服务端按整天取整之后回读的才是它真正查过的那一段。
-  const covered = el("p", { class: "muted note" });
-  const r = data && typeof data === "object" ? data.range : null;
-  if (r !== null && r !== undefined && typeof r === "object"
-    && typeof r.from === "number" && typeof r.to === "number") {
-    covered.textContent = t("usage.covered", {
-      from: fmtInstant(r.from, offsetMs()),
-      to: fmtInstant(r.to, offsetMs()),
-    });
-  } else {
-    covered.textContent = t("usage.covered", { from: fmtDash(null), to: fmtDash(null) });
+  // `≈` 的那句说明。**恒显示**（后端 `approximate` 恒为真），不是一条偶发提示。
+  nodes.approxNote = el("div", { class: "usage-fallback-note" });
+  nodes.approxNote.appendChild(elI18n("span", "section.usg.approxNote"));
+  panel.appendChild(nodes.approxNote);
+
+  nodes.chart = el("div", { class: "chart-container" });
+  panel.appendChild(nodes.chart);
+  node.appendChild(panel);
+
+  // ── 日汇总表 + 下钻 ─────────────────────────────────────────────────────
+  const tablePanel = el("div", { class: "usage-table-panel" });
+  tablePanel.appendChild(elI18n("h3", "section.usg.dailyTable", { class: "usage-panel-title" }));
+  const wrap = el("div", { class: "usage-table-wrap" });
+  const table = el("table", { class: "data-table usage-daily-table" });
+  const thead = el("thead");
+  const hrow = el("tr");
+  hrow.appendChild(elI18n("th", "section.usg.col.date"));
+  hrow.appendChild(elI18n("th", "section.usg.col.requests", { class: "num" }));
+  hrow.appendChild(elI18n("th", "section.usg.col.success", { class: "num" }));
+  hrow.appendChild(elI18n("th", "section.usg.col.errors", { class: "num" }));
+  hrow.appendChild(elI18n("th", "section.usg.col.tokens", { class: "num" }));
+  hrow.appendChild(elI18n("th", "section.usg.col.streaming", { class: "num" }));
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+  nodes.dailyBody = el("tbody");
+  table.appendChild(nodes.dailyBody);
+  wrap.appendChild(table);
+  tablePanel.appendChild(wrap);
+
+  nodes.drill = el("div", { class: "usage-drill", hidden: true });
+  tablePanel.appendChild(nodes.drill);
+  node.appendChild(tablePanel);
+
+  // 浮动 tooltip。挂在板块根上而不是 `<body>`：切板块时它跟着一起被隐藏。
+  nodes.tooltip = el("div", { class: "usage-tooltip" });
+  node.appendChild(nodes.tooltip);
+
+  paintControls();
+}
+
+/** 两组按钮的选中态。`.active` 由 `.chart-controls .btn-group .btn.active` 上色 + 加粗。 */
+function paintControls() {
+  for (const b of nodes.metricBtns.children) {
+    b.classList.toggle("active", b.getAttribute("data-metric") === state.metric);
+    b.setAttribute("aria-pressed", b.getAttribute("data-metric") === state.metric ? "true" : "false");
   }
-  wrap.appendChild(covered);
+  for (const b of nodes.rangeBtns.children) {
+    const on = Number(b.getAttribute("data-range")) === state.rangeDays;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
 
-  if (range === "30d") wrap.appendChild(elI18n("p", "usage.range.retention", { class: "muted note" }));
-  return wrap;
+/* ============================================================
+   取数
+   ============================================================ */
+
+/** 这一次请求用哪个时刻当「now」。见文件头最后一段。 */
+function clockBase() {
+  return state.serverNow === null ? Date.now() : state.serverNow;
 }
 
 /**
- * 顶部横幅。**判据全部来自响应字段**（全局约束 10），一条都不在这里硬编码。
+ * 拉汇总。
  *
- * ⚠️⚠️ **`note` 可能是这个面板还不认识的 code。**
- * `tests/contract/admin-usage.test.ts` 的
- * 「八种状态两两不同 —— 面板不用猜，也不该猜（但这一格证明不了没有第九种）」
- * 那一格的名字自己就把边界说清了。表外的 code 走 `usage.note.unknown`
- * **把原码照实显示出来**，绝不退回一句「加载失败」。
+ * 🔴 **`from` / `to` 两端都发**，不省 `to`：省掉 `to` 的话服务端用自己的 now，
+ * 而 `from` 是前端按自己那个 now 算的 —— 两个不同源的时刻夹出来的区间，
+ * 跨度会比档位多一天或少一天，而多出来的那一天正好把 `clamped` 点亮。
  */
-function buildNoteBanner(note, onRetry) {
-  const key = usageNoteKey(note);
-  const severity = noteSeverity(note);
-  if (severity === null) return null;
-  const cls = severity === "error" ? "banner-danger" : severity === "warn" ? "banner-warn" : "banner-info";
-  const banner = el("div", { class: cls, role: "status" });
-  if (key === null) {
-    banner.appendChild(el("span", null, t("usage.note.unknown", { code: String(note) })));
-  } else {
-    banner.appendChild(elI18n("span", key));
+async function load() {
+  if (listCtl) listCtl.abort();
+  listCtl = new AbortController();
+  const ctl = listCtl;
+
+  const base = clockBase();
+  const to = base;
+  const from = to - (state.rangeDays - 1) * DAY_MS;
+  setChartPlaceholder("section.usg.loading");
+  try {
+    const body = await api.get(`/usage?from=${from}&to=${to}`, { signal: ctl.signal });
+    if (ctl !== listCtl) return; // 后一次赢
+    state.summary = body;
+    state.failedKey = null;
+
+    // ── 时钟自纠：**每次进板块至多一次** ─────────────────────────────────
+    // 判据是「两个时刻落在不同的 UTC 日」，不是「差了多少毫秒」：
+    // 差 2 毫秒但恰好跨在日界上要纠，差 23 小时但同一天不必纠。
+    const serverNow = typeof body.generatedAt === "number" ? body.generatedAt : null;
+    const skewedDay = serverNow !== null && Math.floor(serverNow / DAY_MS) !== Math.floor(base / DAY_MS);
+    state.serverNow = serverNow;
+    if (skewedDay && !state.corrected) {
+      state.corrected = true;
+      render();       // 先把手上这份画出来，别让屏幕空一拍
+      load();         // 再按服务端时钟补发一次
+      return;
+    }
+  } catch (e) {
+    if (ctl !== listCtl) return;
+    if (e && e.status === 401) return; // 已经被送回登录闸了
+    state.summary = null;
+    // ⚠️ **这一档与 `tier:"off"` 不是一回事**：那一档是 200，说的是「没开」；
+    //    这一档是请求本身没成功，说的是「我们不知道」。
+    state.failedKey = e && typeof e.status === "number" && e.status > 0
+      ? "section.usg.loadFailedHttp"
+      : "section.usg.loadFailedNetwork";
   }
-  if (severity === "error") banner.appendChild(retryButton(onRetry));
-  return banner;
+  render();
 }
 
-/**
- * 重试按钮。**`onRetry` 是必填的**：上一版无参数、一律调 `load()`，
- * 于是单日下钻那条错误横幅上的「刷新」重拉的是**汇总**而不是那一天
- * ——一颗按了不解决问题的按钮（评审发现）。
- */
-function retryButton(onRetry) {
-  const btn = elI18n("button", "common.refresh", { type: "button", class: "usage-retry" });
-  btn.addEventListener("click", () => { onRetry(); });
-  return btn;
+/* ============================================================
+   渲染
+   ============================================================ */
+
+function render() {
+  paintBanner();
+  paintCards();
+  renderChart();
+  renderDaily();
 }
 
-/**
- * 这一份响应上的两个诚实标记。两个都由后端字段驱动（全局约束 10）：
- * `≈` 看 `approximate`，「不完整」看 `malformedKind`。**一个都不许在前端硬编码。**
- *
- * ⚠️⚠️ **`incompleteOf` 判据直接走 `malformedKind()`，刻意不经 `summaryCards().complete`**
- *（定向复评）：`complete` 是拿 `total` 算的
- *（`total === null ? true : …`），而 **`GET /admin/api/usage/:date` 的响应里
- * 根本没有 `total` 字段**（`src/http/admin/handlers/usage.ts` 的 `usageDateHandler`
- * 返回的是 `hours` / `byModel` / `byProtocol` / `shards` / `malformed`）
- * ⇒ 在那条端点上 `complete` **恒为 true**、标记**结构性地永不渲染**。
- * 实证（node，入参 `{ shards: 4, malformed: 2, hours: {} }`）：
- * `malformedKind` 是 `"partial"` 而 `complete` 是 `true`。
- * ⭐ 记一条形状：**一个「只在另一条端点上成立」的判据，在这条端点上不会报错，
- * 它只是安静地永远为假**——那种失效没有任何一格用例会红，除非有人正面钉住它。
- * 由 `tests/ui/usage.test.ts` 的
- * 「summaryCards().complete 在单日下钻那份响应上恒为 true —— 它读的是 total，
- * 而那条端点没有 total，拿它当「缺没缺块」的判据是结构性错误」正面钉着。
- *
- * ⚠️ **这两个标记只给「整块」用**：六张卡是整段区间的合计，说它不完整是准确的；
- * **表格的每一行不许各自挂标记**，理由见 `buildDayTable` 上方（定向复评）。
- */
-function honestyMarks(resp) {
-  return {
-    approx: resp !== null && typeof resp === "object" && resp.approximate === true,
-    // `partial` 那一档的数字是真的、只是不全 —— 渲染成完整的就是伪造
-    // 「这份数据是全的」这个印象，而全局约束 9 禁的伪造不只是伪造 `0`。
-    // `all` 那一档**不走这里**：那时一个数字都没有（整块是 `unavailable`），
-    // 说「下面这些数字缺了几块」是在描述一堆不存在的数字（定向复评）。
-    // `malformedKind` 判成 `"partial"` 时 `malformed` 已经被 `finite()` 验过是数字，
-    // 所以这里不再叠一层 `typeof` 兜底（收口复评：那是一条走不到的支）。
-    incompleteOf: malformedKind(resp) === "partial" ? resp.malformed : null,
+/** 顶部横幅：请求失败 / `note` 两条来源，**失败优先**。 */
+function paintBanner() {
+  const b = nodes.banner;
+  clear(b);
+  if (state.failedKey) {
+    b.className = "banner banner-danger";
+    b.appendChild(elI18n("span", state.failedKey));
+    b.hidden = false;
+    return;
+  }
+  const s = state.summary;
+  const severity = s && s.view ? s.view.noteSeverity : null;
+  if (!s || !severity) { b.hidden = true; return; }
+  b.className = BANNER_CLASS[severity] || BANNER_CLASS.warn;
+  const key = NOTE_KEY[s.note] || "section.usg.note.unknown";
+  b.appendChild(elI18n("span", key));
+  // 🔴 **`complete: false` 单独再说一句**：「伪造的不只是 0，还有『这份数据是全的』
+  //    这个印象」。它与 note 是两件事（partial_malformed 时两句都要出现）。
+  if (s.view && s.view.complete === false) {
+    b.appendChild(elI18n("span", "section.usg.incompleteNote", { class: "usage-incomplete" }));
+  }
+  b.hidden = false;
+}
+
+/** 六张卡。**档位一律取 `view.cards.*`**，本函数零判定（纪律 ②）。 */
+function paintCards() {
+  const s = state.summary;
+  const view = s && s.view ? s.view : null;
+  const total = s && s.total ? s.total : null;
+  const cards = view ? view.cards : null;
+  const incomplete = !!(view && view.complete === false);
+  const isApprox = !!(s && s.approximate);
+
+  const put = (name, kind, value, fmt, counting) => {
+    const host = nodes.cards[name];
+    clear(host);
+    // 请求本身失败时六格全是 EM DASH：那一刻连 `view` 都没有。
+    const node = cards ? cell(kind, value, fmt) : unknownCell();
+    host.appendChild(counting && kind === "value" ? approx(node, isApprox) : node);
+    host.classList.toggle("usage-incomplete", incomplete && kind === "value");
   };
+
+  const req = total ? total.requests : 0;
+  put("requests", cards && cards.requests, req, fmtInt, true);
+  put("successRate", cards && cards.successRate, total ? total.success / (req || 1) : 0, fmtPercent, false);
+  put("errorRate", cards && cards.errorRate, total ? total.errors / (req || 1) : 0, fmtPercent, false);
+  // 🔴 平均延迟那个数**由后端算好**（`avgLatencyMs`）：`null` = 没有样本，不是零延迟。
+  put("avgLatency", cards && cards.avgLatency, cards ? cards.avgLatencyMs : null, fmtMs, false);
+  put("tokens", cards && cards.tokens, total ? total.tokensIn + total.tokensOut : 0, fmtInt, true);
+  put("streaming", cards && cards.streaming, total ? total.streamingRequests : 0, fmtInt, true);
 }
 
-/**
- * 表格标题旁边那一个 `≈`。
- *
- * ⚠️ **表格里的数字与卡片上的一样是近似值，但 `≈` 只在这里出一次，不逐格出**
- *（定向复评：上一版 `numberCells` 的 `marks` 形参恒为 `null` ⇒
- * 六张卡写 `≈ 100`、紧挨着的日表写 `100`，**同一个数字两种说法**，
- * 而那个不一致是沉默的——没有任何注释说过表里为什么不出）。
- * 逐格出的话 30 天档是 7 列 × 30 行 = 210 个 `≈`，那时它是装饰不是信号。
- * ⇒ **一张表出一个，挂在标题节点上**，tooltip 与卡片上那个逐字相同（同一个 `approxTitle()`）。
- *
- * ⚠️⚠️ **调用点必须先确认这一块真的出了数字**（收口复评）：上一版在
- * 「这张表是空的」那条早退**之前**就无条件挂了它，实测（`days: null` /
- * `note: "read_failed"` / `approximate: true`）得到一张写着「这段区间的按天数据
- * 读不出来」的表、**下面挂着一个 `≈`**；而那一档下六张卡的 `≈` 反而都不出
- *（`fillCell` 的 `"unknown"` 支提前 return）⇒ **全页唯一一个 `≈` 就挂在
- * 那张说「读不出来」的表上**。
- * ⭐⭐ 记一条形状，它是本任务最贵的一条：**我在同一个提交里立了那条裁定
- *（「下面一个数字都没有，就不许说『下面这些数字…』」），然后在另一处违反了它。**
- * ⇒ **立完一条裁定，回头 grep 一遍自己这一轮碰过的所有同型位置。**
- */
-function approxTitleMark(marks) {
-  if (marks === null || !marks.approx) return null;
-  return el("span", { class: "approx", title: approxTitle() }, " ≈");
+/* ---------- 图表（手搓 inline SVG，零依赖、零 innerHTML） ---------- */
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, String(v));
+  return node;
 }
 
-/** 六张汇总卡（设计 §10.6）。 */
-function buildCards(state, marks) {
-  const c = summaryCards(data);
+function setChartPlaceholder(key) {
+  if (!nodes.chart) return;
+  clear(nodes.chart);
+  const box = el("div", { class: "chart-loading" });
+  box.appendChild(el("span", { class: "stats-spinner", "aria-hidden": "true" }));
+  box.appendChild(elI18n("span", key));
+  nodes.chart.appendChild(box);
+}
 
-  const row = el("div", { class: "card-row" });
-  const specs = [];
+/** 空图。`.empty-chart` 是 kiro 的那一族（大字形 + 一句说明）。 */
+function setChartEmpty(key) {
+  clear(nodes.chart);
+  const box = el("div", { class: "empty-chart" });
+  box.appendChild(el("div", { class: "empty-chart-icon", "aria-hidden": "true" }, "📊"));
+  box.appendChild(elI18n("p", key));
+  nodes.chart.appendChild(box);
+}
 
-  const requests = tile("usage.card.requests");
-  fillCell(requests.value, cellKind(state, c.requests), fmtCount(c.requests), marks);
-  specs.push(requests.card);
+/** 当前度量那一条登记。认不出来时回落第一条（**不返回 `undefined` 去炸渲染**）。 */
+function metricSpec() {
+  return METRICS.find((m) => m.id === state.metric) || METRICS[0];
+}
 
-  const successRate = tile("usage.card.successRate");
-  fillCell(successRate.value, ratioKind(state, c.requests), fmtPercent(c.success, c.requests), marks);
-  specs.push(successRate.card);
+/** 这根柱子画哪个数。三种度量取的都是同一个桶里的字段。 */
+function metricValue(bucket) {
+  if (state.metric === "tokens") return bucket.tokensIn + bucket.tokensOut;
+  if (state.metric === "errors") return bucket.errors;
+  return bucket.requests;
+}
 
-  const latency = tile("usage.card.latency");
-  fillCell(latency.value, cellKind(state, c.latencyMs), fmtCount(c.latencyMs), marks);
-  specs.push(latency.card);
+/** 纵轴上界取一个「整齐」的数（1 / 2 / 5 × 10^k）。 */
+function niceCeil(v) {
+  if (v <= 0) return 1;
+  const mag = 10 ** Math.floor(Math.log10(v));
+  const norm = v / mag;
+  const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return nice * mag;
+}
 
-  const errorRate = tile("usage.card.errorRate");
-  fillCell(errorRate.value, ratioKind(state, c.requests), fmtPercent(c.errors, c.requests), marks);
-  specs.push(errorRate.card);
+function shortNum(v) {
+  if (v >= 1000) return `${Math.round(v / 100) / 10}k`;
+  return String(Math.round(v * 10) / 10);
+}
 
-  // ⚠️ **协议 id → 展示名走 `GET /admin/api/models` 的 `protocols[].label`**，
-  //    id 本身来自 `capabilities.stats.tokensCoverage`（评审要求）。
-  //    三条都不许走：本地再写一张映射、把 id 拼进一个 i18n key、直接渲染裸 id。
-  const coverage = caps && caps.stats ? caps.stats.tokensCoverage : null;
-  const labels = tokensCoverageLabels(coverage, catalog === null ? null : catalog.protocols);
-  const tokens = labels === null
-    ? tile("usage.card.tokens", "usage.card.tokensTipUnknown")
-    : tile("usage.card.tokens", "usage.card.tokensTip", { protocols: labels.join(" · ") });
-  fillCell(
-    tokens.value, cellKind(state, c.tokensIn),
-    `${fmtCount(c.tokensIn)} / ${fmtCount(c.tokensOut)}`, marks,
-  );
-  specs.push(tokens.card);
+function renderChart() {
+  const s = state.summary;
+  if (state.failedKey) { setChartEmpty("section.usg.chart.unavailable"); return; }
+  if (!s || !s.view) { setChartPlaceholder("section.usg.loading"); return; }
+  // 🔴 五态里的前两档**没有柱子可画**，而两句话不一样。
+  if (s.view.state === "off") { setChartEmpty("section.usg.chart.off"); return; }
+  if (s.view.state === "unavailable") { setChartEmpty("section.usg.chart.unavailable"); return; }
+  const days = Array.isArray(s.days) ? s.days : [];
+  if (days.length === 0) { setChartEmpty("section.usg.chart.empty"); return; }
 
-  const streaming = tile("usage.card.streaming", "usage.card.streamingTip");
-  fillCell(streaming.value, cellKind(state, c.streamingRequests), fmtCount(c.streamingRequests), marks);
-  specs.push(streaming.card);
+  // viewBox 几何。**只给 viewBox，宽度交给 CSS** ⇒ 天然响应式、零 resize 监听。
+  const W = 720, H = 320;
+  const padL = 55, padR = 24, padT = 24, padB = 40;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
 
-  for (const card of specs) row.appendChild(card);
+  let maxV = 0;
+  for (const d of days) maxV = Math.max(maxV, metricValue(d.total));
+  const ceil = niceCeil(maxV);
+
+  const n = days.length;
+  const slot = plotW / n;
+  const barW = Math.max(2, Math.min(28, slot * 0.7));
+
+  const svg = svgEl("svg", {
+    viewBox: `0 0 ${W} ${H}`,
+    preserveAspectRatio: "xMidYMid meet",
+    role: "img",
+  });
+  // 读屏器读不了一堆 `<rect>`，给它一句总结。
+  const title = svgEl("title", {});
+  title.textContent = t("section.usg.chart.alt", { metric: t(metricSpec().labelKey), n: String(n) });
+  svg.appendChild(title);
+
+  const steps = 4;
+  for (let g = 0; g <= steps; g += 1) {
+    const yv = ceil * (g / steps);
+    const y = padT + plotH - (yv / ceil) * plotH;
+    svg.appendChild(svgEl("line", { class: "usage-chart-gridline", x1: padL, x2: W - padR, y1: y, y2: y }));
+    const label = svgEl("text", { class: "usage-chart-ylabel", x: padL - 8, y: y + 4, "text-anchor": "end" });
+    label.textContent = shortNum(yv);
+    svg.appendChild(label);
+  }
+
+  const labelEvery = Math.max(1, Math.ceil(n / 8));
+  const rows = s.view.dayRows || [];
+  days.forEach((d, i) => {
+    const rowState = rows[i] ? rows[i].state : "data";
+    const v = metricValue(d.total);
+    const h = (v / ceil) * plotH;
+    const x = padL + slot * i + (slot - barW) / 2;
+    const y = padT + plotH - h;
+    // ⚠️ **这一行读不出来时不画柱子**（而不是画一根 0 高的柱子）：
+    //    一根零高柱与「这一天真的是 0」在屏幕上完全同形。
+    //    ⚠️ 监听器也跟着不挂 —— 挂在一个没进 DOM 的节点上的监听器永远不会触发，
+    //    留着只会让人以为「那一天也有 tooltip」。
+    if (rowState !== "unavailable") {
+      const rect = svgEl("rect", {
+        class: "usage-chart-bar",
+        x, y: Math.min(y, padT + plotH), width: barW, height: Math.max(0, h), rx: 2,
+      });
+      rect.addEventListener("mousemove", (ev) => showTip(ev, d, rowState));
+      rect.addEventListener("mouseleave", hideTip);
+      svg.appendChild(rect);
+    }
+
+    if (i % labelEvery === 0 || i === n - 1) {
+      const xl = svgEl("text", {
+        class: "usage-chart-label", x: x + barW / 2, y: padT + plotH + 16, "text-anchor": "middle",
+      });
+      // 只画 `MM-DD`：日期串是 UTC 的 `YYYY-MM-DD`，切掉年份不改变含义。
+      xl.textContent = d.date.slice(5);
+      svg.appendChild(xl);
+    }
+  });
+
+  clear(nodes.chart);
+  nodes.chart.appendChild(svg);
+}
+
+function tipRow(label, node) {
+  const row = el("div", { class: "tt-row" });
+  row.appendChild(el("span", null, label));
+  const b = el("b");
+  b.appendChild(node);
+  row.appendChild(b);
   return row;
 }
 
-/** 一行「表头」。 */
-function headRow(keys) {
+function showTip(ev, day, rowState) {
+  const tip = nodes.tooltip;
+  clear(tip);
+  tip.appendChild(el("div", { class: "tt-date" }, fmtDate(day.date)));
+  // 🔴 tooltip 里同样是三档，不是「反正有个数就画出来」。
+  const kind = rowState === "unavailable" ? "unknown" : rowState === "no-shards" ? "none-no-shards" : "value";
+  tip.appendChild(tipRow(t("section.usg.col.requests"), cell(kind, day.total.requests, fmtInt)));
+  tip.appendChild(tipRow(t("section.usg.col.errors"), cell(kind, day.total.errors, fmtInt)));
+  tip.appendChild(tipRow(t("section.usg.col.tokens"), cell(kind, day.total.tokensIn + day.total.tokensOut, fmtInt)));
+  tip.classList.add("show");
+  const pad = 14;
+  let x = ev.clientX + pad;
+  let y = ev.clientY + pad;
+  if (x + tip.offsetWidth > window.innerWidth) x = ev.clientX - tip.offsetWidth - pad;
+  if (y + tip.offsetHeight > window.innerHeight) y = ev.clientY - tip.offsetHeight - pad;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+
+function hideTip() { if (nodes.tooltip) nodes.tooltip.classList.remove("show"); }
+
+/* ---------- 日汇总表 ---------- */
+
+function emptyRow(key, cols) {
   const tr = el("tr");
-  for (const k of keys) tr.appendChild(elI18n("th", k));
+  const td = el("td", { colspan: String(cols) });
+  td.appendChild(elI18n("div", key, { class: "empty-state" }));
+  tr.appendChild(td);
   return tr;
 }
 
-/**
- * 往一行里塞那六个数字格。**日汇总表与三张分解表共用它。**
- *
- * ⚠️⚠️ **`state` 是整块的状态，不是这一行自己看出来的** —— 这是「整块状态
- * 一步都没往下传」那条评审的根因在代码里的样子。上一版两张表各自写
- * `row.total === null ? "unavailable" : "data"`（**完全不看整块状态**），
- * 于是 `usageState` 判出来的 `unavailable` 一步都没往下传：
- * `all_malformed` 时六张卡正确地全是 EM DASH，**而紧挨着的日表把同一段区间
- * 写成「请求 0 次」**、延迟格还写着 EN DASH（= 「读成功了只是没样本」）。
- * 判据现在收在 `pure/usage.mjs` 的 `rowState()` 里，两张表都必须过它。
- *
- * ⚠️ **它不收 `marks`，这是刻意的**（定向复评）：上一版留了一个第四形参
- * 而两个调用点都传 `null` ⇒ **一个恒为死的形参**，看起来像「表里也会出标记」
- * 而实际上永远不出。`≈` 改成一张表出一个、挂在标题上（见 `approxTitleMark`），
- * 「不完整」改成整块出一处（见 `buildDayTable` 上方）。**死形参一律删掉，
- * 不留着当占位**——留着的那个迟早会被人当成「已经接好了」。
- */
-function numberCells(tr, state, bucket) {
-  const st = rowState(state, bucket);
-  const b = bucketCells(bucket);
-  const cells = [
-    [cellKind(st, b.requests), fmtCount(b.requests)],
-    [cellKind(st, b.success), fmtCount(b.success)],
-    [cellKind(st, b.errors), fmtCount(b.errors)],
-    [cellKind(st, b.tokensIn), `${fmtCount(b.tokensIn)} / ${fmtCount(b.tokensOut)}`],
-    [cellKind(st, b.streamingRequests), fmtCount(b.streamingRequests)],
-    [cellKind(st, b.latencyMs), fmtCount(b.latencyMs)],
-  ];
-  for (const [kind, text] of cells) {
-    const td = el("td", { class: "mono" });
-    fillCell(td, kind, text, null);
-    tr.appendChild(td);
-  }
-}
+function renderDaily() {
+  const body = nodes.dailyBody;
+  clear(body);
+  const s = state.summary;
+  if (state.failedKey) { body.appendChild(emptyRow(state.failedKey, 6)); return; }
+  if (!s || !s.view) { body.appendChild(emptyRow("section.usg.loading", 6)); return; }
 
-/** 表格里那个「键」格（日期 / 小时 / 模型名）。 */
-function keyCell(text) {
-  return el("td", { class: "mono" }, text);
-}
-
-/**
- * 日汇总表。点「下钻」展开那一天的分解。
- *
- * ⚠️⚠️ **表格的每一行不挂「不完整」标记，这一条是订正过的**（定向复评）：
- * 上一版给**每一行**的日期格挂了一个，而 `malformed` 数的是**整段区间**的畸形分片
- * ⇒ 30 天档下 30 行全写「不完整」，其中绝大多数天其实是完整的
- * ——**对那些天它是一句假话**。上一版自己的注释还承认「我们并不知道具体哪一格短了」，
- * 却对每一格都下了断言。⭐ 记一条形状：**「我们不知道是哪一个」推不出
- * 「所以每一个都标上」，它只推得出「只能对整体说」。**
- * ⇒ 「缺了几块」**不在表格里逐行说**。它在哪里说，逐处列全（收口复评：
- * 上一版这里写「只由整块那一处说」而**漏掉了六张卡**，同一提交的用例
- * 第 ② 句正面断言「六张卡带标记」、`fillCell()` 也确实挂）：
- * · 汇总侧 = **1 条红条**（`usage.note.partialMalformed`，`render()` 里由 `note` 驱动）
- *   **+ 六张汇总卡各一个「不完整」标记**（它们是整段区间的合计，说它不完整是准确的）；
- * · 下钻侧 = `buildDetail()` 里那一句单日口径的话。
- * **两张表格的行：一个都不挂。**
- *
- * ⚠️ `≈` 也只出一个，挂在表标题上（`approxTitleMark`，定向复评）。
- */
-function buildDayTable(state, marks) {
-  const { wrap, body, head } = block("usage.table.title");
-  const rows = dayRows(data);
-  if (rows.length === 0) {
-    // ⚠️ **「读不出来」与「这段区间里没有可以列出的日子」是两句话。**
-    //    `read_failed` 那一档 `days` 是 null ⇒ 行数也是 0，照后一句渲染
-    //    等于把一次读取失败说成「这段时间本来就没有日子」。
-    // ⚠️⚠️ **判据是白名单，收在 `pure/usage.mjs` 的 `readSucceeded()` 里**
-    //    （定向复评）：上一版这里写的是黑名单
-    //    `state === "unavailable" ? 不可用 : 空`，方向反的；而分解表那一边是白名单。
-    //    同一件事两张表两个方向，本身就是下一次分叉的入口。
-    body.appendChild(elI18n(
-      "p", readSucceeded(state) ? "usage.table.empty" : "usage.table.unavailable",
-      { class: "muted note" },
-    ));
-    return wrap;
-  }
-  // ⚠️ **`≈` 挂在早退之后**（收口复评）：上面那条早退意味着这张表一个数字都没有，
-  //    而 `≈` 是一句关于「下面那些数字」的话。挂在**标题节点**上（理由见 `approxTitleMark` 上方那段）。
-  const mark = approxTitleMark(marks);
-  if (mark !== null) head.appendChild(mark);
-  const table = el("table");
-  table.appendChild(headRow([
-    "usage.table.date", "usage.table.requests", "usage.table.success", "usage.table.errors",
-    "usage.table.tokens", "usage.table.streaming", "usage.table.latency", "usage.table.drill",
-  ]));
-  for (const row of rows) {
-    const tr = el("tr");
-    tr.appendChild(keyCell(row.date));
-    numberCells(tr, state, row.total);
-    const actions = el("td");
-    const drill = elI18n("button", "usage.table.drill", { type: "button", class: "usage-drill" });
-    drill.addEventListener("click", () => { openDay(row.date); });
-    actions.appendChild(drill);
-    tr.appendChild(actions);
-    table.appendChild(tr);
-  }
-  body.appendChild(table);
-  return wrap;
-}
-
-/**
- * 分解表的一张（小时 / 模型 / 协议共用）。
- *
- * ⚠️ **同样不收 `marks`**：与日表同一条理由（定向复评）——
- * 我们不知道是哪一个小时 / 哪一个模型短了，就只能对整块说。
- * 上一版这里有一个 `marks` 形参，而它在这条端点上**结构性地永远是 `null`**
- *（`honestyMarks` 当时经 `summaryCards().complete`，而那条端点没有 `total`），
- * 于是它既是死参、又给人一种「已经接好了」的错觉。
- */
-function breakdownTable(titleKey, keyLabelKey, map, numeric, state, labelOf) {
-  const wrap = el("div", { class: "usage-breakdown" });
-  wrap.appendChild(elI18n("h4", titleKey));
-  const rows = breakdownRows(map, numeric);
-  if (rows.length === 0) {
-    // 同上：**这一天读不出来**与**这一天没有记录**是两句话。那条评审点名的「第三屏」。
-    // 判据与日表共用同一个 `readSucceeded()`（定向复评）。
-    wrap.appendChild(elI18n(
-      "p", readSucceeded(state) ? "usage.detail.empty" : "usage.detail.unavailable",
-      { class: "muted note" },
-    ));
-    return wrap;
-  }
-  const table = el("table");
-  table.appendChild(headRow([
-    keyLabelKey, "usage.table.requests", "usage.table.success", "usage.table.errors",
-    "usage.table.tokens", "usage.table.streaming", "usage.table.latency",
-  ]));
-  for (const row of rows) {
-    const tr = el("tr");
-    // ⚠️ **键来自客户端填的模型名，一律 textContent**（`el()` 走的就是它）。
-    // ⚠️ **`labelOf` 认得出来的才换成展示名，认不出来一律画原始键**：
-    //    那三个保留伪 id 是我们自己发的，换名是安全的；别的一律原样
-    //    （理由与「不许标『已删除』」是同一条，见 `apiKeyRowLabelKey` 上方）。
-    const labelKey = labelOf === null ? null : labelOf(row.key);
-    tr.appendChild(labelKey === null ? keyCell(row.key) : elI18n("td", labelKey, { class: "mono" }));
-    numberCells(tr, state, row.total);
-    table.appendChild(tr);
-  }
-  wrap.appendChild(table);
-  return wrap;
-}
-
-/**
- * 单日下钻。
- *
- * ⚠️⚠️ **这一条端点根本不发 `all_malformed` / `partial_malformed`**
- *（`src/http/admin/handlers/usage.ts` 的 `usageDateHandler` 常态恒是
- * `no_request_detail`）⇒ 「这一天的分解缺没缺几块」**只能靠 `shards` / `malformed`
- * 两个字段**，走的是与汇总卡同一个 `malformedKind`。
- * 同一件事在两条端点上有两套判据，这是后端契约本身的形状，不是这里多写了一层。
- */
-function buildDetail() {
-  const wrap = el("div", { class: "card block" });
-  const head = el("div", { class: "usage-detail-head" });
-  head.appendChild(el("h3", null, t("usage.detail.title", { date: detailDate })));
-  const close = elI18n("button", "usage.detail.close", { type: "button" });
-  close.addEventListener("click", () => {
-    detailDate = null;
-    detailData = null;
-    detailFailed = false;
-    // 收起时同样把在飞的那份作废：不然它回来会把一个已经关掉的块又填上内容。
-    detailSeq++;
-    render();
-  });
-  head.appendChild(close);
-  wrap.appendChild(head);
-
-  // ⚠️ 这颗重试按钮重拉的是**这一天**，不是汇总（评审发现）。
-  const retryDay = () => { openDay(detailDate); };
-
-  if (detailFailed) {
-    const banner = el("div", { class: "banner-danger", role: "status" });
-    banner.appendChild(elI18n("span", "common.loadFailed"));
-    banner.appendChild(retryButton(retryDay));
-    wrap.appendChild(banner);
-    return wrap;
-  }
-  if (detailData === null) return wrap;
-
-  const state = detailState(detailData);
-  const note = typeof detailData.note === "string" ? detailData.note : null;
-  const banner = buildNoteBanner(note, retryDay);
-  if (banner !== null) wrap.appendChild(banner);
-  // ⚠️ **这里刻意没有 `render()` 那一支的红色兜底横幅，理由不是「忘了对称」。**
-  //    ① 三张分解表在 `unavailable` 下已经各自说了「这一天的分解读不出来」，
-  //       兜底那句会是第四遍；
-  //    ② 更要紧的是它会**说错话**：`date_out_of_retention` 那一档
-  //       `hours` 是 null（⇒ `unavailable`）而 note 是 info 档，
-  //       套上「读取失败，显示为 —」就是把「那天的记录已经过期了」
-  //       说成「这次读挂了」——那是一次 retry 永远解决不了的事，
-  //       而横幅上还挂着一颗重试按钮。**两句都不真，比只说一句更糟。**
-  //    ⇒ 兜底放在表那一层（每张表自己说自己空的原因），不放在这一层。
-
-  // 缺了几块这件事在这条端点上只有字段说得出来（它不发畸形 code）。
-  const marks = honestyMarks(detailData);
-  // ⚠️ **同 `approxTitleMark` 上方那条：这一天读不出来时三张表一个数字都没有，那时不许挂 `≈`。**
-  //    `readSucceeded(state)` 与两张表决定「空表说哪一句」用的是同一个判据。
-  const mark = readSucceeded(state) ? approxTitleMark(marks) : null;
-  if (mark !== null) head.appendChild(mark);
-  // ⚠️⚠️ **只在 `partial` 那一档说，`all` 不说**（定向复评）：
-  //    `all` 时整块是 `unavailable`、下面三张表**一个数字都没有**，
-  //    而这句话的主语是「下面这些数字」——那是在描述一堆不存在的数字。
-  //    `all` 那一档由 `note` 那条红条（「每一个都是畸形的……去查存储」）
-  //    与三张表各自的「读不出来」承担。
-  // ⚠️ **文案是单日口径的 `usage.detail.incomplete`，不是区间口径的
-  //    `usage.incompleteTip`**：后者逐字写着「这段区间里」，而这里是一天。
-  if (marks.incompleteOf !== null) {
-    const warn = el("p", { class: "muted note usage-incomplete" });
-    warn.textContent = t("usage.detail.incomplete", { malformed: fmtCount(marks.incompleteOf) });
-    wrap.appendChild(warn);
-  }
-
-  // ⚠️ **第六个形参在这三张表上恒是 `null`，而它不是死形参**（本轮加这一维时的裁定）：
-  //    第四张表真的传了一个函数进去，`breakdownTable` 里那一支也真的会走到。
-  //    本文件登记过「死形参一律删掉，不留着当占位」那条纪律（见 `numberCells` 上方）
-  //    —— 这一个不适用，因为它有一个活着的调用点。
-  wrap.appendChild(breakdownTable("usage.detail.hours", "usage.detail.hour", detailData.hours, true, state, null));
-  wrap.appendChild(breakdownTable("usage.detail.models", "usage.detail.model", detailData.byModel, false, state, null));
-  wrap.appendChild(breakdownTable("usage.detail.protocols", "usage.detail.protocol", detailData.byProtocol, false, state, null));
-  // ⚠️ **第四张表：按密钥。** 它与上面三张同级（设计 §10.6 的「这一天按小时 / 按模型 /
-  //    按协议的分解」在本轮多了一维），走同一条 `readSucceeded` / `rowState` 判据。
-  wrap.appendChild(breakdownTable("usage.detail.apiKeys", "usage.detail.apiKey", detailData.byApiKey, false, state, apiKeyRowLabelKey));
-  // ⚠️⚠️ **那句关于「已删除的密钥」的说明是常驻的，不由 `note` 说**：它任何时候都成立
-  //    （id 是签发那一刻的事实），而 `note` 只有一格、出问题时会被别的 code 占掉
-  //    —— 与本文件对 `no_request_detail` 那句指路话的处置逐字同源。
-  wrap.appendChild(elI18n("p", "usage.detail.apiKeyNote", { class: "muted note" }));
-  return wrap;
-}
-
-/**
- * 整个板块重画一遍。
- *
- * **每次都把 body 清空重建**，理由是「Tier-2 关着时页面上一个数字格都没有」
- * 这条性质要**在 DOM 里成立**，不是靠 `display: none` 藏起来：藏起来的格子
- * 仍然在无障碍树里、仍然会被复制粘贴带走，而它们显示的是一份不存在的数据。
- */
-function render() {
-  const host = nodes.body;
-  host.textContent = "";
-  const state = usageState(data);
-
-  if (state === "off") {
-    host.appendChild(buildOffCard());
+  const days = Array.isArray(s.days) ? s.days : [];
+  if (days.length === 0) {
+    // 🔴 **白名单判据**（`read_succeeded`）：只有确知读成功了才说「没有可列的日子」。
+    //    黑名单（「不是 unavailable 就当空」）方向是反的 —— 将来多一档状态会默认说假话。
+    body.appendChild(emptyRow(s.view.readSucceeded ? "section.usg.table.none" : "section.usg.table.unavailable", 6));
     return;
   }
 
-  host.appendChild(buildRangeBar());
-
-  const note = data !== null && typeof data === "object" && typeof data.note === "string" ? data.note : null;
-  const banner = buildNoteBanner(note, load);
-  if (banner !== null) host.appendChild(banner);
-  // ⚠️⚠️ **判据是「有没有人用 error 档说过『读不出来』」，不是「有没有横幅」**
-  //（评审发现）。上一版写的是 `banner === null`，于是 `range_clamped`（warn 档）
-  // 配上 `days: null` 时：六张卡全是 EM DASH，而页面上只有一条温和的黄条
-  // ——**没有任何一句说「读不出来」**。
-  // ⚠️ 今天后端发不出这个组合，但本文件 `buildNoteBanner` 上方刚论证过
-  //「不许假设 `note` 只可能是表内的值」；**同一条纪律在「字段组合」这一维上
-  // 一样要落实**：面板不该假设后端只会发出今天见过的那些组合。
-  if (state === "unavailable" && noteSeverity(note) !== "error") {
-    const fail = el("div", { class: "banner-danger", role: "status" });
-    fail.appendChild(elI18n("span", "common.loadFailed"));
-    fail.appendChild(retryButton(load));
-    host.appendChild(fail);
-  }
-  // 「这段时间真的是 0」要有自己的一句话。`note` 已经用 info 档说过同一件事时
-  // 不再重复，而「有分片落过盘、盘里就是 0」那一档的 `note` 是 `null`、没人替它说。
-  // ⚠️⚠️ **`usage.empty` 是这一页上语气最重的一句（「我们确实读到了，答案就是零」），
-  //    所以它的前提要一条不缺地摆在这里**：读成功了、这段区间**有分片落过盘**、
-  //    而且**读回来的分片一个都不坏**。少任何一条，这句话就是在替我们不知道的事下结论。
-  //    · 「还没落盘」那一档由 `usageState` 分出去了（`no-shards`，见那个函数上方第五档）；
-  //    · 「有分片，但其中几个是畸形的」这一档 **`usageState` 分不出来**（它归 `empty`），
-  //      得在这里挡：畸形族在场时那些 0 缺了几块，说「答案就是零」与紧挨着的红条
-  //      「一部分分片是畸形的，下面这些数字缺了那几块」当场互相打脸 —— 与那一档
-  //      被立案的形状**是同一个**，只是换了一对句子。
-  // ⚠️⚠️ **挡它的判据是 `malformedKind()`（字段），不是 `note`**：后端的 note 只有一格，
-  //    `range_clamped` 压得过 `partial_malformed`（优先级在
-  //    `src/http/admin/handlers/usage.ts` 的 `usageHandler` 上方）⇒ 照 note 挡的话，
-  //    区间被夹过时这一句会原地复活，而那正是 `no_shards` 那一档踩过的同一颗雷。
-  // ⚠️ `malformedKind` 的 `"unknown"`（`shards` / `malformed` 读不成数字）**同样挡掉**：
-  //    那时我们连「坏没坏」都不知道，不许下「答案就是零」这个结论。
-  //    ⇒ 判据写成 `=== "none"`（白名单），不是 `!== "partial"`（黑名单）。
-  if (state === "empty" && malformedKind(data) === "none"
-    && (usageNoteKey(note) === null || noteSeverity(note) !== "info")) {
-    const empty = el("div", { class: "banner-info", role: "status" });
-    empty.appendChild(elI18n("span", "usage.empty"));
-    host.appendChild(empty);
-  }
-  // 「读成功了，但这段区间一条分片都还没落盘」也要有自己的一句话，而且**必须由
-  // 状态驱动、不能由 `note` 驱动**：`range_clamped` 压过 `no_shards`（优先级在
-  // `src/http/admin/handlers/usage.ts` 的 `usageHandler` 上方），区间被夹过时
-  // 这一档的 `note` 是别的 code，照 `note` 走它就整个消失。
-  // 判据写成「那条横幅有没有已经说过这一句」而不是「note 是不是 no_shards」：
-  // 后端哪天换一条 code 指向同一句话时，这里不会开始说两遍。
-  if (state === "no-shards" && usageNoteKey(note) !== "usage.note.noShards") {
-    const notLanded = el("div", { class: "banner-info", role: "status" });
-    notLanded.appendChild(elI18n("span", "usage.note.noShards"));
-    host.appendChild(notLanded);
-  }
-
-  // ⚠️ **两个诚实标记算一次，卡片与日表共用同一份**（评审前后点了两次）：
-  //    各算各的迟早分叉，而分叉的那一边正好是「表」时，后果就是
-  //    卡片说「不完整」而紧挨着的表把同一份数字写成完整的。
-  const marks = honestyMarks(data);
-  host.appendChild(buildCards(state, marks));
-
-  // 未落盘的尾巴。判据是 `count`，**不是 `ms`**（见 `pendingTail` 的说明）。
-  const tail = pendingTail(data);
-  if (tail !== null) {
-    const p = el("p", { class: tail.budgetExhausted ? "banner-warn" : "muted note" });
-    p.textContent = tail.budgetExhausted
-      ? t("usage.pendingExhausted", { count: fmtCount(tail.count) })
-      : t("usage.pending", { count: fmtCount(tail.count) });
-    host.appendChild(p);
-  }
-
-  host.appendChild(buildDayTable(state, marks));
-  if (detailDate !== null) host.appendChild(buildDetail());
+  const rows = s.view.dayRows || [];
+  days.forEach((d, i) => {
+    const rowState = rows[i] ? rows[i].state : "data";
+    const kind = rowState === "unavailable" ? "unknown" : rowState === "no-shards" ? "none-no-shards" : "value";
+    const tr = el("tr");
+    tr.setAttribute("tabindex", "0");
+    tr.setAttribute("role", "button");
+    tr.setAttribute("aria-label", t("section.usg.drill.open", { date: d.date }));
+    const dateTd = el("td");
+    dateTd.appendChild(el("span", { class: "kv-mono" }, fmtDate(d.date)));
+    tr.appendChild(dateTd);
+    const num = (v) => {
+      const td = el("td", { class: "num" });
+      td.appendChild(cell(kind, v, fmtInt));
+      return td;
+    };
+    tr.appendChild(num(d.total.requests));
+    tr.appendChild(num(d.total.success));
+    tr.appendChild(num(d.total.errors));
+    tr.appendChild(num(d.total.tokensIn + d.total.tokensOut));
+    tr.appendChild(num(d.total.streamingRequests));
+    const open = () => toggleDrill(d.date);
+    tr.addEventListener("click", open);
+    // 整行可点 ⇒ **键盘也得点得动**（kiro 的日表只有鼠标）。
+    tr.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); }
+    });
+    body.appendChild(tr);
+  });
 }
 
-/**
- * 拉汇总。**世代号在发请求之前就 +1**，回来时对不上就整份丢掉
- *（见 `seq` 上方那段：`AbortController` 一个人守不住这件事）。
- */
-async function load() {
-  if (abort) abort.abort();
-  abort = new AbortController();
-  const mine = ++seq;
-  const signal = abort.signal;
-  const q = rangeToQuery(range, Date.now());
+/* ---------- 下钻（四维，kiro 只有一维） ---------- */
+
+function closeDrill() {
+  if (drillCtl) { drillCtl.abort(); drillCtl = null; }
+  state.drill = { date: null, dim: state.drill.dim, data: null, failedKey: null, loading: false };
+  if (nodes.drill) { clear(nodes.drill); nodes.drill.hidden = true; }
+}
+
+function toggleDrill(date) {
+  if (state.drill.date === date) { closeDrill(); return; }
+  loadDrill(date);
+}
+
+async function loadDrill(date) {
+  if (drillCtl) drillCtl.abort();
+  drillCtl = new AbortController();
+  const ctl = drillCtl;
+  state.drill = { date, dim: state.drill.dim, data: null, failedKey: null, loading: true };
+  renderDrill();
   try {
-    // `q` 为 null 只在本机时钟坏掉时发生；那时不发请求，让上一次的数据留着，
-    // 而**上一次的数据本来就带着它自己的 `generatedAt`**，不会被说成是新的。
-    if (q === null) return;
-    const body = await api.get(`/usage?from=${q.from}&to=${q.to}`, { signal });
-    if (mine !== seq) return;
-    data = body;
+    // ⚠️ **这条端点只认日期串**（`YYYY-MM-DD`，UTC），与汇总那条的 epoch 毫秒
+    //    **口径刻意不同、两者不通用**（`src/admin/usage.rs::by_date` 文件头）。
+    const body = await api.get(`/usage/${encodeURIComponent(date)}`, { signal: ctl.signal });
+    if (ctl !== drillCtl) return;
+    state.drill.data = body;
   } catch (e) {
-    if (mine !== seq) return;
-    if (e && e.name === "AbortError") return;
-    // **不伪造上一次的数据**：读失败就把 data 清空，不留着旧值以为它是新的。
-    data = null;
+    if (ctl !== drillCtl) return;
+    if (e && e.status === 401) return;
+    state.drill.failedKey = e && typeof e.status === "number" && e.status > 0
+      ? "section.usg.loadFailedHttp"
+      : "section.usg.loadFailedNetwork";
   }
-  render();
+  state.drill.loading = false;
+  renderDrill();
 }
 
-/**
- * 拉某一天的分解。
- *
- * ⚠️ **它有自己的世代号，不共用 `seq`**：一开始写的是共用，而那会在一个很常见的
- * 操作序列上把下钻卡成空的 —— 点开某一天之后**再点一次「刷新」**，`load()` 把 `seq`
- * 顶上去，回来的那份分解就被当成过期的丢掉了，而那一天明明还开着。
- * 两件事的作废条件本来就不同：切走板块要把两者一起作废（`onHide()` 两个都 +1），
- * 但重拉汇总**不该**作废一次仍然有效的下钻。
- */
-async function openDay(date) {
-  detailDate = date;
-  detailData = null;
-  detailFailed = false;
-  const mine = ++detailSeq;
-  render();
-  try {
-    const body = await api.get(`/usage/${encodeURIComponent(date)}`);
-    if (mine !== detailSeq) return;
-    detailData = body;
-  } catch (e) {
-    if (mine !== detailSeq) return;
-    detailFailed = true;
-  }
-  render();
+/** 一个桶键该显示成什么。认不出来**照实画原始 id**，见 `API_KEY_LABEL` 的说明。 */
+function apiKeyLabel(id, labelKeys) {
+  const serverKey = labelKeys ? labelKeys[id] : undefined;
+  const panelKey = serverKey ? API_KEY_LABEL[serverKey] : undefined;
+  return panelKey ? t(panelKey) : id;
 }
 
-/**
- * `capabilities` 与 `models` 各拉一次，**同一个 `Promise.all` 发**（都是零存储读）。
- * 拿不到就是拿不到：落盘间隔那句话换成不带数字的一版、Token 卡的 tooltip 换成
- * 「覆盖范围读不出来」，**不编缺省值**。
- */
-async function loadStatic() {
-  if (caps !== null && catalog !== null) return;
-  const [c, m] = await Promise.all([
-    caps === null ? api.get("/capabilities").catch(() => null) : Promise.resolve(caps),
-    catalog === null ? api.get("/models").catch(() => null) : Promise.resolve(catalog),
-  ]);
-  if (c !== null) caps = c;
-  if (m !== null) catalog = m;
+function renderDrill() {
+  const host = nodes.drill;
+  clear(host);
+  const d = state.drill;
+  if (!d.date) { host.hidden = true; return; }
+  host.hidden = false;
+
+  const head = el("div", { class: "usage-drill-head" });
+  head.appendChild(el("h3", null, t("section.usg.drill.title", { date: d.date })));
+  const close = elI18n("button", "section.usg.drill.close", { type: "button", class: "btn btn-sm btn-outline" });
+  close.addEventListener("click", closeDrill);
+  head.appendChild(close);
+  host.appendChild(head);
+
+  if (d.loading) {
+    const box = el("div", { class: "chart-loading" });
+    box.appendChild(el("span", { class: "stats-spinner", "aria-hidden": "true" }));
+    box.appendChild(elI18n("span", "section.usg.loading"));
+    host.appendChild(box);
+    return;
+  }
+  if (d.failedKey) { host.appendChild(elI18n("div", d.failedKey, { class: "empty-state" })); return; }
+  const body = d.data;
+  if (!body || !body.view) { host.appendChild(elI18n("div", "section.usg.loadFailedNetwork", { class: "empty-state" })); return; }
+
+  // 下钻自己的 note（常态是 `no_request_detail` —— 那句指路的话）。
+  if (body.view.noteSeverity) {
+    const banner = el("div", { class: BANNER_CLASS[body.view.noteSeverity] || BANNER_CLASS.warn });
+    banner.appendChild(elI18n("span", NOTE_KEY[body.note] || "section.usg.note.unknown"));
+    host.appendChild(banner);
+  }
+
+  // 四维 TAB。**用 `.login-tabs` 那一族**（06 §3.2 ⑥：四张表之间用 `.login-tab`
+  // 形态的小 TAB 切）——kiro 里已经有这个组件，别新造。
+  const tabs = el("div", { class: "login-tabs", role: "tablist" });
+  for (const spec of DIMS) {
+    const b = elI18n("button", spec.labelKey, { type: "button", class: "login-tab", role: "tab" });
+    // 🔴 选中态钉 `aria-selected`：读屏器读的是那个属性，`.active` 只是给 CSS 看的。
+    b.setAttribute("aria-selected", spec.id === d.dim ? "true" : "false");
+    b.classList.toggle("active", spec.id === d.dim);
+    b.addEventListener("click", () => { state.drill.dim = spec.id; renderDrill(); });
+    tabs.appendChild(b);
+  }
+  host.appendChild(tabs);
+
+  // 🔴 **整块读不出来时四张表都读不出来**，一格都不许画 0。
+  if (body.view.state !== "data") {
+    host.appendChild(elI18n("div", body.view.state === "off" ? "section.usg.drill.off" : "section.usg.drill.unavailable",
+      { class: "empty-state" }));
+    return;
+  }
+
+  const map = body[d.dim] || {};
+  // 行序：小时那一维**由后端给**（`view.hourOrder`）—— JSON 对象没有「数值序」
+  // 这回事，照 map 的自然序读出来是 0,1,10,11,…,2,20,… 一张乱序的时间轴。
+  // 另外三维刻意留在字典序（后端已经排好，渲染层不自己排）。
+  const order = d.dim === "hours" ? (body.view.hourOrder || []) : Object.keys(map);
+  if (order.length === 0) {
+    host.appendChild(elI18n("div", "section.usg.drill.empty", { class: "empty-state" }));
+    return;
+  }
+
+  const wrap = el("div", { class: "table-container" });
+  const table = el("table", { class: "data-table usage-records-table" });
+  const thead = el("thead");
+  const hr = el("tr");
+  const dimSpec = DIMS.find((x) => x.id === d.dim) || DIMS[0];
+  hr.appendChild(elI18n("th", dimSpec.colKey));
+  hr.appendChild(elI18n("th", "section.usg.col.requests", { class: "num" }));
+  hr.appendChild(elI18n("th", "section.usg.col.success", { class: "num" }));
+  hr.appendChild(elI18n("th", "section.usg.col.errors", { class: "num" }));
+  hr.appendChild(elI18n("th", "section.usg.col.tokens", { class: "num" }));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tbody = el("tbody");
+  for (const key of order) {
+    const bucket = map[key];
+    if (!bucket) continue;
+    const tr = el("tr");
+    const first = el("td", { class: "mono" });
+    if (d.dim === "hours") first.textContent = t("section.usg.hourLabel", { h: key });
+    else if (d.dim === "byApiKey") first.textContent = apiKeyLabel(key, body.view.apiKeyLabelKeys);
+    else first.textContent = key;
+    tr.appendChild(first);
+    const num = (v) => {
+      const td = el("td", { class: "num" });
+      td.appendChild(approx(el("span", null, fmtInt(v)), !!body.approximate));
+      return td;
+    };
+    tr.appendChild(num(bucket.requests));
+    tr.appendChild(num(bucket.success));
+    tr.appendChild(num(bucket.errors));
+    tr.appendChild(num(bucket.tokensIn + bucket.tokensOut));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  host.appendChild(wrap);
+}
+
+/* ============================================================
+   板块契约
+   ============================================================ */
+
+function stopAll() {
+  if (listCtl) { listCtl.abort(); listCtl = null; }
+  if (drillCtl) { drillCtl.abort(); drillCtl = null; }
+  hideTip();
 }
 
 export const usageSection = {
-  init(section) {
-    section.textContent = "";
-    section.appendChild(elI18n("h2", "usage.title"));
-    const refresh = elI18n("button", "common.refresh", { type: "button" });
-    refresh.addEventListener("click", () => { load(); });
-    section.appendChild(refresh);
-    const body = el("div");
-    section.appendChild(body);
-    nodes = { body };
+  init(node) {
+    nodes.root = node;
   },
-
   onShow() {
-    shown = true;
-    loadStatic().then(() => { if (shown && nodes !== null) render(); });
+    stopAll();
+    // ⚠️ 切语言时框架层会重跑 `onShow()` —— 整页重绘走的就是这条路（板块自己
+    //    不许监听 `langchange`）。重新 `build()` 能让所有靠 `t()` 拼进 textContent
+    //    的串（档位标签、tooltip、破折号的 title）跟着换语言。
+    build(nodes.root);
+    closeDrill();
+    // 时钟自纠的配额**按「进一次板块」发**：标签页开一整天、中途系统校了时，
+    // 下一次进板块还能再纠一次。
+    state.corrected = false;
     load();
   },
-
   onHide() {
-    // **三件事都要做**：abort 省掉真实网络往返，两个世代号保证汇总与下钻
-    // 回来的那份都被丢掉，`shown` 作废 `loadStatic()` 那条链（评审发现）。
-    if (abort) { abort.abort(); abort = null; }
-    seq++;
-    detailSeq++;
-    shown = false;
+    // 🔴 切走作废一切在飞请求（06 §3.2 ② 第 ③ 条护栏，本板块同样适用）。
+    stopAll();
   },
 };
+
+export default usageSection;
