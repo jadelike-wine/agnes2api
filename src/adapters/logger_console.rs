@@ -31,7 +31,9 @@ impl Logger for ConsoleLogger {
 }
 
 /// 渲染成一行 logfmt。字段顺序确定：`event` → `msg` → `corr` → 其余按键名字典序。
-fn render_logfmt(e: &LogEntry) -> String {
+///
+/// `pub(crate)`：`WorkerLogger`（wasm）复用同一份渲染，只换出口。
+pub(crate) fn render_logfmt(e: &LogEntry) -> String {
     let mut out = String::new();
     out.push_str("event=");
     out.push_str(&quote(e.event));

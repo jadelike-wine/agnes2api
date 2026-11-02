@@ -21,12 +21,19 @@ pub mod holders;
 pub mod test_support;
 pub mod usage_sink;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::core::config_provenance::EnvMap;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::ports::logger::{LogEntry, LogLevel, Logger};
+#[cfg(not(target_arch = "wasm32"))]
 use anyhow::Context;
+#[cfg(not(target_arch = "wasm32"))]
 use std::future::{Future, IntoFuture};
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 /// 停机时给在途请求的**排空窗口上界**。
@@ -38,12 +45,14 @@ use std::time::Duration;
 ///
 /// **8 秒的取值理由**：必须短于容器宽限期（`docker stop` 默认 10 秒），
 /// 给窗口到期后的刷盘留余量；同时长于绝大多数在途一问一答请求。
+#[cfg(not(target_arch = "wasm32"))]
 pub const SHUTDOWN_DRAIN_WINDOW: Duration = Duration::from_secs(8);
 
 /// 起服务。
 ///
 /// 顺序本身是约束：**服务器自身的错误放到刷盘之后再上抛** ——
 /// 用 `?` 提前返回会把最终刷盘整个吞掉。
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn serve(
     env: &EnvMap,
     addr: SocketAddr,
@@ -61,6 +70,7 @@ pub async fn serve(
 /// 而那会把同一进程里跑着的其余几百格判据一起带走。
 /// ⇒ 可注入的那一格是那条判据**唯一**的前提，体例与
 /// [`crate::admin::models::test_with`]（护栏与时钟可注入）逐字相同。
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn serve_with_signal<S>(
     env: &EnvMap,
     addr: SocketAddr,
@@ -131,6 +141,7 @@ where
 ///
 /// 🔴 **必须处理 SIGTERM**：容器里本进程常是 PID 1，不处理就会一直等到宽限期结束
 /// 被 SIGKILL —— 那等于完全没有优雅停机。
+#[cfg(not(target_arch = "wasm32"))]
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -167,6 +178,7 @@ async fn shutdown_signal() {
 /// 所以正常运行时 `sleep(window)` 必然先赢 ⇒ 网关起来 `window` 秒之后无条件自杀。
 /// 由 [`tests::the_gateway_keeps_serving_long_after_the_drain_window_would_have_elapsed`]
 /// 与 [`tests::the_drain_window_is_measured_from_the_signal_not_from_bind`] 两格钉住。
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn drain_after_signal<F, S>(server: F, signal: S, window: Duration) -> Option<F::Output>
 where
     F: IntoFuture,
@@ -196,6 +208,7 @@ where
 /// 抽成泛型函数（取 `IntoFuture` 而不是 `Future`，因为 axum 的
 /// `WithGracefulShutdown` 只实现前者）**是为了能用假 future 单测边界行为，
 /// 不必真开监听 socket**。
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn drain_with_deadline<F>(server: F, window: Duration) -> Option<F::Output>
 where
     F: IntoFuture,

@@ -64,7 +64,14 @@ pub struct ProcessMetrics {
 ///
 /// ⚠️ **`/proc` 只有 Linux 有。** 读不到一律 `None` —— 那正是「取进程指标出错」
 /// 这一档该有的表达，🔴 **不许编一个 0 出来**（0 字节常驻内存是一句当场可证伪的假话）。
+///
+/// 🔴 **`wasm32`（Cloudflare Workers）恒 `None`**：Workers 没有进程、没有 PID、
+/// 没有 `/proc`，而 `std::process::id()` 在那里**会 panic**
+///（`sys/process/unsupported.rs: no pids on this platform`，本地 Miniflare 实测
+/// 直接把 `/admin/api/overview` 打成 500 并终结 isolate）。所以整支按目标裁掉，
+/// 面板那一格如实显示 `null` —— 与本函数「取不到就是 null」的既定语义一致。
 #[must_use]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn process_metrics() -> Option<ProcessMetrics> {
     let pid = std::process::id();
     let rss_bytes = rss_bytes()?;
@@ -76,7 +83,15 @@ pub fn process_metrics() -> Option<ProcessMetrics> {
     })
 }
 
+/// Workers 形态：没有进程这回事，**如实返回 `None`**（见上一个同名函数的说明）。
+#[must_use]
+#[cfg(target_arch = "wasm32")]
+pub fn process_metrics() -> Option<ProcessMetrics> {
+    None
+}
+
 /// 常驻内存。`/proc/self/statm` 的第二个数是**页数**，要乘页大小。
+#[cfg(not(target_arch = "wasm32"))]
 fn rss_bytes() -> Option<u64> {
     let raw = std::fs::read_to_string("/proc/self/statm").ok()?;
     let pages: u64 = raw.split_whitespace().nth(1)?.parse().ok()?;
@@ -93,6 +108,7 @@ fn rss_bytes() -> Option<u64> {
 /// 读 `/proc` 这一路本来就限定 Linux，与上面 `rss_bytes` 同一个前提，不新增假设。
 ///
 /// ⚠️ 拿不到就用 4096：**宁可报小，也不报一个编出来的大数**。
+#[cfg(not(target_arch = "wasm32"))]
 fn page_size() -> u64 {
     std::fs::read("/proc/self/auxv")
         .ok()
@@ -105,6 +121,7 @@ fn page_size() -> u64 {
 /// 从 `/proc/self/auxv` 里取 `AT_PAGESZ`（键 6）。
 ///
 /// 结构是一串 `(usize, usize)` 对，以 `(0, 0)` 收尾。
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_auxv_pagesize(buf: &[u8]) -> Option<i64> {
     const AT_PAGESZ: u64 = 6;
     let w = std::mem::size_of::<usize>();
@@ -123,6 +140,7 @@ fn parse_auxv_pagesize(buf: &[u8]) -> Option<i64> {
     None
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_usize(b: &[u8]) -> Option<u64> {
     match b.len() {
         8 => Some(u64::from_ne_bytes(b.try_into().ok()?)),
@@ -138,6 +156,7 @@ fn read_usize(b: &[u8]) -> Option<u64> {
 ///
 /// ⚠️ **不用「第一次调用时记一个 `Instant`」那种写法**：那个数会随「谁先打开概览页」
 /// 变化，于是面板上的「已运行」在第一次刷新时恒等于 0 —— 一个看起来合理的假值。
+#[cfg(not(target_arch = "wasm32"))]
 fn uptime_ms() -> Option<i64> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     // 可执行文件名可能含空格与右括号，所以从**最后一个** `)` 之后开始切。

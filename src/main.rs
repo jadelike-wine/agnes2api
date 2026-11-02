@@ -2,18 +2,43 @@
 //!
 //! 逻辑全在 lib crate 里（见 [`agnes2api`] 的模块头），这样集成测试才能直接调内部
 //! 函数而不是只能打 HTTP 端口。
+//!
+//! 🔴 **本文件只服务于原生（Docker / 裸机）形态。**
+//! Cloudflare Workers 的入口在 `src/worker.rs`（`#[event(fetch)]`），
+//! 两种形态共享同一棵 axum 路由树与同一套业务逻辑。
+//! wasm 目标根本不编进 `main` 的这段 —— 靠下面这条 cfg 整个切掉。
 
+// 🔴 **本文件只服务于原生（Docker / 裸机）形态。**
+// Cloudflare Workers 的入口在 `src/worker.rs`（`#[event(fetch)]`），
+// 两种形态共享同一棵 axum 路由树与同一套业务逻辑。
+// wasm 目标上 `main.rs` 仍是 bin 的入口，但一行真实逻辑都不该进它 ——
+// 所以下面给 wasm 一个什么都不做的 `main`，只为让 `cargo build --target wasm32` 编得过去。
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use agnes2api::adapters::logger_console::ConsoleLogger;
+#[cfg(not(target_arch = "wasm32"))]
 use agnes2api::adapters::storage_file::{FileStorage, StoreIntegrity};
+#[cfg(not(target_arch = "wasm32"))]
 use agnes2api::cli;
+#[cfg(not(target_arch = "wasm32"))]
 use agnes2api::ports::logger::{LogEntry, LogLevel, Logger};
+#[cfg(not(target_arch = "wasm32"))]
 use agnes2api::ports::storage::Storage;
+#[cfg(not(target_arch = "wasm32"))]
 use agnes2api::server;
+#[cfg(not(target_arch = "wasm32"))]
 use agnes2api::server::wire::{BuildOptions, build_app};
+#[cfg(not(target_arch = "wasm32"))]
 use clap::Parser;
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() {
     // 1. CLI。**不设 default_value**，默认值在用完所有层之后才兜底（见 `cli.rs`）。
@@ -33,6 +58,7 @@ async fn main() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn run(args: cli::Cli) -> Result<(), String> {
     let env = cli::env_snapshot();
     let data_dir = cli::data_dir(&args, &env);
@@ -81,6 +107,8 @@ async fn run(args: cli::Cli) -> Result<(), String> {
         storage,
         BuildOptions {
             probe_storage: true,
+            fetcher: None,
+            build_registrar: true,
         },
         logger.clone(),
     )
@@ -98,6 +126,7 @@ async fn run(args: cli::Cli) -> Result<(), String> {
 ///
 /// 用 `registry` 而不是最简的 `fmt::init()`：P1.5 要在这里挂一个自定义捕获层
 /// （面板的实时日志），**现在先按那个形状留好**，届时不用改初始化的写法。
+#[cfg(not(target_arch = "wasm32"))]
 fn init_tracing() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;

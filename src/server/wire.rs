@@ -1,5 +1,6 @@
 //! 装配：环境变量 + 存储 → [`AppState`] → `Router`。**顺序有意义。**
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::adapters::fetcher_reqwest::ReqwestFetcher;
 use crate::adapters::logger_multi::MultiLogger;
 use crate::adapters::logger_store::StoreLogger;
@@ -32,6 +33,35 @@ pub struct BuildOptions {
     ///
     /// **只有真实启动路径开**：测试里开它等于给每一格判据加一次写。
     pub probe_storage: bool,
+
+    /// 出站客户端。**`None` = 按目标平台取默认**。
+    ///
+    /// 原生（Docker）默认 `ReqwestFetcher::data_plane()`；
+    /// wasm（Workers）默认 `CfFetcher`（`worker::Fetch`）。
+    /// Worker 装配显式传一份，是为了让**本函数在两种形态下共用一个签名** —
+    /// 否则就得在 `wire.rs` 里用 cfg 藏两条不同的装配路，而那两条路迟早会漂。
+    pub fetcher: Option<Arc<dyn Fetcher>>,
+
+    /// 要不要构造注册机持有者。**Worker 形态传 `false`**：
+    /// 注册机依赖 tokio 定时轮与 reqwest，Workers 上没有这两样；
+    /// 而且注册机的存在前提（自动铸 key）本就不是 Workers 形态的需求。
+    /// `false` ⇒ `state.registrar = None`，三条端点如实回 `503 not_wired`，
+    /// 面板显示「不支持」，而不是假装它正常工作。
+    pub build_registrar: bool,
+}
+
+impl BuildOptions {
+    /// 测试与简单装配用的最小选项集：**默认按 Docker 形态**（注册机开、探针关）。
+    ///
+    /// `Default` 不派生是因为 `build_registrar` 的语义默认（`true` = 原生行为）
+    /// 与「全 `false`」相反，写一个显式构造函数把这个选择摆在明面上。
+    pub fn minimal() -> Self {
+        Self {
+            probe_storage: false,
+            fetcher: None,
+            build_registrar: true,
+        }
+    }
 }
 
 /// 装配的产物。
@@ -190,13 +220,16 @@ pub async fn build_app(
 
     // **数据面**那一个：转发热路径。控制面（探测 / 模型测试）由管理面自己建 ——
     // 两面的连接池与超时口径不同，共用一个会让一次慢探测占住转发的连接。
-    let fetcher: Arc<dyn Fetcher> = Arc::new(ReqwestFetcher::data_plane());
+    let fetcher: Arc<dyn Fetcher> = match opts.fetcher {
+        Some(f) => f,
+        None => default_fetcher(),
+    };
 
     // ── 注册机（可选子系统）──────────────────────────────────────────────
     //
     // 🔴 **装不起来就压根不构造它**，转发路径一个字都感知不到。
     // 装载器零 panic：它只产出 blocker，启不启动由这里 gate。
-    let registrar = {
+    let registrar = if opts.build_registrar {
         // 🔴 **复用装配期已经读出来的那一份，绝不再读一次 `config` 键。**
         //
         // 我第一版在这里又 `get("config")` 了一次 —— `assembly_without_probe_writes_nothing`
@@ -237,6 +270,8 @@ pub async fn build_app(
             // 每一轮重读配置要用它。**只快照 env，存储那一份每轮现读。**
             env: env.clone(),
         }))
+    } else {
+        None
     };
 
     let state = AppState {
@@ -267,6 +302,11 @@ pub async fn build_app(
     //
     // ⚠️ 它绝不许把进程带走 —— `config-degrade` 那条事故判据（真机 74% 请求 500）
     // 钉的正是**注册机出问题时网关照常活着**。
+    //
+    // 🔴 **Workers 形态没有 tokio 定时轮**：`spawn_scheduler` 只在非 wasm 上存在。
+    //    Workers 上的索引对账由 `#[event(scheduled)]` 的 Cron Trigger 单独承担，
+    //    且那条 handler **只做对账、不补池**（见 `worker::scheduled`）。
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(rt) = state.registrar.clone() {
         crate::registrar::runtime::spawn_scheduler(rt, Arc::clone(&state.repo));
     }
@@ -275,6 +315,22 @@ pub async fn build_app(
         router: build_router(state.clone()),
         state,
     })
+}
+
+/// 数据面默认出站客户端（装配不传 `fetcher` 时）。
+///
+/// 两种形态各自填自己的那一个：原生 `reqwest`，Workers `worker::Fetch`。
+/// 之所以抽成一个函数而不是在 `build_app` 里写 cfg ——
+/// `build_app` 的装配顺序注释已经按行号对齐 TS 版 12 步，塞一条 cfg 会打乱那个对齐。
+#[cfg(not(target_arch = "wasm32"))]
+fn default_fetcher() -> Arc<dyn Fetcher> {
+    Arc::new(ReqwestFetcher::data_plane())
+}
+
+/// Workers 形态默认出站客户端：`worker::Fetch`（CF 原生 fetch API）。
+#[cfg(all(target_arch = "wasm32", feature = "worker"))]
+fn default_fetcher() -> Arc<dyn Fetcher> {
+    Arc::new(crate::adapters::fetcher_cloudflare::CfFetcher::data_plane())
 }
 
 /// 8 位十六进制的进程标识。🔴 **CSPRNG**：两个副本撞上同一个分片槽会互相覆写事件。
@@ -472,15 +528,7 @@ mod tests {
         storage: Arc<dyn Storage>,
         logger: Arc<dyn Logger>,
     ) -> Result<BuiltApp, ConfigRefusal> {
-        build_app(
-            e,
-            storage,
-            BuildOptions {
-                probe_storage: false,
-            },
-            logger,
-        )
-        .await
+        build_app(e, storage, BuildOptions::minimal(), logger).await
     }
 
     /// 🔴 **缺 `GATEWAY_TOKEN` ⇒ 装配失败**（fail-closed 是不变量）。
@@ -577,6 +625,7 @@ mod tests {
             counting,
             BuildOptions {
                 probe_storage: true,
+                ..BuildOptions::minimal()
             },
             Arc::new(NullLogger),
         )
@@ -597,6 +646,7 @@ mod tests {
             storage,
             BuildOptions {
                 probe_storage: true,
+                ..BuildOptions::minimal()
             },
             logger.clone(),
         )

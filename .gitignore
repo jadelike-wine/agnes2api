@@ -17,3 +17,14 @@ store.json
 .vscode/
 *.swp
 .DS_Store
+
+# Cloudflare Workers 本地 secrets（wrangler dev 读取，绝不进版本库）
+.dev.vars
+.dev.vars.*
+# worker-build / wrangler 产物
+/build
+node_modules
+
+# Miniflare / wrangler 本地状态（内含 D1 SQLite 与本地开发数据，绝不进版本库）
+.wrangler
+!.dev.vars.example

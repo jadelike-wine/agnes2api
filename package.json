@@ -1,0 +1,15 @@
+{
+  "name": "agnes2api-worker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "agnes2api —— Cloudflare Workers 形态（Rust → WASM）",
+  "scripts": {
+    "build": "worker-build --profile wasm-release -- --features worker",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "check:wasm": "cargo check --target wasm32-unknown-unknown --features worker"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

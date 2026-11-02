@@ -2,6 +2,11 @@
 
 agnes2api ships as one deployment target: a Docker image built from this codebase, run with `docker compose`.
 
+> [!TIP]
+> **No VPS? No containers?** There is a second deployment target from the same codebase:
+> **Cloudflare Workers**, which stores state in Cloudflare D1 and needs neither a server nor
+> Docker. See [WORKERS.md](WORKERS.md). The rest of this document is the Docker path.
+
 > [!NOTE]
 > All state lives in one place — a JSON file on a mounted volume (`store.json`). Back that
 > directory up and you have backed up everything.

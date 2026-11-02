@@ -125,9 +125,17 @@ pub fn admin_env() -> &'static EnvMap {
     ENV_SNAPSHOT.get_or_init(env_fallback)
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), not(target_arch = "wasm32")))]
 fn env_fallback() -> EnvMap {
     crate::cli::env_snapshot()
+}
+
+/// Workers 形态的 env 兜底：`cli` 不编进 wasm，环境变量只能走 Worker 的
+/// `Env`（vars + secrets），而那一侧在装配时已经抓过一份 —— 没人注入时
+/// 退回空表（与「未配置」同义，不炸面板）。
+#[cfg(all(not(test), target_arch = "wasm32"))]
+fn env_fallback() -> EnvMap {
+    EnvMap::new()
 }
 
 /// ⚠️ 判据里**不许**让真实进程环境漏进来：那会让「本机恰好设了 `MAX_STRIKES`」

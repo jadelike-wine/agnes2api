@@ -1,0 +1,68 @@
+# Cloudflare Workers 自动构建 + 部署。
+#
+# 🔴 跑的就是文档里那两条命令（`docs/zh/WORKERS.md` / `docs/en/WORKERS.md`）：
+#       npm install
+#       npx wrangler deploy
+#   而 `wrangler.toml` 的 `[build].command = "npm run build"` 会负责
+#   把 Rust 编成 wasm（worker-build）。**不在 workflow 里另写一条构建命令** ——
+#   两处构建步骤早晚会漂，而漂了之后 CI 绿、线上坏。
+#
+# 🔴 与 `.github/workflows/ci.yml`、`docker-publish.yml` 完全解耦：
+# 它只在 push 到 `main`（或手动触发）且 Worker 相关文件变更时跑，
+# 不阻塞 Docker / 原生那条发布线。
+#
+# 需要预先在仓库 secrets 里放两把钥匙：
+#   CF_API_TOKEN      —— 有 Workers Scripts + D1 写权限的 Cloudflare API token
+#   CF_ACCOUNT_ID     —— Cloudflare 账户 ID
+# （D1 的 database_id 以**非敏感配置项**形式写在 wrangler.toml 里，
+#   GATEWAY_TOKEN / ADMIN_TOKEN 是 Worker secrets，由 `wrangler secret put` 单独灌。）
+
+name: worker-deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # 只在 Worker 相关的文件变了才部署 —— Docker / docs 的提交不重发。
+      - "src/worker.rs"
+      - "src/adapters/storage_d1.rs"
+      - "src/adapters/fetcher_cloudflare.rs"
+      - "wrangler.toml"
+      - "package.json"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/worker-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: worker-deploy
+  cancel-in-progress: false   # 🔴 部署中不许被挤掉：半成品 Worker 是坏的。
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # wasm32 target 与 worker-build（后者被 [build].command 经 npm 调用，
+      # 所以它必须在 PATH 上 —— cargo install 默认装到 ~/.cargo/bin，已在 PATH）。
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install worker-build
+        run: cargo install worker-build --locked
+
+      # 文档里的第一条命令。
+      - name: npm install
+        run: npm install
+
+      # 文档里的第二条命令。wrangler 从环境变量读凭据，不需要交互式 login。
+      - name: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: npx wrangler deploy

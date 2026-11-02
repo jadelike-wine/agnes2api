@@ -87,3 +87,31 @@ jobs:
         run: cargo test
       - name: 7/7 构建
         run: cargo build --release
+
+  # ── Worker 形态（Cloudflare Workers / wasm32）的编译门禁 ──────────────────────
+  # 🔴 **单独一个 job，不并进 `lint-and-test`**：那个 job 只跑原生目标，而 wasm 目标
+  #    下那一大片 `cfg(target_arch = "wasm32")` 分支在原生构建里**一行都不会执行** ——
+  #    不专门跑一次，Workers 半边的编译错误会一路带到部署前，而它偏巧是最晚被验证的那一半。
+  #
+  # ⚠️ 这里只做**编译门禁**（check + worker-build）。真正的行为判据在
+  #    `scripts/test_worker.py` 与 `scripts/test_worker_lifecycle.py`（要 Miniflare + 上游替身），
+  #    不在 CI 里跑：它们需要起两个本地进程，塞进 CI 只会得到一个脆弱的测试。
+  worker-wasm-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 工具链同样由 `rust-toolchain.toml` 钉死，这里只加 target。
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+      # `RUSTFLAGS` 而不是 `-- -D warnings`：后者在 `cargo check` 上不转发，
+      # 会得到一个「看起来设了、其实没设」的开关。
+      - name: wasm32 编译检查（警告当错误）
+        env: { RUSTFLAGS: "-D warnings" }
+        run: cargo check --target wasm32-unknown-unknown --features worker
+      # worker-build 是部署链上的真实一步（它校验 worker crate 版本、跑 wasm-opt、
+      # 产出 `build/index.js`）—— 只在本地跑过等于没跑。
+      - name: worker 产物构建
+        run: |
+          cargo install worker-build --locked
+          worker-build --profile wasm-release -- --features worker

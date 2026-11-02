@@ -449,9 +449,7 @@ pub async fn run_round(d: RoundDeps<'_>) -> RoundOutcome {
         )
     };
     let sleep = |ms: i64| -> futures_core::future::BoxFuture<'static, ()> {
-        Box::pin(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(ms.max(0) as u64)).await;
-        })
+        Box::pin(crate::adapters::sleep_ms(ms))
     };
     let rand = crate::adapters::rand_unit;
 
@@ -692,9 +690,7 @@ impl RegistrarRuntime {
 
         let now_fn = || crate::adapters::now_ms();
         let sleep = |ms: i64| -> futures_core::future::BoxFuture<'static, ()> {
-            Box::pin(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(ms.max(0) as u64)).await;
-            })
+            Box::pin(crate::adapters::sleep_ms(ms))
         };
         let logger = Arc::clone(&self.logger);
         let emit = move |e: MailEvent| {
@@ -1088,6 +1084,7 @@ pub fn load(
 /// ② **定时器必须先存在，面板才有东西可触发。** 启动时关着就不起定时器，
 ///    等于「此后怎么从面板打开都没用」；而启动时开着又读死一份快照，
 ///    等于「从面板关也关不掉」。两个方向都得靠重启容器 —— 而面板正是配置的编辑器。
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_scheduler(rt: Arc<RegistrarRuntime>, repo: Arc<crate::pool::repo::KeyPoolRepo>) {
     tokio::spawn(async move {
         // 沿用上一次已知合法的间隔：读存储失败时不许把节奏也一起退化掉。

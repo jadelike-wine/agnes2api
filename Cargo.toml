@@ -16,44 +16,59 @@ publish = false
 [lib]
 name = "agnes2api"
 path = "src/lib.rs"
+# cdylib：wrangler 的 rust 构建约定走 cdylib wasm 产物。
+# rlib 保留给原生构建与测试。
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "agnes2api"
 path = "src/main.rs"
 
+[features]
+default = []
+# Cloudflare Workers 形态。**只在 `wasm32-unknown-unknown` 目标上有意义**：
+# 原生构建不带这个 feature，wasm 目标不带它则拒绝（见 lib.rs 的 compile_error）。
+worker = ["dep:worker", "dep:wasm-bindgen-futures", "dep:wasm-bindgen", "dep:js-sys", "dep:gloo-timers", "dep:serde-wasm-bindgen", "dep:futures-channel"]
+
 [profile.release]
 lto = "thin"
 strip = true
+# Workers 形态下 wasm 体积直接决定冷启动与部署上限。
+opt-level = "s"
+
+# Worker 形态专用（`worker-build --profile wasm-release`）。
+#
+# 🔴 **这里刻意不 strip**：`strip = true` 会把 wasm 的 `target_features` 自定义段
+# 一起剥掉，wasm-bindgen 就读不到「这个模块开了哪些 Wasm 特性」，只能按最小集
+# 生成胶水代码（worker-build 会在这条路径上报警告）。体积交给后面的 `wasm-opt` —
+# 那一步由 worker-build 自动跑，比 strip 更懂 wasm。
+#
+# 原生（Docker）继续用 `release`，`strip = true` 在那里是正确的（Linux 符号表）。
+[profile.wasm-release]
+inherits = "release"
+strip = false
+opt-level = "s"
 
 [dependencies]
 # ── HTTP 面 ────────────────────────────────────────────────────────────────
 # HTTP 框架。对标 kiro2api：**不引 tower-http**，CORS / 限流 / 日志一律手写
 # （手写的那几条中间件各自带判据，tower-http 的行为差异会让那些判据失去对象）。
-axum = "0.8"
-# 运行时。`full` 要的是四样：`#[tokio::main]`、`interval`（后台刷盘）、
-# `spawn_blocking`（同步 fsync 不许占住 async 线程）、`signal`
-# （🔴 SIGTERM 必须处理：容器里本进程常是 PID 1，不处理就会一直等到宽限期被 SIGKILL）。
-tokio = { version = "1", features = ["full"] }
-# 出站客户端。**本轮（P1 骨架）还没有调用点**，留在清单里是因为 P1-a 的
-# `adapters/fetcher_reqwest.rs` 紧接着就要它，且下面三个压缩 feature 的取舍必须
-# 与「出站响应头白名单」同一轮定死（规格 §7 矛盾 7）。
-reqwest = { version = "0.12", default-features = false, features = [
-    # 只 rustls：TLS 指纹对抗是 kiro 对 Kiro 上游风控的对抗，
-    # **在 agnes 侧没有证据**（规格裁定 K），不背 vendored OpenSSL 的 Dockerfile 成本。
-    "rustls-tls",
-    # 流式转发要按块读响应体（「网关不整体缓冲」是一条 🔴 判据）。
-    "stream",
-    "http2",
-    "charset",
-    # 🔴 这三个**必须开**：出站响应头白名单剥掉了 content-encoding / content-length，
-    #    那个白名单成立的前提是「响应体到手时已解压」（TS 的 fetch 就是这个行为）。
-    #    不开就会把压缩字节裸传给客户端。
-    #    ⚠️ 连带代价：开了之后 reqwest 会给**没带** accept-encoding 的请求自动补一个，
-    #       所以客户端工厂里要**显式决定**这件事（规格 §7 矛盾 3）。
-    "gzip",
-    "brotli",
-    "deflate",
+# ⚠️ 默认 feature 全关：axum 默认开 `tokio`，而 `tokio` 默认不带 net/rt，
+# 但 axum 若再启用 `http1/http2` 会牵出 hyper-util 与 mio —— wasm 上编译不过。
+# 我们只用 Router/Service/提取器/Body，这些都不依赖 tokio 的 net。
+axum = { version = "0.8", default-features = false, features = [
+    "json",
+    "query",
+    "matched-path",
+    # `OriginalUri`：管理树是 `nest` 挂的，`uri()` 会被剥前缀；
+    # 日志事件里要完整路径，靠这个扩展。它不依赖 tokio。
+    "original-uri",
 ] }
+# tokio 在 wasm32-unknown-unknown 上能编译的只是一个很小的子集：
+# `sync`（Mutex/OnceCell）、`macros`（select!/pin!）可用；
+# `net`/`signal`/`fs`/`time`/`rt`/`io-util`/`io-std` 全部不可用。
+# 原生形态在下面的 target-specific 段补全 `full`。
+tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
 
 # ── 数据与序列化 ───────────────────────────────────────────────────────────
 # DTO。对外字段名是契约（`#[serde(rename_all = "camelCase")]`）。
@@ -79,12 +94,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 # 业务错误一律自定义枚举 + 手写 `Display`，**不引 thiserror**（对标 kiro）。
 anyhow = "1"
 
-# ── CLI ────────────────────────────────────────────────────────────────────
-# 对标 kiro 的 `cli.rs`，成本≈0。
-# 🔴 `--data-dir` **刻意不设 `default_value`**：有默认值就分不出「用户显式指定」
-#    与「没给」，会把优先级更高的环境变量一起压掉（kiro 踩过，见 03 §3）。
-clap = { version = "4.5", features = ["derive"] }
-
 # ── 并发原语 ───────────────────────────────────────────────────────────────
 # **不跨 await** 的锁（运行期配置快照、日志环、池快照）。跨 await 一律 `tokio::sync`。
 # 这条分界是 kiro 最硬的一条不成文规矩，照抄。
@@ -99,8 +108,9 @@ sha2 = "0.10"
 # 上面那两样的十六进制编解码。**本轮未使用**。
 hex = "0.4"
 # CSPRNG：对外密钥 128 bit、shardId、messageId。🔴 **绝不用非 CSPRNG**。
-# **本轮未使用**（shardId 的消费者是 P1-c 的事件 sink）。
-getrandom = "0.2"
+# `js` feature 只作用于 wasm 目标（走 Web Crypto `getRandomValues`），
+# 原生目标上它是 no-op —— 所以可以无条件开着，两种形态同一个依赖声明。
+getrandom = { version = "0.2", features = ["js"] }
 
 # ── 杂项 ───────────────────────────────────────────────────────────────────
 # 四处：MIME deny-list、`sk-` 脱敏、IPv6 形态校验、视频任务 id。**本轮未使用**。
@@ -135,9 +145,69 @@ rust-embed = { version = "8", features = ["debug-embed"] }
 # 类型写错就是「一份 CSS 不生效」或「图标不显示」。
 mime_guess = "2"
 
-[dev-dependencies]
-# 取 `.oneshot()`：打 `Router` 不开端口（kiro 的测试全靠这个）。
+# tower 的 ServiceExt（`Router::oneshot` / 在 Worker 里手动调 `call`）。
+# Worker 形态把 axum 当纯 Service 用（不走 `axum::serve`），需要 `call`；
+# 而 `.oneshot()` 的便利 trait 也在 `util` 里。
 tower = { version = "0.5", features = ["util"] }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 原生（Docker / 裸机）形态独有依赖。
+# 整个段只作用于 **非 wasm32** 目标，wasm 构建根本看不见它们。
+# ─────────────────────────────────────────────────────────────────────────────
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# 运行时。`full` 要的是四样：`#[tokio::main]`、`interval`（后台刷盘）、
+# `spawn_blocking`（同步 fsync 不许占住 async 线程）、`signal`
+# （🔴 SIGTERM 必须处理：容器里本进程常是 PID 1，不处理就会一直等到宽限期被 SIGKILL）。
+# wasm 上 `full` 里的 `net`/`fs`/`signal`/`time`/`rt` 会拉 mio，直接编译不过，
+# 所以这一份只给原生。共享的 `sync`/`macros` 在上面主段。
+tokio = { version = "1", features = ["full"] }
+# 出站客户端。🔴 **不编进 wasm**：reqwest 0.12 的 wasm 路径只支持 fetch API
+# 且不能给出流式响应体（`stream` feature 在 wasm 上是编译期排除的），
+# 无法满足「SSE 逐块透传」的判据 —— wasm 形态改走 `worker::Fetch`。
+reqwest = { version = "0.12", default-features = false, features = [
+    # 只 rustls：TLS 指纹对抗是 kiro 对 Kiro 上游风控的对抗，
+    # **在 agnes 侧没有证据**（规格裁定 K），不背 vendored OpenSSL 的 Dockerfile 成本。
+    "rustls-tls",
+    # 流式转发要按块读响应体（「网关不整体缓冲」是一条 🔴 判据）。
+    "stream",
+    "http2",
+    "charset",
+    # 🔴 这三个**必须开**：出站响应头白名单剥掉了 content-encoding / content-length，
+    #    那个白名单成立的前提是「响应体到手时已解压」（TS 的 fetch 就是这个行为）。
+    #    不开就会把压缩字节裸传给客户端。
+    #    ⚠️ 连带代价：开了之后 reqwest 会给**没带** accept-encoding 的请求自动补一个，
+    #       所以客户端工厂里要**显式决定**这件事（规格 §7 矛盾 3）。
+    "gzip",
+    "brotli",
+    "deflate",
+] }
+# axum 在原生形态要 `tokio` feature 才暴露 `axum::serve` 与 graceful shutdown。
+axum = { version = "0.8", features = ["tokio"] }
+
+# ── CLI ────────────────────────────────────────────────────────────────────
+# 对标 kiro 的 `cli.rs`，成本≈0。
+# 🔴 `--data-dir` **刻意不设 `default_value`**：有默认值就分不出「用户显式指定」
+#    与「没给」，会把优先级更高的环境变量一起压掉（kiro 踩过，见 03 §3）。
+# Workers 形态没有 argv/文件系统意义上的 data-dir，clap 不编进 wasm。
+clap = { version = "4.5", features = ["derive"] }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloudflare Workers 形态独有依赖。
+# ─────────────────────────────────────────────────────────────────────────────
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# workers-rs：D1 / Fetch / Env / console_log。feature 名在 [features].worker 里引用。
+# `axum` feature 让 `#[event(fetch)]` 直接吃 `axum::Response<axum::body::Body>`；
+# `http` 让我们能在 worker::Request/Response 与 http 类型之间互转。
+worker = { version = "0.8.7", optional = true, features = ["d1", "axum", "http"] }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+# 节流/延时。tokio::time 在 wasm 上不可用，延时一律走 worker 的 JS setTimeout。
+gloo-timers = { version = "0.3", optional = true, features = ["futures"] }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+futures-channel = { version = "0.3", optional = true }
+
+[dev-dependencies]
 # `test-util` 给 `#[tokio::test(start_paused = true)]`：**假时钟必须能往前走**。
 # 用真的 `sleep(8s)` 去测排空窗口，等于给测试套加 8 秒；而把窗口改小到「测得动」
 # 就不再是被测的那个值了 —— 两条都是已登记的假阳性形态。

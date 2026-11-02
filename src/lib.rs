@@ -48,10 +48,16 @@
 // axum 的 handler 错误类型天然较大（错误信封自带 message/params），
 // 统一装箱会把 `Box<...>` 污染进大量签名，而这些类型全部只在错误路径上构造一次。
 #![allow(clippy::result_large_err)]
+// `adapters::sleep_ms` 刻意写 `impl Future + Send` 而不是 `async fn`：
+// Workers（wasm）那支返回 `worker::send::SendFuture`，它包着 `Rc` 的 JS 对象 —
+// 只有「显式声明 `Send`」这个签名能让两种形态共用同一个调用点。
+// `async fn` 的返回类型由函数体决定，给不出那个 bound。
+#![allow(clippy::manual_async_fn)]
 
 pub mod adapters;
 pub mod admin;
 pub mod apikey;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod core;
 pub mod pool;
@@ -63,6 +69,24 @@ pub mod server;
 /// 🔴 **整棵树跟着 `/admin` 一起存在或消失**：没配 `ADMIN_TOKEN` 时这几条路由
 /// **根本不注册** —— 不泄漏「这里有个后台」这条性质在 P2b 里没有被破掉。
 pub mod webui;
+#[cfg(all(target_arch = "wasm32", feature = "worker"))]
+pub mod worker;
+
+// 🔴 两条部署形态在**同一个 crate** 里共存，靠 `target_arch` + feature 切开：
+//
+// | 形态 | target | feature | 入口 | 存储 | 出站 |
+// |---|---|---|---|---|---|
+// | Docker / 裸机 | 非 wasm32 | （默认） | `main.rs` + `server::serve` | `FileStorage`（store.json） | `ReqwestFetcher` |
+// | Cloudflare Workers | wasm32 | `worker` | `worker::fetch` | `D1Storage`（D1 表） | `CfFetcher`（worker::Fetch） |
+//
+// wasm 目标**不带** `worker` feature 时，下面这条直接把构建打停：
+// 半套依赖是编得过的，编过之后会产出一个「没有入口、没有存储」的 wasm，
+// 那比「编不过」更难排障。
+#[cfg(all(target_arch = "wasm32", not(feature = "worker")))]
+compile_error!(
+    "wasm32-unknown-unknown 必须带 `--features worker` 构建；\
+     原生（Docker）构建请直接 `cargo build`（不带该 feature）。"
+);
 
 /// 测试临时目录的统一出口。**不进产物**（`#[cfg(test)]`）。
 ///

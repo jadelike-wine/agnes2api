@@ -47,11 +47,22 @@ pub const CAPABILITIES_SUBPATH: &str = "/capabilities";
 /// 在一个 Rust 网关上报 `"node"` 是一句当场可证伪的假话。⇒ 如实报，文档缺口另行登记。
 pub const RUNTIME_NAME: &str = "rust";
 
-/// 存储后端。今天只有文件一种。
+/// 存储后端。
+///
+/// 🔴 **按目标区分，不许一律报 `"file"`**：Worker 形态落的是 D1
+/// （`adapters::storage_d1`），在面板上写「文件」是一句当场可证伪的假话 ——
+/// 运维照着它去磁盘上找 `store.json` 会找不到。
+#[cfg(not(target_arch = "wasm32"))]
 pub const STORAGE_BACKEND: &str = "file";
+#[cfg(target_arch = "wasm32")]
+pub const STORAGE_BACKEND: &str = "d1";
 
 /// 写配额模型。文件存储**没有**写配额，但每次写都重写整个 `store.json`。
+/// Workers 形态下 D1 有免费层的行写预算（见 `docs/zh/WORKERS.md` 费用一节）。
+#[cfg(not(target_arch = "wasm32"))]
 pub const QUOTA_MODEL: &str = "file";
+#[cfg(target_arch = "wasm32")]
+pub const QUOTA_MODEL: &str = "d1_rows";
 
 /// 进程内日志区。**恒 false，这仍是刻意选择。**
 ///
@@ -367,6 +378,8 @@ mod tests {
         let v: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(v["version"], crate::VERSION);
         assert_eq!(v["runtime"]["name"], "rust");
+        // 原生构建：后端如实报 `"file"`。Worker 构建里这两个常量是 `"d1"` / `"d1_rows"`
+        // （见 `STORAGE_BACKEND` 的注释）；本判据跑在原生侧，所以钉的是原生值。
         assert_eq!(v["storage"]["backend"], "file");
         assert_eq!(v["quota"]["model"], "file");
         assert_eq!(v["logs"]["processLog"], false);
