@@ -60,6 +60,14 @@ AGNES_BASE_URL = "https://agnes.example.com"   # ⚠️ 换成真实上游
 TRUST_PROXY = "false"
 USAGE_STATS_ENABLED = "false"
 
+# ── 部署入口 ────────────────────────────────────────────────────────────────
+# 两个选项（按 wrangler 报错）：① 给 Worker 绑自定义路由（需要域名）；
+# ② 注册 workers.dev 子域（免域名，`https://agnes2api.<ACCOUNT_ID>.workers.dev`）。
+# 这里用 ②：子域在 wrangler.toml 里用 `subdomain` 段声明，wrangler 会在 deploy 时
+# 幂等注册它（已存在则跳过）。要改绑自定义域名，把 `subdomain` 段换成 `routes` 即可：
+# [routes]  # 形如 "https://gw.example.com/*"，需先在 Cloudflare 加好这个 zone。
+subdomain = "agnes2api"
+
 # ── Cron ───────────────────────────────────────────────────────────────────
 # 🔴 **只做 key 池索引对账**，见 `src/worker.rs::scheduled` —— 绝不补池、
 # 不跑注册机。30 分钟一轮（D1 免费层查询预算友好；需要更密可自行调）。
