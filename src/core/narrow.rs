@@ -59,13 +59,14 @@ fn js_truthy(v: &Value) -> bool {
 
 /// `key:<id>` 一条记录的窄化。
 ///
-/// # 丢整条的条件：**只有 `id` 与 `key` 两格**
+/// # 丢整条的条件：身份缺失或显式上游线路非法
 ///
 /// 这两格缺一不可：没有 `id` 就没法指认它，没有 `key` 就没有可以拿去用的材料。
 /// 丢掉它留下的是一个**幽灵索引项** —— 01 §4.0 明写这是 fail-safe 状态
 /// （读到 `None` 被过滤掉，对账以 `list()` 为准）。
 ///
-/// 🔴 **其余每一格都只降级、不丢整条。** 理由是这条路径的失败形态很硬：
+/// 显式上游线路非法时丢整条，避免把凭据发到错误的服务。
+/// 🔴 **其余展示和统计字段都只降级、不丢整条。** 理由是这条路径的失败形态很硬：
 /// 丢一条记录 = 一把**在存储里好端端躺着的 key 从池子里消失**，
 /// 而池子空了会让整个网关 503。**为了一格坏掉的 `added_at` 付这个代价是荒唐的。**
 ///
@@ -74,6 +75,7 @@ fn js_truthy(v: &Value) -> bool {
 /// | 字段 | 坏了怎么办 | 为什么是这个方向 |
 /// |---|---|---|
 /// | `id` / `key` | **丢整条** | 见上 |
+/// | `upstream` | 缺席时使用默认；在场但非法则丢整条 | 防止跨服务误发凭据 |
 /// | `disabled` | **真值性**（不是 `false`/`0`/`""` 就当**停用**） | 安全开关：读不懂就当停用是安全的那一侧 |
 /// | `evicted` | **真值性** | 与 `disabled` 同一条 JS 语义。⚠️ 代价明写：一格脏数据把 key 判成 evicted 会**让出一个 `target_keys` 名额**，而那意味着补池会去真的建一个号。这条不对称如实登记，方向仍按 TS 逐字 |
 /// | `cooldown_until` | **0**（= 不在冷却） | 反方向（当成永久冷却）会让一格脏数据**把 key 永久移出池子**；判成 0 最坏是多打一次上游、当场重新进冷却，**自愈** |
@@ -97,6 +99,11 @@ pub fn narrow_key_record(raw: &Value) -> Option<KeyRecord> {
     Some(KeyRecord {
         id: id.to_string(),
         key: key.to_string(),
+        // 缺席兼容旧记录；在场但非法时不允许悄悄回退并跨服务发送凭据。
+        upstream: match o.get("upstream") {
+            None => None,
+            Some(value) => Some(crate::core::types::KeyUpstream::parse(value.as_str()?)?),
+        },
         added_at: int_or(o.get("addedAt"), 0),
         last_used_at: opt_int(o.get("lastUsedAt")),
         cooldown_until: int_or(o.get("cooldownUntil"), 0),
@@ -194,6 +201,27 @@ fn opt_str(v: Option<&Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upstream_selection_survives_storage_reload() {
+        for route in ["international", "internationalBackup", "china"] {
+            let raw = serde_json::json!({"id":"id", "key":"sk-route", "upstream":route});
+            let rec = narrow_key_record(&raw).unwrap();
+            assert_eq!(serde_json::to_value(rec).unwrap()["upstream"], route);
+        }
+    }
+
+    #[test]
+    fn upstream_selection_rejects_malformed_stored_destinations() {
+        for route in [
+            serde_json::json!("unknown"),
+            serde_json::json!(42),
+            serde_json::json!(""),
+        ] {
+            let raw = serde_json::json!({"id":"id", "key":"sk-route", "upstream":route});
+            assert!(narrow_key_record(&raw).is_none());
+        }
+    }
+
     use super::*;
     use crate::core::keypool::{is_available, is_disabled};
     use crate::core::types::{KeyRecord, KeyStats};
@@ -230,6 +258,7 @@ mod tests {
         const COVERED: &[&str] = &[
             "id",
             "key",
+            "upstream",
             "addedAt",
             "lastUsedAt",
             "cooldownUntil",
@@ -245,6 +274,7 @@ mod tests {
         ];
         // 一条**每一格都在场**的记录：`skip_serializing_if` 才不会把可选那三格藏起来。
         let full = KeyRecord {
+            upstream: Some(crate::core::types::KeyUpstream::International),
             stats: Some(KeyStats::empty()),
             disabled: Some(false),
             note: Some(String::new()),

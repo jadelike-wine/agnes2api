@@ -97,6 +97,7 @@ pub struct KeyView {
     pub id: String,
     /// 掩码。🔴 **这个结构永不含明文。**
     pub masked: String,
+    pub upstream: Option<crate::core::types::KeyUpstream>,
     /// 面板上的行号。按 `added_at` 升序、`id` 破平。**它随增删而变，不是身份。**
     pub seq: usize,
     pub bucket: Bucket,
@@ -139,6 +140,7 @@ pub fn to_key_views(records: &[KeyRecord], now: i64) -> Vec<KeyView> {
         .map(|(i, r)| KeyView {
             id: r.id.clone(),
             masked: mask_key(&r.key),
+            upstream: r.upstream,
             seq: i + 1,
             bucket: key_bucket(r, now),
             added_at: r.added_at,

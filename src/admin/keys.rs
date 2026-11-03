@@ -61,7 +61,7 @@ use crate::core::keys::view::{
 };
 use crate::core::pool_index::{KEY_PREFIX, POOL_INDEX_KEY, make_pool_index, same_id_set};
 use crate::core::stats::stats_or_empty;
-use crate::core::types::{KeyRecord, KeyStats};
+use crate::core::types::{KeyRecord, KeyStats, KeyUpstream};
 use crate::ports::fetcher::{FetchError, OutboundRequest};
 use crate::ports::logger::{LogEntry, LogLevel};
 use crate::ports::storage::Storage;
@@ -460,6 +460,7 @@ async fn add_many(
     st: &AppState,
     keys: &[String],
     reset_existing: bool,
+    upstream: Option<KeyUpstream>,
     now: i64,
 ) -> Result<ImportOutcome, Response> {
     let idx = read_index(&st.storage).await;
@@ -509,7 +510,10 @@ async fn add_many(
         match read_record(&st.storage, &id).await? {
             None => {
                 out.added.push(id.clone());
-                let rec = KeyRecord::fresh(&id, key, now);
+                let rec = KeyRecord {
+                    upstream,
+                    ..KeyRecord::fresh(&id, key, now)
+                };
                 st.repo
                     .save(&rec, None, now)
                     .await
@@ -1164,7 +1168,7 @@ pub async fn import(State(st): State<AppState>, body: Bytes) -> Response {
         Ok(o) => o,
         Err(e) => return e.into_response(),
     };
-    if let Err(e) = reject_unknown(&o, &["keys", "resetExisting"]) {
+    if let Err(e) = reject_unknown(&o, &["keys", "resetExisting", "upstream"]) {
         return e.into_response();
     }
     let keys = match string_array(
@@ -1190,7 +1194,22 @@ pub async fn import(State(st): State<AppState>, body: Bytes) -> Response {
         Err(e) => return e.into_response(),
     };
 
-    let out = match add_many(&st, &keys, reset_existing, now).await {
+    let upstream = match o.get("upstream") {
+        None | Some(Value::Null) => Some(KeyUpstream::International),
+        Some(value) => match value.as_str().and_then(KeyUpstream::parse) {
+            Some(route) => Some(route),
+            None => {
+                return AdminError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request_error",
+                    AdminErrorCode::InvalidUpstream,
+                    "请选择国际站、国际站备用或中国站上游",
+                )
+                .into_response();
+            }
+        },
+    };
+    let out = match add_many(&st, &keys, reset_existing, upstream, now).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -1799,7 +1818,11 @@ pub async fn verify(State(st): State<AppState>, Path(id): Path<String>, body: By
     let sample = proto.sample(MODEL_CATALOG[0].id);
     let req = OutboundRequest {
         method: proto.method.to_string(),
-        url: format!("{}{}", cfg.agnes_base_url, proto.upstream_path),
+        url: format!(
+            "{}{}",
+            rec.upstream_base_url(&cfg.agnes_base_url),
+            proto.upstream_path
+        ),
         headers: vec![
             (
                 header::CONTENT_TYPE.as_str().to_string(),
@@ -2404,6 +2427,86 @@ mod tests {
     /// 导入的三个数组 + `reset`：形状与口径逐条钉住。
     ///
     /// 🔴 `invalid` 装的是**输入里的位置**（1 基），**不是明文、也不是掩码**。
+    #[tokio::test]
+    async fn upstream_selection_invalid_imports_never_write() {
+        let counting = Arc::new(CountingStorage::new(Arc::new(MemoryStorage::new())));
+        let counts = counting.counts.clone();
+        let h = harness_with(counting, None).await;
+        for route in [
+            json!("unknown"),
+            json!(42),
+            json!("https://other.example/v1"),
+        ] {
+            let before = counts.snapshot();
+            let body = json!({"keys":["sk-invalid-upstream-aaaa"], "upstream":route}).to_string();
+            let (status, response) = post(&h, "/admin/api/keys", &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(response["error"]["code"], "invalid_upstream");
+            assert_eq!(counts.snapshot().1, before.1);
+        }
+    }
+
+    #[tokio::test]
+    async fn upstream_selection_defaults_to_international_and_preserves_duplicates() {
+        let h = harness().await;
+        for (i, selector) in [None, Some(Value::Null)].into_iter().enumerate() {
+            let key = format!("sk-upstream-default-{i}-aaaa");
+            let mut body = json!({"keys":[key]});
+            if let Some(selector) = selector {
+                body["upstream"] = selector;
+            }
+            let (status, response) = post(&h, "/admin/api/keys", &body.to_string()).await;
+            assert_eq!(status, StatusCode::OK);
+            let id = response["added"][0].as_str().unwrap();
+            for reset in [false, true] {
+                let body =
+                    json!({"keys":[key],"upstream":"china","resetExisting":reset}).to_string();
+                let (status, _) = post(&h, "/admin/api/keys", &body).await;
+                assert_eq!(status, StatusCode::OK);
+                let raw = h
+                    .state
+                    .storage
+                    .get(&format!("key:{id}"))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(raw["upstream"], "international");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn upstream_selection_is_saved_and_listed_for_each_import() {
+        let h = harness().await;
+        for (i, route) in ["international", "internationalBackup", "china"]
+            .iter()
+            .enumerate()
+        {
+            let key = format!("sk-test-upstream-route-{i}-aaaa");
+            let body = serde_json::json!({"keys":[key], "upstream":route}).to_string();
+            let (status, imported) = post(&h, "/admin/api/keys", &body).await;
+            assert_eq!(status, StatusCode::OK, "{imported}");
+            let id = imported["added"][0].as_str().unwrap();
+            let raw = h
+                .state
+                .storage
+                .get(&format!("key:{id}"))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(raw["upstream"], *route);
+            let (_, listed) = get(&h, "/admin/api/keys").await;
+            let item = listed["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == id)
+                .unwrap();
+            assert_eq!(item["upstream"], *route);
+            assert!(!listed.to_string().contains(&key));
+        }
+    }
+
     #[tokio::test]
     async fn import_reports_added_duplicated_and_positions_of_invalid_lines() {
         let h = harness().await;
@@ -3521,6 +3624,32 @@ mod tests {
     ///
     /// 回归对象（TS 版的真缺陷）：只读一遍域名列表就报绿 ⇒
     /// **凭据粘错时照样报绿**。观测量是「出站请求里那个 `Authorization` 头」。
+    #[tokio::test]
+    async fn upstream_probe_uses_each_keys_selected_service() {
+        for (route, base) in [
+            ("international", "https://apihub.agnes-ai.com/v1"),
+            ("internationalBackup", "https://apihub.agnes-ai.cn/v1"),
+            ("china", "https://api.agnes-ai.cn/v1"),
+        ] {
+            let (h, fetcher, _) = verify_harness(vec![UpstreamReply::json(json!({"ok":1}))]).await;
+            let key = format!("sk-verify-service-{route}-aaaa");
+            let body = json!({"keys":[key],"upstream":route}).to_string();
+            let (status, response) = post(&h, "/admin/api/keys", &body).await;
+            assert_eq!(status, StatusCode::OK);
+            let id = response["added"][0].as_str().unwrap();
+            let (status, response) = post(&h, &format!("/admin/api/keys/{id}/verify"), "").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(response["ok"], true);
+            let sent = fetcher.only();
+            assert_eq!(sent.url, format!("{base}/chat/completions"));
+            assert!(
+                sent.headers
+                    .iter()
+                    .any(|(k, v)| k == "authorization" && v == &format!("Bearer {key}"))
+            );
+        }
+    }
+
     #[tokio::test]
     async fn verify_really_calls_upstream_with_that_key() {
         let (h, fetcher, _) = verify_harness(vec![UpstreamReply::json(json!({ "ok": 1 }))]).await;

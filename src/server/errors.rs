@@ -208,6 +208,7 @@ pub enum AdminErrorCode {
     EmptyPatch,
     KeysNotAStringArray,
     TooManyImportKeys,
+    InvalidUpstream,
     NotABulkOp,
     IdsNotAStringArray,
     TooManyBulkIds,
@@ -239,6 +240,7 @@ impl AdminErrorCode {
         Self::EmptyPatch,
         Self::KeysNotAStringArray,
         Self::TooManyImportKeys,
+        Self::InvalidUpstream,
         Self::NotABulkOp,
         Self::IdsNotAStringArray,
         Self::TooManyBulkIds,
@@ -269,6 +271,7 @@ impl AdminErrorCode {
             Self::EmptyPatch => "empty_patch",
             Self::KeysNotAStringArray => "keys_not_a_string_array",
             Self::TooManyImportKeys => "too_many_import_keys",
+            Self::InvalidUpstream => "invalid_upstream",
             Self::NotABulkOp => "not_a_bulk_op",
             Self::IdsNotAStringArray => "ids_not_a_string_array",
             Self::TooManyBulkIds => "too_many_bulk_ids",
@@ -579,11 +582,11 @@ mod tests {
     /// 管理码表是 26 条，期望值手写。
     ///
     /// ⚠️ 规格 §4.2 的枚举里写的是「25 条」，**一手数下来是 26 条**
-    /// （那一行把 `apikeys_unreadable` 漏在了计数外）。以这里为准，
+    /// （那一行把 `apikeys_unreadable` 漏在了计数外）；上游选择增加 `invalid_upstream` 后是 27 条。以这里为准，
     /// 并把这条差异登记进移植说明。
     #[test]
     fn admin_code_table_size_is_pinned() {
-        assert_eq!(AdminErrorCode::ALL.len(), 26);
+        assert_eq!(AdminErrorCode::ALL.len(), 27);
     }
 
     /// 管理码的线格式串两两不重。

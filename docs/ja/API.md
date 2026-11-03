@@ -775,6 +775,9 @@ key の一括インポート。返る三つの配列はそれぞれ id、id、**
 |----------|----|----|----|
 | `keys` | array | はい | 文字列の配列；要素の型が違うとリクエスト全体が `400` で、`invalid` には入りません。 |
 | `resetExisting` | boolean | いいえ | 有効にすると既存 key のクールダウン・strikes・排除マークを消します。既定は `false`。 |
+| `upstream` | string | いいえ | `international`、`internationalBackup`、`china` のいずれかで、今回追加する全 key に適用します。省略または `null` の場合は `international` となり、新規 key には明示的な上流設定を保存します。重複 key は `resetExisting` が有効でも既存の上流設定を保持します。他の値は `400 invalid_upstream` を返します。 |
+
+`international` → `https://apihub.agnes-ai.com/v1`; `internationalBackup` → `https://apihub.agnes-ai.cn/v1`; `china` → `https://api.agnes-ai.cn/v1`.
 
 **リクエスト**：
 

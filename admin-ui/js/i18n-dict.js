@@ -1018,6 +1018,48 @@ export const I18N =
     "ja": "key を少なくとも 1 つ貼り付けてください。",
     "ko": "key를 적어도 하나는 붙여넣으세요."
   },
+  "keys.upstream.label": {
+    "zh-CN": "上游服务",
+    "zh-TW": "上游服務",
+    "en": "Upstream service",
+    "ja": "上流サービス",
+    "ko": "업스트림 서비스"
+  },
+  "keys.upstream.international": {
+    "zh-CN": "国际站",
+    "zh-TW": "國際站",
+    "en": "International",
+    "ja": "国際版",
+    "ko": "국제 서비스"
+  },
+  "keys.upstream.internationalBackup": {
+    "zh-CN": "国际站备用",
+    "zh-TW": "國際站備用",
+    "en": "International backup",
+    "ja": "国際版（予備）",
+    "ko": "국제 서비스 예비"
+  },
+  "keys.upstream.china": {
+    "zh-CN": "国内站",
+    "zh-TW": "國內站",
+    "en": "China",
+    "ja": "中国版",
+    "ko": "중국 서비스"
+  },
+  "keys.upstream.importHint": {
+    "zh-CN": "本批新增账号使用所选上游；重复账号保留原上游。",
+    "zh-TW": "本批新增帳號使用所選上游；重複帳號保留原上游。",
+    "en": "New accounts in this batch use the selected upstream; duplicates keep their existing upstream.",
+    "ja": "今回追加するアカウントは選択した上流サービスを使用し、重複するアカウントは既存の設定を保持します。",
+    "ko": "이번에 추가되는 계정은 선택한 업스트림을 사용하며, 중복 계정은 기존 설정을 유지합니다."
+  },
+  "keys.upstream.invalid": {
+    "zh-CN": "请选择有效的上游服务。",
+    "zh-TW": "請選擇有效的上游服務。",
+    "en": "Select a valid upstream service.",
+    "ja": "有効な上流サービスを選択してください。",
+    "ko": "유효한 업스트림 서비스를 선택하세요."
+  },
   "keys.import.label": {
     "zh-CN": "每行一把 key",
     "zh-TW": "每行一把 key",

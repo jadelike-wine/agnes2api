@@ -768,6 +768,9 @@ curl "http://localhost:8080/admin/api/keys?bucket=fresh&page=1&size=20" \
 |----|----|----|----|
 | `keys` | array | 是 | 字符串数组；元素类型不对时整体 `400`，不算进 `invalid`。 |
 | `resetExisting` | boolean | 否 | 勾选后会清掉已存在 key 的冷却、strikes 与剔除标记，默认 `false`。 |
+| `upstream` | string | 否 | `international`、`internationalBackup` 或 `china`，本批新增 key 共用。省略或 `null` 时默认 `international`；新导入 key 均保存明确的上游选项。重复 key 保留原上游，即使启用 `resetExisting` 也不变。其他值返回 `400 invalid_upstream`。 |
+
+`international` → `https://apihub.agnes-ai.com/v1`; `internationalBackup` → `https://apihub.agnes-ai.cn/v1`; `china` → `https://api.agnes-ai.cn/v1`.
 
 **请求**：
 

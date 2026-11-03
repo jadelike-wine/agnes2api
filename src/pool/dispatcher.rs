@@ -688,7 +688,7 @@ async fn dispatch_inner(deps: &DispatchDeps<'_>, args: DispatchArgs) -> Dispatch
         mask_as_tried(&mut selectable[slot]);
 
         // c. 发请求。
-        let req = build_request(deps.config, &args, &records[slot].key, timeout_ms);
+        let req = build_request(deps.config, &args, &records[slot], timeout_ms);
         let sent = deps.fetcher.send(req).await;
 
         let res = match sent {
@@ -856,10 +856,13 @@ async fn dispatch_inner(deps: &DispatchDeps<'_>, args: DispatchArgs) -> Dispatch
 fn build_request(
     cfg: &GatewayConfig,
     args: &DispatchArgs,
-    key: &str,
+    record: &KeyRecord,
     timeout_ms: i64,
 ) -> OutboundRequest {
-    let mut headers = vec![("authorization".to_string(), format!("Bearer {key}"))];
+    let mut headers = vec![(
+        "authorization".to_string(),
+        format!("Bearer {}", record.key),
+    )];
     // ⚠️ GET **不带 content-type**：带了会让某些上游按有正文处理。
     if args.method == Method::Post {
         headers.insert(
@@ -869,7 +872,11 @@ fn build_request(
     }
     OutboundRequest {
         method: args.method.as_str().to_string(),
-        url: format!("{}{}", cfg.agnes_base_url, args.path),
+        url: format!(
+            "{}{}",
+            record.upstream_base_url(&cfg.agnes_base_url),
+            args.path
+        ),
         headers,
         body: args
             .body
@@ -1555,6 +1562,89 @@ mod tests {
     }
 
     /// 成功路径：上游 200 ⇒ 原样搬运，并且**发出去的是 `Bearer <key>`**。
+    #[tokio::test]
+    async fn upstream_dispatch_keeps_credentials_with_their_service_during_failover() {
+        let repo = pool(&["sk-first", "sk-second"]).await;
+        for mut record in repo.all(0).await.unwrap() {
+            let first = record.key == "sk-first";
+            record.upstream = Some(if first {
+                crate::core::types::KeyUpstream::International
+            } else {
+                crate::core::types::KeyUpstream::China
+            });
+            record.priority = if first { 0 } else { 1 };
+            repo.save(&record, None, 0).await.unwrap();
+        }
+        let f = fake(vec![
+            Step::Reply {
+                status: 401,
+                headers: vec![],
+                body: "invalid",
+            },
+            Step::Reply {
+                status: 200,
+                headers: vec![("content-type".into(), "application/json".into())],
+                body: r#"{"ok":true}"#,
+            },
+        ]);
+        let h = Harness::new();
+        let out = dispatch(&h.deps(&repo, f.as_ref(), LbMode::Priority), args(false)).await;
+        assert!(matches!(out, Dispatched::Ok { .. }));
+        let requests = f.seen.lock();
+        assert_eq!(requests.len(), 2);
+        for (request, (url, token)) in requests.iter().zip([
+            (
+                "https://apihub.agnes-ai.com/v1/chat/completions",
+                "Bearer sk-first",
+            ),
+            (
+                "https://api.agnes-ai.cn/v1/chat/completions",
+                "Bearer sk-second",
+            ),
+        ]) {
+            assert_eq!(request.url, url);
+            assert!(
+                request
+                    .headers
+                    .iter()
+                    .any(|(k, v)| k == "authorization" && v == token)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn upstream_dispatch_uses_the_selected_keys_service() {
+        for (route, base) in [
+            ("international", "https://apihub.agnes-ai.com/v1"),
+            ("internationalBackup", "https://apihub.agnes-ai.cn/v1"),
+            ("china", "https://api.agnes-ai.cn/v1"),
+        ] {
+            let repo = pool(&["sk-one"]).await;
+            let record = repo.all(0).await.unwrap().remove(0);
+            let mut raw = serde_json::to_value(&record).unwrap();
+            raw["upstream"] = json!(route);
+            let selected = crate::core::narrow::narrow_key_record(&raw).unwrap();
+            repo.save(&selected, None, 0).await.unwrap();
+            let f = fake(vec![Step::Reply {
+                status: 200,
+                headers: vec![("content-type".into(), "application/json".into())],
+                body: r#"{"ok":true}"#,
+            }]);
+            let mut h = Harness::new();
+            h.cfg.agnes_base_url = "https://global.example/v1".into();
+            let out = dispatch(&h.deps(&repo, f.as_ref(), LbMode::Balanced), args(false)).await;
+            assert!(matches!(out, Dispatched::Ok { .. }));
+            let requests = f.seen.lock();
+            assert_eq!(requests[0].url, format!("{base}/chat/completions"));
+            assert!(
+                requests[0]
+                    .headers
+                    .iter()
+                    .any(|(k, v)| k == "authorization" && v == "Bearer sk-one")
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_successful_call_carries_the_selected_key_and_passes_the_body_through() {
         let repo = pool(&["sk-one"]).await;

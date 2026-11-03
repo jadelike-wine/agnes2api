@@ -325,7 +325,10 @@ pub async fn upstream_models_with(
         .fetcher
         .send(OutboundRequest {
             method: "GET".to_string(),
-            url: format!("{}{UPSTREAM_MODELS_UPSTREAM_PATH}", cfg.agnes_base_url),
+            url: format!(
+                "{}{UPSTREAM_MODELS_UPSTREAM_PATH}",
+                picked.upstream_base_url(&cfg.agnes_base_url)
+            ),
             // ⚠️ 只带 `Authorization`：GET 没有请求体，`content-type` 是一句空话。
             headers: vec![(
                 header::AUTHORIZATION.as_str().to_string(),
@@ -668,6 +671,52 @@ mod tests {
             sent.headers
         );
         assert!(sent.body.is_none(), "GET 不带请求体");
+    }
+
+    #[tokio::test]
+    async fn upstream_models_routes_the_selected_key_to_its_upstream() {
+        for (selector, base) in [
+            (
+                Some("international"),
+                Some("https://apihub.agnes-ai.com/v1"),
+            ),
+            (
+                Some("internationalBackup"),
+                Some("https://apihub.agnes-ai.cn/v1"),
+            ),
+            (Some("china"), Some("https://api.agnes-ai.cn/v1")),
+            (None, None),
+        ] {
+            let (mut state, fetcher) =
+                app_with(vec![UpstreamReply::json(json!({ "data": [] }))]).await;
+            let mut config = state.config.current().as_ref().clone();
+            config.agnes_base_url = "https://legacy.example/v1".into();
+            state.config = Arc::new(crate::server::holders::config_holder::ConfigHolder::fixed(
+                config,
+            ));
+            let prev = state.repo.all(1_000).await.unwrap().pop().unwrap();
+            let mut raw = serde_json::to_value(&prev).unwrap();
+            if let Some(selector) = selector {
+                raw["upstream"] = json!(selector);
+            }
+            let record = crate::core::narrow::narrow_key_record(&raw).unwrap();
+            state.repo.save(&record, Some(&prev), 1_000).await.unwrap();
+            let result = call(&state, &ProbeGuard::new()).await;
+            assert_eq!(result["ok"], json!(true));
+            let sent = fetcher.only();
+            let cfg = state.config.current();
+            assert_eq!(
+                sent.url,
+                format!("{}/models", base.unwrap_or(&cfg.agnes_base_url)),
+                "selector: {selector:?}"
+            );
+            assert!(
+                sent.headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                        && value == &format!("Bearer {KEY}"))
+            );
+        }
     }
 
     /// 上游非 2xx ⇒ **200** + `upstream_error` + 真实状态码。

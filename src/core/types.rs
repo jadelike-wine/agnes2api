@@ -63,6 +63,34 @@ impl Default for KeyStats {
     }
 }
 
+/// Key 所属的固定上游线路；不接受任意 URL，避免把凭据发往未知服务。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyUpstream {
+    International,
+    InternationalBackup,
+    China,
+}
+
+impl KeyUpstream {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "international" => Some(Self::International),
+            "internationalBackup" => Some(Self::InternationalBackup),
+            "china" => Some(Self::China),
+            _ => None,
+        }
+    }
+
+    pub const fn base_url(self) -> &'static str {
+        match self {
+            Self::International => "https://apihub.agnes-ai.com/v1",
+            Self::InternationalBackup => "https://apihub.agnes-ai.cn/v1",
+            Self::China => "https://api.agnes-ai.cn/v1",
+        }
+    }
+}
+
 /// 一把上游 key 的持久化形态（存储键 `key:<id>`，`types.ts:18-52`）。
 ///
 /// # 🔴 `disabled` 与 `evicted` 语义分离，不许合并（`types.ts:31-40`）
@@ -92,6 +120,9 @@ pub struct KeyRecord {
     /// **明文**。要拿去拼 `authorization: Bearer <key>`，所以必须存。
     /// 🔴 它**永不进** [`crate::core::keys::view::KeyView`]、永不进日志、永不进事件。
     pub key: String,
+    /// 缺席表示沿用全局上游，兼容存量记录及旧版导入客户端。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<KeyUpstream>,
     pub added_at: i64,
     pub last_used_at: Option<i64>,
     /// `0` = 不在冷却。
@@ -134,6 +165,13 @@ pub struct KeyRecord {
 }
 
 impl KeyRecord {
+    pub fn upstream_base_url<'a>(&self, fallback: &'a str) -> &'a str {
+        match self.upstream {
+            Some(upstream) => upstream.base_url(),
+            None => fallback,
+        }
+    }
+
     /// 一条「刚导入 / 刚铸出来」的干净记录。
     ///
     /// 三个可选字段一律**缺席**（不是 `Some(false)` / `Some("")`）：新记录与存量记录在
@@ -142,6 +180,7 @@ impl KeyRecord {
         Self {
             id: id.into(),
             key: key.into(),
+            upstream: None,
             added_at: now,
             last_used_at: None,
             cooldown_until: 0,

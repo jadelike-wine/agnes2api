@@ -96,6 +96,18 @@ const BUCKET_OPTIONS = [
   { value: "disabled", labelKey: "keys.bucket.disabled" },
 ];
 
+/** 导入时显式选择上游；一批新账号使用同一个选项。 */
+const UPSTREAM_OPTIONS = [
+  { value: "international", labelKey: "keys.upstream.international", domain: "apihub.agnes-ai.com" },
+  { value: "internationalBackup", labelKey: "keys.upstream.internationalBackup", domain: "apihub.agnes-ai.cn" },
+  { value: "china", labelKey: "keys.upstream.china", domain: "api.agnes-ai.cn" },
+];
+
+function upstreamText(upstream) {
+  const option = UPSTREAM_OPTIONS.find((o) => o.value === upstream);
+  return option ? `${t(option.labelKey)} · ${option.domain}` : "—";
+}
+
 /** 自动刷新档位（秒）。`0` = 关。 */
 const AUTO_SECONDS = [0, 10, 30, 60];
 
@@ -523,6 +535,7 @@ function accountRow(item, rv, generatedAt) {
   info.appendChild(idline);
 
   const meta = el("div", { class: "account-row-meta" });
+  meta.appendChild(el("span", null, `${t("keys.upstream.label")}: ${upstreamText(item.upstream)}`));
   meta.appendChild(el("span", null, t("keys.meta.added", { when: fmtInstant(item.addedAt) })));
   meta.appendChild(el(
     "span", null,
@@ -847,6 +860,7 @@ function restartAuto() {
 /** 后端信封里那句人话。**取不到就说一句我们自己的**，不把异常对象印上屏幕。 */
 function errorText(e) {
   const body = e && typeof e.body === "object" && e.body !== null ? e.body : null;
+  if (body && body.error && body.error.code === "invalid_upstream") return t("keys.upstream.invalid");
   const msg = body && body.error && typeof body.error.message === "string" ? body.error.message : "";
   return msg === "" ? t("keys.actionFailedGeneric") : t("keys.actionFailed", { message: msg });
 }
@@ -969,6 +983,16 @@ function runBulkWithConfirm(op) {
  */
 function openImport() {
   const body = el("div");
+  const upstreamGroup = el("div", { class: "form-group" });
+  upstreamGroup.appendChild(elI18n("label", "keys.upstream.label", { class: "form-label", for: "acctImportUpstream" }));
+  const upstream = el("select", { id: "acctImportUpstream", class: "form-control" });
+  for (const option of UPSTREAM_OPTIONS) {
+    upstream.appendChild(el("option", { value: option.value }, upstreamText(option.value)));
+  }
+  upstream.value = "international";
+  upstreamGroup.appendChild(upstream);
+  upstreamGroup.appendChild(elI18n("div", "keys.upstream.importHint", { class: "form-hint" }));
+  body.appendChild(upstreamGroup);
   const group = el("div", { class: "form-group" });
   group.appendChild(elI18n("label", "keys.import.label", { class: "form-label", for: "acctImportInput" }));
   const ta = el("textarea", {
@@ -996,7 +1020,7 @@ function openImport() {
       onClick: (close) => {
         const lines = ta.value === "" ? [] : ta.value.split(/\r\n|\r|\n/);
         if (!lines.some((l) => l.trim() !== "")) { toast(t("keys.import.empty"), "warn"); return; }
-        api.post("/keys", { keys: lines, resetExisting: reset.checked })
+        api.post("/keys", { keys: lines, resetExisting: reset.checked, upstream: upstream.value })
           .then((res) => {
             const counts = {
               added: (res.added || []).length,

@@ -147,6 +147,7 @@ pub const MAY_ELIDE_FIELDS: [&str; 2] = ["last_used_at", "stats"];
 pub fn only_elidable_changed(a: &KeyRecord, b: &KeyRecord) -> bool {
     a.id == b.id
         && a.key == b.key
+        && a.upstream == b.upstream
         && a.cooldown_until == b.cooldown_until
         && a.cooldown_reason == b.cooldown_reason
         && a.strikes == b.strikes
@@ -1371,19 +1372,24 @@ mod tests {
     fn every_key_record_field_is_either_compared_or_explicitly_elidable() {
         // 一条**每一格都在场**的记录：`skip_serializing_if` 才不会把可选那三格藏起来。
         let base = KeyRecord {
+            upstream: Some(crate::core::types::KeyUpstream::International),
             stats: Some(KeyStats::empty()),
             disabled: Some(false),
             note: Some(String::new()),
             ..KeyRecord::fresh("id0", "sk-plain", 1_000)
         };
         // 每个字段一个「**只改这一格**」的构造器。键名是 serde 名，好与序列化结果对账。
-        let cases: [(&str, Mutator); 14] = [
+        let cases: [(&str, Mutator); 15] = [
             ("id", |r| KeyRecord {
                 id: format!("{}x", r.id),
                 ..r.clone()
             }),
             ("key", |r| KeyRecord {
                 key: format!("{}x", r.key),
+                ..r.clone()
+            }),
+            ("upstream", |r| KeyRecord {
+                upstream: Some(crate::core::types::KeyUpstream::China),
                 ..r.clone()
             }),
             ("addedAt", |r| KeyRecord {

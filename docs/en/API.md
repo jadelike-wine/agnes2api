@@ -771,6 +771,9 @@ Bulk key import. The three returned arrays hold ids, ids and **positions in your
 |---------|----|--------|-----------|
 | `keys` | array | Yes | An array of strings; a wrong element type is a whole-request `400`, not an `invalid` entry. |
 | `resetExisting` | boolean | No | When set, clears cooldown, strikes and the eviction mark on keys that already existed; defaults to `false`. |
+| `upstream` | string | No | `international`, `internationalBackup`, or `china`; applies to all newly added keys in this batch. Omitted or `null` defaults to `international`; newly imported keys store an explicit upstream. Duplicates retain their existing upstream, even with `resetExisting`. Other values return `400 invalid_upstream`. |
+
+`international` → `https://apihub.agnes-ai.com/v1`; `internationalBackup` → `https://apihub.agnes-ai.cn/v1`; `china` → `https://api.agnes-ai.cn/v1`.
 
 **Request**:
 

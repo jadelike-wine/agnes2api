@@ -775,6 +775,9 @@ key 일괄 가져오기. 돌아오는 세 배열은 각각 id, id, 그리고 **�
 |--------|----|----|----|
 | `keys` | array | 예 | 문자열 배열; 원소 타입이 틀리면 요청 전체가 `400`이고 `invalid`에는 들어가지 않습니다. |
 | `resetExisting` | boolean | 아니오 | 켜면 이미 있던 key의 쿨다운·strikes·제거 표시를 지웁니다. 기본값은 `false`. |
+| `upstream` | string | 아니오 | `international`, `internationalBackup`, `china` 중 하나이며 이번에 추가되는 모든 key에 적용됩니다. 생략하거나 `null`이면 `international`이 기본값이며, 새 key에는 명시적인 업스트림 설정을 저장합니다. 중복 key는 `resetExisting`을 켜도 기존 업스트림을 유지합니다. 다른 값은 `400 invalid_upstream`을 반환합니다. |
+
+`international` → `https://apihub.agnes-ai.com/v1`; `internationalBackup` → `https://apihub.agnes-ai.cn/v1`; `china` → `https://api.agnes-ai.cn/v1`.
 
 **요청**:
 

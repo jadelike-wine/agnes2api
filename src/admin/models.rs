@@ -897,7 +897,11 @@ pub async fn test_with(
     let started_at = now();
     let req = OutboundRequest {
         method: proto.method.to_string(),
-        url: format!("{}{}", cfg.agnes_base_url, proto.upstream_path),
+        url: format!(
+            "{}{}",
+            picked.upstream_base_url(&cfg.agnes_base_url),
+            proto.upstream_path
+        ),
         headers: vec![
             (
                 header::CONTENT_TYPE.as_str().to_string(),
@@ -1578,6 +1582,64 @@ mod tests {
             .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
             .expect("出站必须带 Authorization");
         assert_eq!(auth.1, "Bearer sk-models-ok-0123456789");
+    }
+
+    #[tokio::test]
+    async fn model_test_routes_the_selected_key_to_its_upstream() {
+        for (selector, base) in [
+            (
+                Some("international"),
+                Some("https://apihub.agnes-ai.com/v1"),
+            ),
+            (
+                Some("internationalBackup"),
+                Some("https://apihub.agnes-ai.cn/v1"),
+            ),
+            (Some("china"), Some("https://api.agnes-ai.cn/v1")),
+            (None, None),
+        ] {
+            let fetcher = ScriptedFetcher::new(vec![UpstreamReply::json(json!({ "id": "c1" }))]);
+            let mut h = harness_with(Arc::new(MemoryStorage::new()), Some(fetcher.clone())).await;
+            let mut config = h.state.config.current().as_ref().clone();
+            config.agnes_base_url = "https://legacy.example/v1".into();
+            h.state.config = Arc::new(crate::server::holders::config_holder::ConfigHolder::fixed(
+                config,
+            ));
+            let key = format!("sk-model-route-{}-0123456789", selector.unwrap_or("legacy"));
+            let prev = h.state.repo.add(&key, 1_000).await.unwrap();
+            let mut raw = serde_json::to_value(&prev).unwrap();
+            if let Some(selector) = selector {
+                raw["upstream"] = json!(selector);
+            }
+            let record = crate::core::narrow::narrow_key_record(&raw).unwrap();
+            h.state
+                .repo
+                .save(&record, Some(&prev), 1_000)
+                .await
+                .unwrap();
+            let response = test_with(
+                &h.state,
+                "agnes-2.5-pro",
+                &Bytes::new(),
+                &ProbeGuard::new(),
+                &|| 5_000,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let seen = fetcher.only();
+            let cfg = h.state.config.current();
+            assert_eq!(
+                seen.url,
+                format!("{}/chat/completions", base.unwrap_or(&cfg.agnes_base_url)),
+                "selector: {selector:?}"
+            );
+            assert!(
+                seen.headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                        && value == &format!("Bearer {key}"))
+            );
+        }
     }
 
     /// 🔴 **一个字节的上游正文都不回，也不写任何存储、不打任何事件。**
