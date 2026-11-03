@@ -59,7 +59,7 @@ MAX_STRIKES = "3"
 COOLDOWN_STRIKE_MS = "300000"
 LB_MODE = "priority"
 POOL_CACHE_TTL_MS = "30000"
-AGNES_BASE_URL = "https://agnes.example.com"   # ⚠️ 换成真实上游
+AGNES_BASE_URL = "https://apihub.agnes-ai.com/v1"   # 国际站上游，包含 /v1
 TRUST_PROXY = "false"
 USAGE_STATS_ENABLED = "false"
 
