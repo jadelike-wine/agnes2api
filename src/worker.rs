@@ -117,6 +117,8 @@ async fn assemble(env: &Env) -> Option<Arc<BuiltApp>> {
 
     // 环境快照。Workers 没有 `std::env`/`cli`，env 只能来自 bindings。
     let env_map = collect_env(env);
+    // 管理面的配置来源与网关启动时一致；wasm 没有进程环境可供兜底读取。
+    crate::admin::config::install_env_snapshot(env_map.clone());
 
     // `probe_writable` 在 Worker 上不适用：D1 不是文件系统，
     // 探针写的是 `probe:` 键，那会在 D1 里留一行垃圾 —— 关掉。

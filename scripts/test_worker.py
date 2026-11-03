@@ -74,6 +74,24 @@ check("good token -> 200", s == 200, f"status={s} body={b[:200]}")
 check('storage.backend="d1" (Workers must not report file)', '"backend":"d1"' in b, b[:300])
 check("process=null (no PID on Workers)", '"process":null' in b, b[:300])
 
+# Worker bindings 必须同时提供给网关和管理面；仅验证网关鉴权会漏掉管理面的空快照。
+section("1b. admin config uses Worker bindings")
+s, b, _ = req("GET", "/admin/api/config", headers=AH)
+check("admin config 200", s == 200, f"status={s}")
+try:
+    cfg = json.loads(b)
+except (ValueError, TypeError):
+    cfg = {}
+check("config is not degraded", cfg.get("configDegraded") is False)
+check("no config blockers", cfg.get("loadBlocked") == [])
+credential = (cfg.get("credentials") or {}).get("gatewayToken") or {}
+check("gateway token is configured", credential.get("configured") is True)
+check("gateway token is locked by its Worker binding",
+      credential.get("lockedBy") == "env:GATEWAY_TOKEN")
+check("admin config never discloses either token", GATE not in b and ADMIN not in b)
+if "--config-only" in sys.argv:
+    sys.exit(1 if FAIL else 0)
+
 # 2. 手动导入 Agnes key
 #
 # 🔴 `resetExisting: true`：上一条判据（或上一位跑测试的人）可能在 D1 里留下 key，
