@@ -61,6 +61,11 @@ jobs:
         run: npm install
 
       # 文档里的第二条命令。wrangler 从环境变量读凭据，不需要交互式 login。
+      #
+      # 子域：workers.dev 子域（`agnes2api`）是账户级的一次性注册，没有公开 API
+      # 与 CLI 非交互命令可用（实测：405/404，wrangler 无 subdomain 子命令），
+      # 所以**维护者必须在本地交互环境先注册一次**（见 wrangler.toml 头注），
+      # 之后 CI 的 wrangler 读到「子域已注册」就静默继续，不会再弹交互问句。
       - name: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

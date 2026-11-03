@@ -60,13 +60,18 @@ AGNES_BASE_URL = "https://agnes.example.com"   # ⚠️ 换成真实上游
 TRUST_PROXY = "false"
 USAGE_STATS_ENABLED = "false"
 
-# ── 部署入口 ────────────────────────────────────────────────────────────────
-# 两个选项（按 wrangler 报错）：① 给 Worker 绑自定义路由（需要域名）；
-# ② 注册 workers.dev 子域（免域名，`https://agnes2api.<ACCOUNT_ID>.workers.dev`）。
-# 这里用 ②：子域在 wrangler.toml 里用 `subdomain` 段声明，wrangler 会在 deploy 时
-# 幂等注册它（已存在则跳过）。要改绑自定义域名，把 `subdomain` 段换成 `routes` 即可：
-# [routes]  # 形如 "https://gw.example.com/*"，需先在 Cloudflare 加好这个 zone。
-subdomain = "agnes2api"
+# ── 部署入口（workers.dev 子域）────────────────────────────────────────────
+# Worker 要挂在 workers.dev 子域 `https://agnes2api.<ACCOUNT_ID>.workers.dev`
+# 上：子域是 Cloudflare 账户级的**一次性注册**（wrangler 在本地非交互环境
+# 没有 CLI 暴露注册命令，Cloudflare 也没有公开的子域注册 API），所以本仓
+# 约定由维护者在本地交互环境里跑一次：
+#     npm install && npx worker-build --profile wasm-release -- --features worker
+#     npx wrangler deploy          # 首次会问 "Would you like to register a workers.dev subdomain now?"，答 yes
+# 之后子域常驻；CI 的 worker-deploy 每次直接 `npx wrangler deploy`（CI 的
+# wrangler 读到「子域已注册」就不会再问）。
+# 换绑自定义域名：删掉下面的子域依赖，在 [routes] 里写
+#   routes = ["https://gw.example.com/*"]（需先在 Cloudflare 加好 zone），
+# 并把首次 deploy 那次子域注册当作作废。
 
 # ── Cron ───────────────────────────────────────────────────────────────────
 # 🔴 **只做 key 池索引对账**，见 `src/worker.rs::scheduled` —— 绝不补池、
