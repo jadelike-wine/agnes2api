@@ -18,10 +18,13 @@
 #      npm install
 #      npx wrangler deploy
 #
-# 自定义域名：在 Cloudflare 控制台给这个 Worker 绑 route 或自定义域即可，
-# 不需要改这份文件。
+# 自定义域名通过下面的 Custom Domain 配置管理，Cloudflare 自动管理 DNS 和证书。
 
 name = "agnes2api"
+workers_dev = true
+routes = [
+  { pattern = "agnes.api.enovamotion.com", custom_domain = true }
+]
 # worker-build 0.8.x 的产物入口：`build/index.js` 导出 `default`（WorkerEntrypoint 子类）。
 # `build/worker/shim.mjs` 只是向后兼容的重导出，别指它。
 main = "build/index.js"
@@ -60,12 +63,10 @@ AGNES_BASE_URL = "https://agnes.example.com"   # ⚠️ 换成真实上游
 TRUST_PROXY = "false"
 USAGE_STATS_ENABLED = "false"
 
-# ── 部署入口（workers.dev 子域）────────────────────────────────────────────
-# 默认入口 `https://agnes2api.agnes2api.workers.dev`。子域是账户级的一次性
-# 注册（已注册），wrangler deploy 非交互模式下读到已注册就静默继续。
-# 要改绑自定义域名（比如 enovamotion.com 下的子域），把下面这行删掉、换成：
-#   routes = [ "https://<子域>.enovamotion.com/*" ]
-# 并确认该子域在 Cloudflare DNS 里有橙色云（proxied）的 A/CNAME 记录。
+# ── 部署入口 ───────────────────────────────────────────────────────────────
+# 顶层 routes 使用 Workers Custom Domain，自动为多层子域名管理 DNS 和证书。
+# 普通 Route + 橙云 DNS 不会自动获得覆盖 agnes.api 的 Universal SSL 证书。
+# workers_dev = true 保留 https://agnes2api.agnes2api.workers.dev 备用入口。
 
 # ── Cron ───────────────────────────────────────────────────────────────────
 # 🔴 **只做 key 池索引对账**，见 `src/worker.rs::scheduled` —— 绝不补池、
